@@ -298,7 +298,10 @@ fn event_json_shape() {
     );
     assert!(rendered.contains("\"value\":\"0x2a4\""), "{rendered}");
     // (this sample's Schema declares no ValueKind: the JSON stays as before)
-    assert!(!rendered.contains("\"kind\":\"created_object\""), "{rendered}");
+    assert!(
+        !rendered.contains("\"kind\":\"created_object\""),
+        "{rendered}"
+    );
 }
 
 #[test]

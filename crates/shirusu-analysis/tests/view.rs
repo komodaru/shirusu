@@ -297,6 +297,23 @@ fn event_json_shape() {
         "{rendered}"
     );
     assert!(rendered.contains("\"value\":\"0x2a4\""), "{rendered}");
+    // (this sample's Schema declares no ValueKind: the JSON stays as before)
+    assert!(!rendered.contains("\"kind\":\"created_object\""), "{rendered}");
+}
+
+#[test]
+fn value_kind_names_are_distinct_and_unspecified_is_absent() {
+    use shirusu_analysis::view::value_kind_name;
+    use shirusu_trace::schema::ValueKind;
+    let all = [
+        ValueKind::Unspecified,
+        ValueKind::Scalar,
+        ValueKind::Pointer,
+        ValueKind::Handle,
+        ValueKind::CreatedObject,
+    ];
+    let names: Vec<_> = all.iter().filter_map(|k| value_kind_name(*k)).collect();
+    assert_eq!(names, ["scalar", "pointer", "handle", "created_object"]);
 }
 
 #[test]

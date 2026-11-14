@@ -145,6 +145,17 @@ pub fn capture_name(capture: EventCapture) -> String {
     }
 }
 
+/// The JSON name of a field's ValueKind; None for Unspecified.
+pub fn value_kind_name(kind: ValueKind) -> Option<&'static str> {
+    match kind {
+        ValueKind::Unspecified => None,
+        ValueKind::Scalar => Some("scalar"),
+        ValueKind::Pointer => Some("pointer"),
+        ValueKind::Handle => Some("handle"),
+        ValueKind::CreatedObject => Some("created_object"),
+    }
+}
+
 pub fn value_capture_name(capture: ValueCapture) -> &'static str {
     match capture {
         ValueCapture::Captured => "captured",
@@ -294,17 +305,20 @@ impl EventView {
             .fields
             .iter()
             .map(|f| {
-                (
-                    f.name.clone(),
-                    JsonValue::obj(vec![
-                        ("ty", JsonValue::Str(format!("{:?}", f.ty))),
-                        (
-                            "capture",
-                            JsonValue::Str(value_capture_name(f.capture).into()),
-                        ),
-                        ("value", value_to_json(&f.value)),
-                    ]),
-                )
+                let mut entries = vec![
+                    ("ty", JsonValue::Str(format!("{:?}", f.ty))),
+                    (
+                        "capture",
+                        JsonValue::Str(value_capture_name(f.capture).into()),
+                    ),
+                    ("value", value_to_json(&f.value)),
+                ];
+                // The Schema's meaning (handle / pointer / scalar), so that a reader outside
+                // Rust can tell a U64 handle from a U64 count. Absent when the Schema has none.
+                if let Some(kind) = value_kind_name(f.kind) {
+                    entries.push(("kind", JsonValue::Str(kind.into())));
+                }
+                (f.name.clone(), JsonValue::obj(entries))
             })
             .collect::<Vec<_>>();
         let payload = match &self.payload {

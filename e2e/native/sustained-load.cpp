@@ -56,6 +56,17 @@ struct Shared {
     volatile long failure;
 };
 
+// x86 has no _InterlockedExchangeAdd64 intrinsic (and no CRT here), but it
+// has _InterlockedCompareExchange64 (cmpxchg8b).
+static void add64(volatile long long* target, long long value) {
+    long long seen = *target;
+    for (;;) {
+        const long long prior = _InterlockedCompareExchange64(target, seen + value, seen);
+        if (prior == seen) return;
+        seen = prior;
+    }
+}
+
 static DWORD run_loop(Shared* s) {
     unsigned long long total = 0, sleeps = 0;
     unsigned long long n_pid = 0, n_alloc = 0, n_free = 0;
@@ -95,14 +106,14 @@ static DWORD run_loop(Shared* s) {
         }
         total += kBatch;
         const unsigned bucket = (unsigned)(elapsed / s->tsc_rate);
-        if (bucket < s->seconds) _InterlockedExchangeAdd64(&s->per_second[bucket], kBatch);
+        if (bucket < s->seconds) add64(&s->per_second[bucket], kBatch);
     }
-    _InterlockedExchangeAdd64(&s->total, (long long)total);
-    _InterlockedExchangeAdd64(&s->sleeps, (long long)sleeps);
-    _InterlockedExchangeAdd64(&s->calls_pid, (long long)n_pid);
-    _InterlockedExchangeAdd64(&s->calls_alloc, (long long)n_alloc);
-    _InterlockedExchangeAdd64(&s->calls_free, (long long)n_free);
-    _InterlockedExchangeAdd64(&s->calls_sleep, (long long)sleeps);
+    add64(&s->total, (long long)total);
+    add64(&s->sleeps, (long long)sleeps);
+    add64(&s->calls_pid, (long long)n_pid);
+    add64(&s->calls_alloc, (long long)n_alloc);
+    add64(&s->calls_free, (long long)n_free);
+    add64(&s->calls_sleep, (long long)sleeps);
     _InterlockedXor(&s->checksum, (long)checksum);
     return 0;
 }

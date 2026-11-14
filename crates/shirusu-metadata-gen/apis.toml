@@ -1104,3 +1104,54 @@ namespace = "Windows.Win32.System.Diagnostics.Debug"
 module = "kernel32.dll"
 function = "RaiseFailFastException"
 reason = "戻らない API。Leave の無い Enter が全 Trace の完了判定を劣化させるため、ExitThread と同じ扱いにするかは実機検証後に決める"
+
+# ---- 広域層の GetLastError 意味条件の上書き ----
+# 戻り値の型からの既定（BOOL なら FALSE で意味あり）が誤りになる API。
+# 根拠は kikizake (komodaru/kikizake) の実行器を Windows で記録した結果:
+# これらは FALSE / NULL を「答え」として返し、そのとき GetLastError は 0 のまま
+# （calls/region-*.txt 等、2026-11-14）。Learn も GetLastError に触れない。
+[[broad_last_error]]
+module = "gdi32.dll"
+function = "PtInRegion"
+last_error = "never"
+reason = "FALSE は点が領域の外にあるという答え。Windows で失敗扱いの最終エラーは 0"
+[[broad_last_error]]
+module = "gdi32.dll"
+function = "RectInRegion"
+last_error = "never"
+reason = "FALSE は矩形が領域と重ならないという答え"
+[[broad_last_error]]
+module = "gdi32.dll"
+function = "PtVisible"
+last_error = "never"
+reason = "FALSE は点がクリップ領域の外という答え（-1 はエラーだが GetLastError は規定されない）"
+[[broad_last_error]]
+module = "gdi32.dll"
+function = "RectVisible"
+last_error = "never"
+reason = "FALSE は矩形がクリップ領域の外という答え"
+[[broad_last_error]]
+module = "gdi32.dll"
+function = "EqualRgn"
+last_error = "never"
+reason = "FALSE は 2 領域が等しくないという答え（ERROR は無効ハンドル、GetLastError は規定されない）"
+[[broad_last_error]]
+module = "user32.dll"
+function = "IsRectEmpty"
+last_error = "never"
+reason = "FALSE は矩形が空でないという答え"
+[[broad_last_error]]
+module = "user32.dll"
+function = "EqualRect"
+last_error = "never"
+reason = "FALSE は 2 矩形が等しくないという答え"
+[[broad_last_error]]
+module = "user32.dll"
+function = "IntersectRect"
+last_error = "never"
+reason = "FALSE は交わりが空という答え"
+[[broad_last_error]]
+module = "kernel32.dll"
+function = "SetUnhandledExceptionFilter"
+last_error = "never"
+reason = "戻り値は以前のフィルタで、NULL は以前のフィルタが無いという答え"

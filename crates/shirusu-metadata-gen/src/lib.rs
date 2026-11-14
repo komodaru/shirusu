@@ -59,9 +59,25 @@ pub struct Config {
     /// WinMD update cannot renumber existing API or Schema IDs.
     #[serde(default)]
     pub broad: Option<BroadConfig>,
+    /// GetLastError meanings of broad-tier APIs whose return value's kind
+    /// gives the wrong default (a BOOL predicate whose FALSE is an answer,
+    /// not a failure). Applied by [`load_config`] to `broad_apis`; naming an
+    /// API that is not in the broad list is an error.
+    #[serde(default, rename = "broad_last_error")]
+    pub broad_last_errors: Vec<BroadLastError>,
     /// Entries loaded from `broad.list` by [`load_config`].
     #[serde(skip)]
     pub broad_apis: Vec<ApiConfig>,
+}
+
+/// One broad-tier GetLastError override, with the evidence for it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BroadLastError {
+    pub module: String,
+    pub function: String,
+    /// as `ApiConfig::last_error`
+    pub last_error: String,
+    pub reason: String,
 }
 
 /// Configuration of the IAT-only broad tier.
@@ -317,7 +333,35 @@ pub fn load_config(path: &str) -> Result<Config, String> {
         };
         config.broad_apis = parse_broad_list(&text)?;
     }
+    apply_broad_last_errors(&mut config)?;
     Ok(config)
+}
+
+/// Apply `[[broad_last_error]]` to the broad list entries. Every override
+/// must name exactly one listed API and a valid meaning.
+pub fn apply_broad_last_errors(config: &mut Config) -> Result<(), String> {
+    for o in &config.broad_last_errors {
+        parse_last_error(&o.last_error)
+            .map_err(|e| format!("broad_last_error {}!{}: {e}", o.module, o.function))?;
+        let mut hits = config
+            .broad_apis
+            .iter_mut()
+            .filter(|a| a.module.eq_ignore_ascii_case(&o.module) && a.function == o.function);
+        let Some(api) = hits.next() else {
+            return Err(format!(
+                "broad_last_error {}!{} is not in the broad list",
+                o.module, o.function
+            ));
+        };
+        if api.last_error.is_some() {
+            return Err(format!(
+                "broad_last_error {}!{} is given twice",
+                o.module, o.function
+            ));
+        }
+        api.last_error = Some(o.last_error.clone());
+    }
+    Ok(())
 }
 
 /// Resolve the broad lock list relative to the configuration file.
@@ -1121,6 +1165,43 @@ pub fn emit_com_catalog(index: &TypeIndex, version: &str) -> Result<String, Stri
 
 #[cfg(test)]
 mod tests {
+    fn broad_config(overrides: &str) -> Config {
+        let mut c: Config = toml::from_str(&format!(
+            "first_api_id = 1\nwinmd_version = \"x\"\n{overrides}"
+        ))
+        .unwrap();
+        c.broad_apis = parse_broad_list(
+            "namespace\tmodule\tfunction\nWindows.Win32.Graphics.Gdi\tgdi32.dll\tPtInRegion\nWindows.Win32.Graphics.Gdi\tgdi32.dll\tBitBlt\n",
+        )
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn broad_last_error_overrides_only_the_named_api() {
+        let mut c = broad_config(
+            "[[broad_last_error]]\nmodule = \"GDI32.dll\"\nfunction = \"PtInRegion\"\nlast_error = \"never\"\nreason = \"r\"\n",
+        );
+        apply_broad_last_errors(&mut c).unwrap();
+        assert_eq!(c.broad_apis[0].last_error.as_deref(), Some("never"));
+        assert_eq!(c.broad_apis[1].last_error, None);
+    }
+
+    #[test]
+    fn broad_last_error_rejects_unlisted_twice_and_unknown_meanings() {
+        let one = |f: &str, m: &str| {
+            format!("[[broad_last_error]]\nmodule = \"gdi32.dll\"\nfunction = \"{f}\"\nlast_error = \"{m}\"\nreason = \"r\"\n")
+        };
+        for bad in [
+            one("PtInRect", "never"),
+            one("PtInRegion", "sometimes"),
+            one("PtInRegion", "never") + &one("PtInRegion", "false"),
+        ] {
+            let mut c = broad_config(&bad);
+            assert!(apply_broad_last_errors(&mut c).is_err(), "{bad}");
+        }
+    }
+
     use super::*;
 
     fn empty_index() -> TypeIndex {

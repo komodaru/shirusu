@@ -108,6 +108,7 @@ fn config_with(apis: Vec<ApiConfig>, max_params: usize) -> Config {
         apis,
         skips: vec![],
         broad: None,
+        broad_last_errors: vec![],
         broad_apis: vec![],
     }
 }

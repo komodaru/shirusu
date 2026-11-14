@@ -3730,7 +3730,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hrgn1", Ty::U64, ValueKind::Handle, BEFORE), ("hrgn2", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1376,
@@ -5200,7 +5200,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hrgn", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1523,
@@ -5210,7 +5210,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1524,
@@ -5230,7 +5230,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hrgn", Ty::U64, ValueKind::Handle, BEFORE), ("lprect", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1526,
@@ -5240,7 +5240,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lprect", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1527,
@@ -6090,7 +6090,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprc1", Ty::U64, ValueKind::Pointer, BEFORE), ("lprc2", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1612,
@@ -6270,7 +6270,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprcDst", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcSrc1", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcSrc2", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1630,
@@ -6300,7 +6300,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1633,
@@ -28090,7 +28090,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpTopLevelExceptionFilter", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3812,

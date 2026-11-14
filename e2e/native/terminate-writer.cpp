@@ -118,9 +118,11 @@ static HANDLE stall_event = nullptr;
 static void create_stall_event() {
     wchar_t value[2];
     if (GetEnvironmentVariableW(L"SHIRUSU_TEST_WRITER_STALL_AFTER", value, 2) == 0) return;
-    wchar_t name[64] = L"Local\\shirusu-writer-stall-";
-    unsigned at = 0;
-    while (name[at]) ++at;
+    // Not an initialized array: its zero-filled tail compiles to memset,
+    // which /NODEFAULTLIB cannot resolve on x86. kernel32 copies instead.
+    wchar_t name[64];
+    lstrcpyW(name, L"Local\\shirusu-writer-stall-");
+    unsigned at = (unsigned)lstrlenW(name);
     const DWORD pid = GetCurrentProcessId();
     bool started = false;
     for (int shift = 28; shift >= 0; shift -= 4) {

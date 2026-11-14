@@ -16,6 +16,12 @@ first_api_id = 7
 reserved_api_ids = [79, 80, 81, 82, 83, 84, 85]
 max_params = 12
 winmd_version = "71.0.45-preview"
+# last_error の省略時に WinMD の SetLastError 印で決めるモジュール: 印の無い
+# 関数は失敗しても最終エラーに触れない（never）。kikizake の実行器を Windows で
+# 記録して確かめた gdi32 / user32 だけ（SelectObject、EndPath、SetMiterLimit は
+# x86 と x64 で前の呼び出しの残りが見えていた、2026-11-14）。kernel32 などでは
+# WinMD が文書にある印を落としている（CreateNamedPipeW、SetCurrentDirectoryW）。
+winmd_last_error_modules = ["gdi32.dll", "user32.dll"]
 
 # ---- レジストリ (advapi32.dll) ----
 [[api]]

@@ -290,7 +290,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pbo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1032,
@@ -300,7 +300,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pbo", Ty::U64, ValueKind::Pointer, BEFORE), ("cj", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1033,
@@ -310,7 +310,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pbo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1034,
@@ -330,7 +330,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("cj", Ty::U32, ValueKind::Scalar, BEFORE), ("pul", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1036,
@@ -350,7 +350,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pco", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1038,
@@ -370,7 +370,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("psoDest", Ty::U64, ValueKind::Pointer, BEFORE), ("psoSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxlo", Ty::U64, ValueKind::Pointer, BEFORE), ("prclDest", Ty::U64, ValueKind::Pointer, BEFORE), ("prclSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("pBlendObj", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1040,
@@ -380,7 +380,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hsurf", Ty::U64, ValueKind::Handle, BEFORE), ("hdev", Ty::U64, ValueKind::Handle, BEFORE), ("flHooks", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1041,
@@ -390,7 +390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("psoTrg", Ty::U64, ValueKind::Pointer, BEFORE), ("psoSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("psoMask", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxlo", Ty::U64, ValueKind::Pointer, BEFORE), ("prclTrg", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlMask", Ty::U64, ValueKind::Pointer, BEFORE), ("pbo", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlBrush", Ty::U64, ValueKind::Pointer, BEFORE), ("rop4", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1042,
@@ -400,7 +400,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1043,
@@ -410,7 +410,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nCodePage", Ty::I32, ValueKind::Scalar, BEFORE), ("nFirstChar", Ty::I32, ValueKind::Scalar, BEFORE), ("cChars", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1044,
@@ -420,7 +420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("psoDest", Ty::U64, ValueKind::Pointer, BEFORE), ("psoSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxlo", Ty::U64, ValueKind::Pointer, BEFORE), ("prclDest", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlSrc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1045,
@@ -430,7 +430,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1046,
@@ -440,7 +440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("iMode", Ty::U32, ValueKind::Scalar, BEFORE), ("cColors", Ty::U32, ValueKind::Scalar, BEFORE), ("pulColors", Ty::U64, ValueKind::Pointer, BEFORE), ("flRed", Ty::U32, ValueKind::Scalar, BEFORE), ("flGreen", Ty::U32, ValueKind::Scalar, BEFORE), ("flBlue", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1047,
@@ -450,7 +450,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1048,
@@ -470,7 +470,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hpal", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1050,
@@ -500,7 +500,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hsurf", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1053,
@@ -510,7 +510,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("prcl", Ty::U64, ValueKind::Pointer, BEFORE), ("iColor", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1054,
@@ -520,7 +520,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("ppo", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pbo", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlBrushOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("mix", Ty::U32, ValueKind::Scalar, BEFORE), ("flOptions", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1055,
@@ -530,7 +530,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("h", Ty::U64, ValueKind::Handle, BEFORE), ("iName", Ty::I32, ValueKind::Scalar, BEFORE), ("iType", Ty::I32, ValueKind::Scalar, BEFORE), ("pulSize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1056,
@@ -560,7 +560,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdev", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1059,
@@ -570,7 +570,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdev", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1060,
@@ -580,7 +580,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("psoDest", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxlo", Ty::U64, ValueKind::Pointer, BEFORE), ("pVertex", Ty::U64, ValueKind::Pointer, BEFORE), ("nVertex", Ty::U32, ValueKind::Scalar, BEFORE), ("pMesh", Ty::U64, ValueKind::Pointer, BEFORE), ("nMesh", Ty::U32, ValueKind::Scalar, BEFORE), ("prclExtents", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlDitherOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("ulMode", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1061,
@@ -590,7 +590,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pbo", Ty::U64, ValueKind::Pointer, BEFORE), ("x1", Ty::I32, ValueKind::Scalar, BEFORE), ("y1", Ty::I32, ValueKind::Scalar, BEFORE), ("x2", Ty::I32, ValueKind::Scalar, BEFORE), ("y2", Ty::I32, ValueKind::Scalar, BEFORE), ("prclBounds", Ty::U64, ValueKind::Pointer, BEFORE), ("mix", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1062,
@@ -600,7 +600,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pwsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1063,
@@ -610,7 +610,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hsurf", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1064,
@@ -620,7 +620,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hsurf", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1065,
@@ -650,7 +650,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pbo", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlBrushOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("mix", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1068,
@@ -660,7 +660,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("psoTrg", Ty::U64, ValueKind::Pointer, BEFORE), ("psoSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("psoMsk", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxlo", Ty::U64, ValueKind::Pointer, BEFORE), ("pca", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlBrushOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("pptfx", Ty::U64, ValueKind::Pointer, BEFORE), ("prcl", Ty::U64, ValueKind::Pointer, BEFORE), ("pptl", Ty::U64, ValueKind::Pointer, BEFORE), ("iMode", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1069,
@@ -670,7 +670,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdev", Ty::U64, ValueKind::Handle, BEFORE), ("pEMFInfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1070,
@@ -700,7 +700,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("psoDest", Ty::U64, ValueKind::Pointer, BEFORE), ("psoSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("psoMask", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxlo", Ty::U64, ValueKind::Pointer, BEFORE), ("pca", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlHTOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("prclDest", Ty::U64, ValueKind::Pointer, BEFORE), ("prclSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlMask", Ty::U64, ValueKind::Pointer, BEFORE), ("iMode", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1073,
@@ -710,7 +710,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("ppo", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxo", Ty::U64, ValueKind::Pointer, BEFORE), ("pboStroke", Ty::U64, ValueKind::Pointer, BEFORE), ("plineattrs", Ty::U64, ValueKind::Pointer, BEFORE), ("pboFill", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlBrushOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("mixFill", Ty::U32, ValueKind::Scalar, BEFORE), ("flOptions", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1074,
@@ -720,7 +720,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("ppo", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxo", Ty::U64, ValueKind::Pointer, BEFORE), ("pbo", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlBrushOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("plineattrs", Ty::U64, ValueKind::Pointer, BEFORE), ("mix", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1075,
@@ -730,7 +730,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("pstro", Ty::U64, ValueKind::Pointer, BEFORE), ("pfo", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("prclExtra", Ty::U64, ValueKind::Pointer, BEFORE), ("prclOpaque", Ty::U64, ValueKind::Pointer, BEFORE), ("pboFore", Ty::U64, ValueKind::Pointer, BEFORE), ("pboOpaque", Ty::U64, ValueKind::Pointer, BEFORE), ("pptlOrg", Ty::U64, ValueKind::Pointer, BEFORE), ("mix", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1076,
@@ -740,7 +740,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("psoDst", Ty::U64, ValueKind::Pointer, BEFORE), ("psoSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("pco", Ty::U64, ValueKind::Pointer, BEFORE), ("pxlo", Ty::U64, ValueKind::Pointer, BEFORE), ("prclDst", Ty::U64, ValueKind::Pointer, BEFORE), ("prclSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("TransColor", Ty::U32, ValueKind::Scalar, BEFORE), ("bCalledFromBitBlt", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1077,
@@ -800,7 +800,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pfo", Ty::U64, ValueKind::Pointer, BEFORE), ("iMode", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1083,
@@ -810,7 +810,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1084,
@@ -820,7 +820,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1085,
@@ -830,7 +830,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pfo", Ty::U64, ValueKind::Pointer, BEFORE), ("pcjFile", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1086,
@@ -840,7 +840,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1087,
@@ -880,7 +880,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("ppo", Ty::U64, ValueKind::Pointer, BEFORE), ("ppd", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1091,
@@ -890,7 +890,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("ppo", Ty::U64, ValueKind::Pointer, BEFORE), ("cb", Ty::U32, ValueKind::Scalar, BEFORE), ("pcl", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1092,
@@ -930,7 +930,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pstro", Ty::U64, ValueKind::Pointer, BEFORE), ("pc", Ty::U64, ValueKind::Pointer, BEFORE), ("ppgpos", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1096,
@@ -940,7 +940,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pstro", Ty::U64, ValueKind::Pointer, BEFORE), ("pc", Ty::U64, ValueKind::Pointer, BEFORE), ("ppgpos", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1097,
@@ -950,7 +950,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pso", Ty::U64, ValueKind::Pointer, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("c", Ty::U32, ValueKind::Scalar, BEFORE), ("pptqD", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1098,
@@ -980,7 +980,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pxo", Ty::U64, ValueKind::Pointer, BEFORE), ("iMode", Ty::U32, ValueKind::Scalar, BEFORE), ("cPoints", Ty::U32, ValueKind::Scalar, BEFORE), ("pvIn", Ty::U64, ValueKind::Pointer, BEFORE), ("pvOut", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1101,
@@ -1010,7 +1010,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pxlo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1104,
@@ -1030,7 +1030,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pxlo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1106,
@@ -1060,7 +1060,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pState", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1109,
@@ -1070,7 +1070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pOrientation", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1110,
@@ -1100,7 +1100,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("orientation", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1113,
@@ -3010,7 +3010,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1304,
@@ -3020,7 +3020,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pFileView", Ty::U64, ValueKind::Pointer, BEFORE), ("cjSize", Ty::U32, ValueKind::Scalar, BEFORE), ("pvResrved", Ty::U64, ValueKind::Pointer, BEFORE), ("pNumFonts", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1305,
@@ -3070,7 +3070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hPal", Ty::U64, ValueKind::Handle, BEFORE), ("iStartIndex", Ty::U32, ValueKind::Scalar, BEFORE), ("cEntries", Ty::U32, ValueKind::Scalar, BEFORE), ("ppe", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1310,
@@ -3080,7 +3080,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x1", Ty::I32, ValueKind::Scalar, BEFORE), ("y1", Ty::I32, ValueKind::Scalar, BEFORE), ("x2", Ty::I32, ValueKind::Scalar, BEFORE), ("y2", Ty::I32, ValueKind::Scalar, BEFORE), ("x3", Ty::I32, ValueKind::Scalar, BEFORE), ("y3", Ty::I32, ValueKind::Scalar, BEFORE), ("x4", Ty::I32, ValueKind::Scalar, BEFORE), ("y4", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1311,
@@ -3090,7 +3090,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("left", Ty::I32, ValueKind::Scalar, BEFORE), ("top", Ty::I32, ValueKind::Scalar, BEFORE), ("right", Ty::I32, ValueKind::Scalar, BEFORE), ("bottom", Ty::I32, ValueKind::Scalar, BEFORE), ("xr1", Ty::I32, ValueKind::Scalar, BEFORE), ("yr1", Ty::I32, ValueKind::Scalar, BEFORE), ("xr2", Ty::I32, ValueKind::Scalar, BEFORE), ("yr2", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1312,
@@ -3100,7 +3100,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1313,
@@ -3110,7 +3110,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1314,
@@ -3120,7 +3120,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x1", Ty::I32, ValueKind::Scalar, BEFORE), ("y1", Ty::I32, ValueKind::Scalar, BEFORE), ("x2", Ty::I32, ValueKind::Scalar, BEFORE), ("y2", Ty::I32, ValueKind::Scalar, BEFORE), ("x3", Ty::I32, ValueKind::Scalar, BEFORE), ("y3", Ty::I32, ValueKind::Scalar, BEFORE), ("x4", Ty::I32, ValueKind::Scalar, BEFORE), ("y4", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1315,
@@ -3130,7 +3130,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1316,
@@ -3140,7 +3140,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1317,
@@ -3150,7 +3150,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1318,
@@ -3170,7 +3170,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpxfOut", Ty::U64, ValueKind::Pointer, BEFORE), ("lpxf1", Ty::U64, ValueKind::Pointer, BEFORE), ("lpxf2", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1320,
@@ -3180,7 +3180,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hEnh", Ty::U64, ValueKind::Handle, BEFORE), ("lpFileName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1321,
@@ -3190,7 +3190,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hEnh", Ty::U64, ValueKind::Handle, BEFORE), ("lpFileName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1322,
@@ -3200,7 +3200,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE), ("param1", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1323,
@@ -3210,7 +3210,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE), ("param1", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1324,
@@ -3220,7 +3220,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nWidth", Ty::I32, ValueKind::Scalar, BEFORE), ("nHeight", Ty::I32, ValueKind::Scalar, BEFORE), ("nPlanes", Ty::U32, ValueKind::Scalar, BEFORE), ("nBitCount", Ty::U32, ValueKind::Scalar, BEFORE), ("lpBits", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1325,
@@ -3230,7 +3230,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pbm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1326,
@@ -3240,7 +3240,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("plbrush", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1327,
@@ -3250,7 +3250,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pwszDriver", Ty::U64, ValueKind::Pointer, BEFORE), ("pwszDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("pszPort", Ty::U64, ValueKind::Pointer, BEFORE), ("pdm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1328,
@@ -3260,7 +3260,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pwszDriver", Ty::U64, ValueKind::Pointer, BEFORE), ("pwszDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("pszPort", Ty::U64, ValueKind::Pointer, BEFORE), ("pdm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1329,
@@ -3270,7 +3270,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("h", Ty::U64, ValueKind::Handle, BEFORE), ("iUsage", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1330,
@@ -3280,7 +3280,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpPackedDIB", Ty::U64, ValueKind::Pointer, BEFORE), ("iUsage", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1331,
@@ -3300,7 +3300,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("pbmih", Ty::U64, ValueKind::Pointer, BEFORE), ("flInit", Ty::U32, ValueKind::Scalar, BEFORE), ("pjBits", Ty::U64, ValueKind::Pointer, BEFORE), ("pbmi", Ty::U64, ValueKind::Pointer, BEFORE), ("iUsage", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1333,
@@ -3310,7 +3310,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("cx", Ty::I32, ValueKind::Scalar, BEFORE), ("cy", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1334,
@@ -3320,7 +3320,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("x1", Ty::I32, ValueKind::Scalar, BEFORE), ("y1", Ty::I32, ValueKind::Scalar, BEFORE), ("x2", Ty::I32, ValueKind::Scalar, BEFORE), ("y2", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1335,
@@ -3330,7 +3330,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprect", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1336,
@@ -3340,7 +3340,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpFilename", Ty::U64, ValueKind::Pointer, BEFORE), ("lprc", Ty::U64, ValueKind::Pointer, BEFORE), ("lpDesc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1337,
@@ -3350,7 +3350,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpFilename", Ty::U64, ValueKind::Pointer, BEFORE), ("lprc", Ty::U64, ValueKind::Pointer, BEFORE), ("lpDesc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1338,
@@ -3360,7 +3360,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lplf", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1339,
@@ -3370,7 +3370,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1340,
@@ -3380,7 +3380,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1341,
@@ -3390,7 +3390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lplf", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1342,
@@ -3400,7 +3400,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1343,
@@ -3410,7 +3410,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("iHatch", Ty::I32, ValueKind::Scalar, BEFORE), ("color", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1344,
@@ -3420,7 +3420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pszDriver", Ty::U64, ValueKind::Pointer, BEFORE), ("pszDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("pszPort", Ty::U64, ValueKind::Pointer, BEFORE), ("pdm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1345,
@@ -3430,7 +3430,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pszDriver", Ty::U64, ValueKind::Pointer, BEFORE), ("pszDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("pszPort", Ty::U64, ValueKind::Pointer, BEFORE), ("pdm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1346,
@@ -3440,7 +3440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pszFile", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1347,
@@ -3450,7 +3450,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pszFile", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1348,
@@ -3460,7 +3460,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("plpal", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1349,
@@ -3470,7 +3470,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hbm", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1350,
@@ -3480,7 +3480,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("iStyle", Ty::I32, ValueKind::Scalar, BEFORE), ("cWidth", Ty::I32, ValueKind::Scalar, BEFORE), ("color", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1351,
@@ -3490,7 +3490,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("plpen", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1352,
@@ -3500,7 +3500,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pptl", Ty::U64, ValueKind::Pointer, BEFORE), ("pc", Ty::U64, ValueKind::Pointer, BEFORE), ("cPoly", Ty::I32, ValueKind::Scalar, BEFORE), ("iMode", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1353,
@@ -3510,7 +3510,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pptl", Ty::U64, ValueKind::Pointer, BEFORE), ("cPoint", Ty::I32, ValueKind::Scalar, BEFORE), ("iMode", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1354,
@@ -3520,7 +3520,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("x1", Ty::I32, ValueKind::Scalar, BEFORE), ("y1", Ty::I32, ValueKind::Scalar, BEFORE), ("x2", Ty::I32, ValueKind::Scalar, BEFORE), ("y2", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1355,
@@ -3530,7 +3530,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprect", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1356,
@@ -3540,7 +3540,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("x1", Ty::I32, ValueKind::Scalar, BEFORE), ("y1", Ty::I32, ValueKind::Scalar, BEFORE), ("x2", Ty::I32, ValueKind::Scalar, BEFORE), ("y2", Ty::I32, ValueKind::Scalar, BEFORE), ("w", Ty::I32, ValueKind::Scalar, BEFORE), ("h", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1357,
@@ -3570,7 +3570,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("color", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1360,
@@ -3580,7 +3580,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1361,
@@ -3590,7 +3590,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hmf", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1362,
@@ -3600,7 +3600,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hmf", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1363,
@@ -3620,7 +3620,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("left", Ty::I32, ValueKind::Scalar, BEFORE), ("top", Ty::I32, ValueKind::Scalar, BEFORE), ("right", Ty::I32, ValueKind::Scalar, BEFORE), ("bottom", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1365,
@@ -3630,7 +3630,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1366,
@@ -3640,7 +3640,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hmf", Ty::U64, ValueKind::Handle, BEFORE), ("proc", Ty::U64, ValueKind::Pointer, BEFORE), ("param3", Ty::U64, ValueKind::Pointer, BEFORE), ("lpRect", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1367,
@@ -3710,7 +3710,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hmf", Ty::U64, ValueKind::Handle, BEFORE), ("proc", Ty::U64, ValueKind::Pointer, BEFORE), ("param3", Ty::I64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1374,
@@ -3750,7 +3750,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("iPenStyle", Ty::U32, ValueKind::Scalar, BEFORE), ("cWidth", Ty::U32, ValueKind::Scalar, BEFORE), ("plbrush", Ty::U64, ValueKind::Pointer, BEFORE), ("cStyle", Ty::U32, ValueKind::Scalar, BEFORE), ("pstyle", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1378,
@@ -3760,7 +3760,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpx", Ty::U64, ValueKind::Pointer, BEFORE), ("nCount", Ty::U32, ValueKind::Scalar, BEFORE), ("lpData", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1379,
@@ -3770,7 +3770,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("color", Ty::U32, ValueKind::Scalar, BEFORE), ("type", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1380,
@@ -3790,7 +3790,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("options", Ty::U32, ValueKind::Scalar, BEFORE), ("lprect", Ty::U64, ValueKind::Pointer, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDx", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1382,
@@ -3800,7 +3800,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("options", Ty::U32, ValueKind::Scalar, BEFORE), ("lprect", Ty::U64, ValueKind::Pointer, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDx", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1383,
@@ -3810,7 +3810,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1384,
@@ -3820,7 +3820,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hrgn", Ty::U64, ValueKind::Handle, BEFORE), ("hbr", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1385,
@@ -3830,7 +3830,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("ptl", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1386,
@@ -3840,7 +3840,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1387,
@@ -3850,7 +3850,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("color", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1388,
@@ -3860,7 +3860,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hrgn", Ty::U64, ValueKind::Handle, BEFORE), ("hbr", Ty::U64, ValueKind::Handle, BEFORE), ("w", Ty::I32, ValueKind::Scalar, BEFORE), ("h", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1389,
@@ -3870,7 +3870,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("nSize", Ty::U32, ValueKind::Scalar, BEFORE), ("lpData", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1390,
@@ -3880,7 +3880,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1391,
@@ -3900,7 +3900,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("pVertex", Ty::U64, ValueKind::Pointer, BEFORE), ("nVertex", Ty::U32, ValueKind::Scalar, BEFORE), ("pMesh", Ty::U64, ValueKind::Pointer, BEFORE), ("nCount", Ty::U32, ValueKind::Scalar, BEFORE), ("ulMode", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1393,
@@ -3920,7 +3920,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdcDest", Ty::U64, ValueKind::Handle, BEFORE), ("xoriginDest", Ty::I32, ValueKind::Scalar, BEFORE), ("yoriginDest", Ty::I32, ValueKind::Scalar, BEFORE), ("wDest", Ty::I32, ValueKind::Scalar, BEFORE), ("hDest", Ty::I32, ValueKind::Scalar, BEFORE), ("hdcSrc", Ty::U64, ValueKind::Handle, BEFORE), ("xoriginSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("yoriginSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("wSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("hSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("crTransparent", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1395,
@@ -3940,7 +3940,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpsize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1397,
@@ -3960,7 +3960,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hbit", Ty::U64, ValueKind::Handle, BEFORE), ("lpsize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1399,
@@ -4000,7 +4000,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1403,
@@ -4010,7 +4010,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("wFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("wLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpABC", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1404,
@@ -4020,7 +4020,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpABC", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1405,
@@ -4030,7 +4030,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpABC", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1406,
@@ -4040,7 +4040,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("giFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("cgi", Ty::U32, ValueKind::Scalar, BEFORE), ("pgi", Ty::U64, ValueKind::Pointer, BEFORE), ("pabc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1407,
@@ -4050,7 +4050,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("wFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("wLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpABC", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1408,
@@ -4060,7 +4060,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1409,
@@ -4070,7 +4070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1410,
@@ -4080,7 +4080,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1411,
@@ -4090,7 +4090,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1412,
@@ -4100,7 +4100,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1413,
@@ -4110,7 +4110,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("giFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("cgi", Ty::U32, ValueKind::Scalar, BEFORE), ("pgi", Ty::U64, ValueKind::Pointer, BEFORE), ("piWidths", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1414,
@@ -4120,7 +4120,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("iFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("iLast", Ty::U32, ValueKind::Scalar, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1415,
@@ -4170,7 +4170,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpca", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1420,
@@ -4180,7 +4180,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("type", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1421,
@@ -4190,7 +4190,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1422,
@@ -4210,7 +4210,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1424,
@@ -4250,7 +4250,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1428,
@@ -4310,7 +4310,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1434,
@@ -4440,7 +4440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1447,
@@ -4460,7 +4460,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1449,
@@ -4480,7 +4480,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("plimit", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1451,
@@ -4620,7 +4620,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpraststat", Ty::U64, ValueKind::Pointer, BEFORE), ("cjBytes", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1465,
@@ -4710,7 +4710,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpszString", Ty::U64, ValueKind::Pointer, BEFORE), ("cchString", Ty::I32, ValueKind::Scalar, BEFORE), ("nMaxExtent", Ty::I32, ValueKind::Scalar, BEFORE), ("lpnFit", Ty::U64, ValueKind::Pointer, BEFORE), ("lpnDx", Ty::U64, ValueKind::Pointer, BEFORE), ("lpSize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1474,
@@ -4720,7 +4720,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpwszString", Ty::U64, ValueKind::Pointer, BEFORE), ("cwchString", Ty::I32, ValueKind::Scalar, BEFORE), ("nMaxExtent", Ty::I32, ValueKind::Scalar, BEFORE), ("lpnFit", Ty::U64, ValueKind::Pointer, BEFORE), ("lpnDx", Ty::U64, ValueKind::Pointer, BEFORE), ("lpSize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1475,
@@ -4730,7 +4730,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpszString", Ty::U64, ValueKind::Pointer, BEFORE), ("cchString", Ty::I32, ValueKind::Scalar, BEFORE), ("nMaxExtent", Ty::I32, ValueKind::Scalar, BEFORE), ("lpnFit", Ty::U64, ValueKind::Pointer, BEFORE), ("lpnDx", Ty::U64, ValueKind::Pointer, BEFORE), ("lpSize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1476,
@@ -4740,7 +4740,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::I32, ValueKind::Scalar, BEFORE), ("psizl", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1477,
@@ -4750,7 +4750,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::I32, ValueKind::Scalar, BEFORE), ("psizl", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1478,
@@ -4760,7 +4760,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::I32, ValueKind::Scalar, BEFORE), ("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1479,
@@ -4770,7 +4770,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("pgiIn", Ty::U64, ValueKind::Pointer, BEFORE), ("cgi", Ty::I32, ValueKind::Scalar, BEFORE), ("psize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1480,
@@ -4780,7 +4780,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::I32, ValueKind::Scalar, BEFORE), ("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1481,
@@ -4810,7 +4810,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lptm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1484,
@@ -4820,7 +4820,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lptm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1485,
@@ -4830,7 +4830,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpsize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1486,
@@ -4840,7 +4840,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lppoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1487,
@@ -4860,7 +4860,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpsize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1489,
@@ -4870,7 +4870,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lppoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1490,
@@ -4880,7 +4880,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpxf", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1491,
@@ -4900,7 +4900,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hrgn", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1493,
@@ -4910,7 +4910,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1494,
@@ -4920,7 +4920,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("xStart", Ty::I32, ValueKind::Scalar, BEFORE), ("yStart", Ty::I32, ValueKind::Scalar, BEFORE), ("xEnd", Ty::I32, ValueKind::Scalar, BEFORE), ("yEnd", Ty::I32, ValueKind::Scalar, BEFORE), ("lpProc", Ty::U64, ValueKind::Pointer, BEFORE), ("data", Ty::I64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1495,
@@ -4930,7 +4930,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1496,
@@ -4940,7 +4940,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdcDest", Ty::U64, ValueKind::Handle, BEFORE), ("xDest", Ty::I32, ValueKind::Scalar, BEFORE), ("yDest", Ty::I32, ValueKind::Scalar, BEFORE), ("width", Ty::I32, ValueKind::Scalar, BEFORE), ("height", Ty::I32, ValueKind::Scalar, BEFORE), ("hdcSrc", Ty::U64, ValueKind::Handle, BEFORE), ("xSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("ySrc", Ty::I32, ValueKind::Scalar, BEFORE), ("hbmMask", Ty::U64, ValueKind::Handle, BEFORE), ("xMask", Ty::I32, ValueKind::Scalar, BEFORE), ("yMask", Ty::I32, ValueKind::Scalar, BEFORE), ("rop", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1497,
@@ -4950,7 +4950,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpxf", Ty::U64, ValueKind::Pointer, BEFORE), ("mode", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1498,
@@ -4960,7 +4960,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1499,
@@ -4990,7 +4990,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1502,
@@ -5000,7 +5000,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1503,
@@ -5010,7 +5010,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hrgn", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1504,
@@ -5020,7 +5020,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("w", Ty::I32, ValueKind::Scalar, BEFORE), ("h", Ty::I32, ValueKind::Scalar, BEFORE), ("rop", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1505,
@@ -5030,7 +5030,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1506,
@@ -5040,7 +5040,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("left", Ty::I32, ValueKind::Scalar, BEFORE), ("top", Ty::I32, ValueKind::Scalar, BEFORE), ("right", Ty::I32, ValueKind::Scalar, BEFORE), ("bottom", Ty::I32, ValueKind::Scalar, BEFORE), ("xr1", Ty::I32, ValueKind::Scalar, BEFORE), ("yr1", Ty::I32, ValueKind::Scalar, BEFORE), ("xr2", Ty::I32, ValueKind::Scalar, BEFORE), ("yr2", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1507,
@@ -5050,7 +5050,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hmf", Ty::U64, ValueKind::Handle, BEFORE), ("lprect", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1508,
@@ -5060,7 +5060,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("pht", Ty::U64, ValueKind::Pointer, BEFORE), ("pmr", Ty::U64, ValueKind::Pointer, BEFORE), ("cht", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1509,
@@ -5070,7 +5070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hmf", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1510,
@@ -5080,7 +5080,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpHandleTable", Ty::U64, ValueKind::Pointer, BEFORE), ("lpMR", Ty::U64, ValueKind::Pointer, BEFORE), ("noObjs", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1511,
@@ -5090,7 +5090,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdcDest", Ty::U64, ValueKind::Handle, BEFORE), ("lpPoint", Ty::U64, ValueKind::Pointer, BEFORE), ("hdcSrc", Ty::U64, ValueKind::Handle, BEFORE), ("xSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("ySrc", Ty::I32, ValueKind::Scalar, BEFORE), ("width", Ty::I32, ValueKind::Scalar, BEFORE), ("height", Ty::I32, ValueKind::Scalar, BEFORE), ("hbmMask", Ty::U64, ValueKind::Handle, BEFORE), ("xMask", Ty::I32, ValueKind::Scalar, BEFORE), ("yMask", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1512,
@@ -5100,7 +5100,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("cpt", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1513,
@@ -5110,7 +5110,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("cpt", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1514,
@@ -5120,7 +5120,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("aj", Ty::U64, ValueKind::Pointer, BEFORE), ("cpt", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1515,
@@ -5130,7 +5130,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("asz", Ty::U64, ValueKind::Pointer, BEFORE), ("csz", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1516,
@@ -5140,7 +5140,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("asz", Ty::U64, ValueKind::Pointer, BEFORE), ("csz", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1517,
@@ -5150,7 +5150,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("ppt", Ty::U64, ValueKind::Pointer, BEFORE), ("nstrings", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1518,
@@ -5160,7 +5160,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("ppt", Ty::U64, ValueKind::Pointer, BEFORE), ("nstrings", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1519,
@@ -5170,7 +5170,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("cpt", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1520,
@@ -5180,7 +5180,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("cpt", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1521,
@@ -5190,7 +5190,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("apt", Ty::U64, ValueKind::Pointer, BEFORE), ("cpt", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1522,
@@ -5250,7 +5250,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("left", Ty::I32, ValueKind::Scalar, BEFORE), ("top", Ty::I32, ValueKind::Scalar, BEFORE), ("right", Ty::I32, ValueKind::Scalar, BEFORE), ("bottom", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1528,
@@ -5260,7 +5260,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("h", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1529,
@@ -5270,7 +5270,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpFileName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1530,
@@ -5280,7 +5280,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("name", Ty::U64, ValueKind::Pointer, BEFORE), ("fl", Ty::U32, ValueKind::Scalar, BEFORE), ("pdv", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1531,
@@ -5290,7 +5290,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("name", Ty::U64, ValueKind::Pointer, BEFORE), ("fl", Ty::U32, ValueKind::Scalar, BEFORE), ("pdv", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1532,
@@ -5300,7 +5300,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpFileName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1533,
@@ -5310,7 +5310,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpdm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1534,
@@ -5320,7 +5320,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpdm", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1535,
@@ -5330,7 +5330,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hpal", Ty::U64, ValueKind::Handle, BEFORE), ("n", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1536,
@@ -5340,7 +5340,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("nSavedDC", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1537,
@@ -5350,7 +5350,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("left", Ty::I32, ValueKind::Scalar, BEFORE), ("top", Ty::I32, ValueKind::Scalar, BEFORE), ("right", Ty::I32, ValueKind::Scalar, BEFORE), ("bottom", Ty::I32, ValueKind::Scalar, BEFORE), ("width", Ty::I32, ValueKind::Scalar, BEFORE), ("height", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1538,
@@ -5370,7 +5370,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("xn", Ty::I32, ValueKind::Scalar, BEFORE), ("dx", Ty::I32, ValueKind::Scalar, BEFORE), ("yn", Ty::I32, ValueKind::Scalar, BEFORE), ("yd", Ty::I32, ValueKind::Scalar, BEFORE), ("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1540,
@@ -5380,7 +5380,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("xn", Ty::I32, ValueKind::Scalar, BEFORE), ("xd", Ty::I32, ValueKind::Scalar, BEFORE), ("yn", Ty::I32, ValueKind::Scalar, BEFORE), ("yd", Ty::I32, ValueKind::Scalar, BEFORE), ("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1541,
@@ -5390,7 +5390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("mode", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1542,
@@ -5410,7 +5410,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hPal", Ty::U64, ValueKind::Handle, BEFORE), ("bForceBkgd", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1544,
@@ -5440,7 +5440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hbm", Ty::U64, ValueKind::Handle, BEFORE), ("w", Ty::I32, ValueKind::Scalar, BEFORE), ("h", Ty::I32, ValueKind::Scalar, BEFORE), ("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1547,
@@ -5480,7 +5480,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1551,
@@ -5490,7 +5490,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpca", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1552,
@@ -5550,7 +5550,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nSize", Ty::U32, ValueKind::Scalar, BEFORE), ("pb", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1558,
@@ -5600,7 +5600,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("cbBuffer", Ty::U32, ValueKind::Scalar, BEFORE), ("lpData", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1563,
@@ -5640,7 +5640,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("color", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1567,
@@ -5670,7 +5670,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hrgn", Ty::U64, ValueKind::Handle, BEFORE), ("left", Ty::I32, ValueKind::Scalar, BEFORE), ("top", Ty::I32, ValueKind::Scalar, BEFORE), ("right", Ty::I32, ValueKind::Scalar, BEFORE), ("bottom", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1570,
@@ -5730,7 +5730,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("extra", Ty::I32, ValueKind::Scalar, BEFORE), ("count", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1576,
@@ -5740,7 +5740,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1577,
@@ -5750,7 +5750,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1578,
@@ -5760,7 +5760,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1579,
@@ -5770,7 +5770,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lppt", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1580,
@@ -5780,7 +5780,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpxf", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1581,
@@ -5790,7 +5790,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1582,
@@ -5800,7 +5800,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1583,
@@ -5810,7 +5810,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE), ("c", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1584,
@@ -5820,7 +5820,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("h", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1585,
@@ -5830,7 +5830,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1586,
@@ -5840,7 +5840,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1587,
@@ -5890,7 +5890,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpPoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1592,
@@ -5900,7 +5900,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprcDst", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcSrc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1593,
@@ -5910,7 +5910,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("idAni", Ty::I32, ValueKind::Scalar, BEFORE), ("lprcFrom", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcTo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1594,
@@ -5920,7 +5920,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lprect", Ty::U64, ValueKind::Pointer, BEFORE), ("flags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1595,
@@ -5930,7 +5930,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("qrc", Ty::U64, ValueKind::Pointer, BEFORE), ("edge", Ty::U32, ValueKind::Scalar, BEFORE), ("grfFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1596,
@@ -5940,7 +5940,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDC", Ty::U64, ValueKind::Handle, BEFORE), ("lprc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1597,
@@ -5950,7 +5950,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lprc", Ty::U64, ValueKind::Pointer, BEFORE), ("uType", Ty::U32, ValueKind::Scalar, BEFORE), ("uState", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1598,
@@ -5960,7 +5960,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hbrFore", Ty::U64, ValueKind::Handle, BEFORE), ("qfnCallBack", Ty::U64, ValueKind::Pointer, BEFORE), ("lData", Ty::I64, ValueKind::Scalar, BEFORE), ("wData", Ty::U64, ValueKind::Scalar, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("cx", Ty::I32, ValueKind::Scalar, BEFORE), ("cy", Ty::I32, ValueKind::Scalar, BEFORE), ("uFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1599,
@@ -5970,7 +5970,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hbrFore", Ty::U64, ValueKind::Handle, BEFORE), ("qfnCallBack", Ty::U64, ValueKind::Pointer, BEFORE), ("lData", Ty::I64, ValueKind::Scalar, BEFORE), ("wData", Ty::U64, ValueKind::Scalar, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("cx", Ty::I32, ValueKind::Scalar, BEFORE), ("cy", Ty::I32, ValueKind::Scalar, BEFORE), ("uFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1600,
@@ -6020,7 +6020,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("iDevNum", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDisplayDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1605,
@@ -6030,7 +6030,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("iDevNum", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDisplayDevice", Ty::U64, ValueKind::Pointer, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1606,
@@ -6040,7 +6040,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lprcClip", Ty::U64, ValueKind::Pointer, BEFORE), ("lpfnEnum", Ty::U64, ValueKind::Pointer, BEFORE), ("dwData", Ty::I64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1607,
@@ -6050,7 +6050,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpszDeviceName", Ty::U64, ValueKind::Pointer, BEFORE), ("iModeNum", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDevMode", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1608,
@@ -6060,7 +6060,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpszDeviceName", Ty::U64, ValueKind::Pointer, BEFORE), ("iModeNum", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDevMode", Ty::U64, ValueKind::Pointer, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1609,
@@ -6070,7 +6070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpszDeviceName", Ty::U64, ValueKind::Pointer, BEFORE), ("iModeNum", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDevMode", Ty::U64, ValueKind::Pointer, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1610,
@@ -6080,7 +6080,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpszDeviceName", Ty::U64, ValueKind::Pointer, BEFORE), ("iModeNum", Ty::U32, ValueKind::Scalar, BEFORE), ("lpDevMode", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1611,
@@ -6120,7 +6120,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("hrgnClip", Ty::U64, ValueKind::Handle, BEFORE), ("flags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1615,
@@ -6130,7 +6130,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hMonitor", Ty::U64, ValueKind::Handle, BEFORE), ("lpmi", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1616,
@@ -6140,7 +6140,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hMonitor", Ty::U64, ValueKind::Handle, BEFORE), ("lpmi", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1617,
@@ -6160,7 +6160,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nIndex", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1619,
@@ -6190,7 +6190,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpRect", Ty::U64, ValueKind::Pointer, BEFORE), ("bErase", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1622,
@@ -6210,7 +6210,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1624,
@@ -6240,7 +6240,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDC", Ty::U64, ValueKind::Handle, BEFORE), ("hBrush", Ty::U64, ValueKind::Handle, BEFORE), ("lpOutputFunc", Ty::U64, ValueKind::Pointer, BEFORE), ("lpData", Ty::I64, ValueKind::Scalar, BEFORE), ("nCount", Ty::I32, ValueKind::Scalar, BEFORE), ("X", Ty::I32, ValueKind::Scalar, BEFORE), ("Y", Ty::I32, ValueKind::Scalar, BEFORE), ("nWidth", Ty::I32, ValueKind::Scalar, BEFORE), ("nHeight", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1627,
@@ -6250,7 +6250,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDC", Ty::U64, ValueKind::Handle, BEFORE), ("hBrush", Ty::U64, ValueKind::Handle, BEFORE), ("lpOutputFunc", Ty::U64, ValueKind::Pointer, BEFORE), ("lpData", Ty::I64, ValueKind::Scalar, BEFORE), ("nCount", Ty::I32, ValueKind::Scalar, BEFORE), ("X", Ty::I32, ValueKind::Scalar, BEFORE), ("Y", Ty::I32, ValueKind::Scalar, BEFORE), ("nWidth", Ty::I32, ValueKind::Scalar, BEFORE), ("nHeight", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1628,
@@ -6260,7 +6260,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprc", Ty::U64, ValueKind::Pointer, BEFORE), ("dx", Ty::I32, ValueKind::Scalar, BEFORE), ("dy", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1629,
@@ -6280,7 +6280,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("hRgn", Ty::U64, ValueKind::Handle, BEFORE), ("bErase", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1631,
@@ -6290,7 +6290,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDC", Ty::U64, ValueKind::Handle, BEFORE), ("lprc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1632,
@@ -6310,7 +6310,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hInstance", Ty::U64, ValueKind::Handle, BEFORE), ("lpBitmapName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1634,
@@ -6320,7 +6320,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hInstance", Ty::U64, ValueKind::Handle, BEFORE), ("lpBitmapName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1635,
@@ -6330,7 +6330,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWndLock", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1636,
@@ -6350,7 +6350,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprc", Ty::U64, ValueKind::Pointer, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1638,
@@ -6360,7 +6360,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1639,
@@ -6370,7 +6370,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprc", Ty::U64, ValueKind::Pointer, BEFORE), ("dx", Ty::I32, ValueKind::Scalar, BEFORE), ("dy", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1640,
@@ -6380,7 +6380,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1641,
@@ -6390,7 +6390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lprcUpdate", Ty::U64, ValueKind::Pointer, BEFORE), ("hrgnUpdate", Ty::U64, ValueKind::Handle, BEFORE), ("flags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1642,
@@ -6400,7 +6400,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpPoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1643,
@@ -6410,7 +6410,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprc", Ty::U64, ValueKind::Pointer, BEFORE), ("xLeft", Ty::I32, ValueKind::Scalar, BEFORE), ("yTop", Ty::I32, ValueKind::Scalar, BEFORE), ("xRight", Ty::I32, ValueKind::Scalar, BEFORE), ("yBottom", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1644,
@@ -6420,7 +6420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1645,
@@ -6450,7 +6450,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprcDst", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcSrc1", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcSrc2", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1648,
@@ -6480,7 +6480,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lprcDst", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcSrc1", Ty::U64, ValueKind::Pointer, BEFORE), ("lprcSrc2", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1651,
@@ -6490,7 +6490,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpRect", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1652,
@@ -6500,7 +6500,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("hRgn", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1653,
@@ -6510,7 +6510,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDC", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1654,
@@ -6580,7 +6580,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1661,
@@ -6590,7 +6590,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1662,
@@ -6600,7 +6600,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE), ("dwOptimization", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1663,
@@ -6610,7 +6610,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1664,
@@ -6620,7 +6620,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE), ("dwPageNumber", Ty::U32, ValueKind::Scalar, BEFORE), ("pCurrDM", Ty::U64, ValueKind::Pointer, BEFORE), ("pLastDM", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1665,
@@ -6640,7 +6640,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE), ("Page", Ty::U32, ValueKind::Scalar, BEFORE), ("pdwPageType", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1667,
@@ -6650,7 +6650,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pwszPrinterName", Ty::U64, ValueKind::Pointer, BEFORE), ("pDevmode", Ty::U64, ValueKind::Pointer, BEFORE), ("pwszDocName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1668,
@@ -6660,7 +6660,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE), ("hemf", Ty::U64, ValueKind::Handle, BEFORE), ("prectDocument", Ty::U64, ValueKind::Pointer, BEFORE), ("prectBorder", Ty::U64, ValueKind::Pointer, BEFORE), ("prectClip", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1669,
@@ -6670,7 +6670,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE), ("pCurrDM", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1670,
@@ -6680,7 +6680,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE), ("pDocInfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1671,
@@ -6690,7 +6690,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("SpoolFileHandle", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 1672,
@@ -23050,7 +23050,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("hdcBlt", Ty::U64, ValueKind::Handle, BEFORE), ("nFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3308,
@@ -26890,7 +26890,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pszLayout", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3692,
@@ -26900,7 +26900,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pszLayout", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3693,
@@ -26910,7 +26910,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nSize", Ty::U32, ValueKind::Scalar, BEFORE), ("lpMeta16Data", Ty::U64, ValueKind::Pointer, BEFORE), ("hdcRef", Ty::U64, ValueKind::Handle, BEFORE), ("lpMFP", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3694,
@@ -27100,7 +27100,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWndRemove", Ty::U64, ValueKind::Handle, BEFORE), ("hWndNewNext", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3713,
@@ -27130,7 +27130,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hConv", Ty::U64, ValueKind::Handle, BEFORE), ("idTransaction", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3716,
@@ -27140,7 +27140,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hData", Ty::U64, ValueKind::Handle, BEFORE), ("pcbDataSize", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3717,
@@ -27150,7 +27150,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hData", Ty::U64, ValueKind::Handle, BEFORE), ("pSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("cb", Ty::U32, ValueKind::Scalar, BEFORE), ("cbOff", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3718,
@@ -27160,7 +27160,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pData", Ty::U64, ValueKind::Pointer, BEFORE), ("cbData", Ty::U32, ValueKind::Scalar, BEFORE), ("hConv", Ty::U64, ValueKind::Handle, BEFORE), ("hszItem", Ty::U64, ValueKind::Handle, BEFORE), ("wFmt", Ty::U32, ValueKind::Scalar, BEFORE), ("wType", Ty::U32, ValueKind::Scalar, BEFORE), ("dwTimeout", Ty::U32, ValueKind::Scalar, BEFORE), ("pdwResult", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3719,
@@ -27180,7 +27180,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hszService", Ty::U64, ValueKind::Handle, BEFORE), ("hszTopic", Ty::U64, ValueKind::Handle, BEFORE), ("pCC", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3721,
@@ -27190,7 +27190,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hszService", Ty::U64, ValueKind::Handle, BEFORE), ("hszTopic", Ty::U64, ValueKind::Handle, BEFORE), ("hConvList", Ty::U64, ValueKind::Handle, BEFORE), ("pCC", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3722,
@@ -27200,7 +27200,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("pSrc", Ty::U64, ValueKind::Pointer, BEFORE), ("cb", Ty::U32, ValueKind::Scalar, BEFORE), ("cbOff", Ty::U32, ValueKind::Scalar, BEFORE), ("hszItem", Ty::U64, ValueKind::Handle, BEFORE), ("wFmt", Ty::U32, ValueKind::Scalar, BEFORE), ("afCmd", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3723,
@@ -27210,7 +27210,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("psz", Ty::U64, ValueKind::Pointer, BEFORE), ("iCodePage", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3724,
@@ -27220,7 +27220,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("psz", Ty::U64, ValueKind::Pointer, BEFORE), ("iCodePage", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3725,
@@ -27230,7 +27230,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hConv", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3726,
@@ -27240,7 +27240,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hConvList", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3727,
@@ -27250,7 +27250,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hConv", Ty::U64, ValueKind::Handle, BEFORE), ("wCmd", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3728,
@@ -27260,7 +27260,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hData", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3729,
@@ -27270,7 +27270,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hsz", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3730,
@@ -27330,7 +27330,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hsz", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3736,
@@ -27340,7 +27340,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hsz1", Ty::U64, ValueKind::Handle, BEFORE), ("hsz2", Ty::U64, ValueKind::Handle, BEFORE), ("afCmd", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3737,
@@ -27350,7 +27350,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE), ("hszTopic", Ty::U64, ValueKind::Handle, BEFORE), ("hszItem", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3738,
@@ -27370,7 +27370,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hConvList", Ty::U64, ValueKind::Handle, BEFORE), ("hConvPrev", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3740,
@@ -27400,7 +27400,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hConv", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3743,
@@ -27420,7 +27420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hConv", Ty::U64, ValueKind::Handle, BEFORE), ("id", Ty::U32, ValueKind::Scalar, BEFORE), ("hUser", Ty::U64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3745,
@@ -27430,7 +27430,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hData", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3746,
@@ -27440,7 +27440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idInst", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3747,
@@ -27470,7 +27470,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("msg", Ty::U32, ValueKind::Scalar, BEFORE), ("lParam", Ty::I64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3750,
@@ -27670,7 +27670,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("msg", Ty::U32, ValueKind::Scalar, BEFORE), ("lParam", Ty::I64, ValueKind::Scalar, BEFORE), ("puiLo", Ty::U64, ValueKind::Pointer, BEFORE), ("puiHi", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 3770,
@@ -40940,7 +40940,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idAttach", Ty::U32, ValueKind::Scalar, BEFORE), ("idAttachTo", Ty::U32, ValueKind::Scalar, BEFORE), ("fAttach", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5108,
@@ -42200,7 +42200,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE), ("param1", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5234,
@@ -42210,7 +42210,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE), ("param1", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5235,
@@ -42220,7 +42220,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5236,
@@ -42230,7 +42230,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5237,
@@ -42240,7 +42240,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE), ("param1", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5238,
@@ -42250,7 +42250,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE), ("param1", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5239,
@@ -42280,7 +42280,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE), ("param1", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5242,
@@ -42290,7 +42290,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("param0", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5243,
@@ -42310,7 +42310,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("event", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5245,
@@ -42340,7 +42340,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("pointerType", Ty::I32, ValueKind::Scalar, BEFORE), ("fObserve", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5248,
@@ -42350,7 +42350,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("eventMin", Ty::U32, ValueKind::Scalar, BEFORE), ("eventMax", Ty::U32, ValueKind::Scalar, BEFORE), ("hmodWinEventProc", Ty::U64, ValueKind::Handle, BEFORE), ("pfnWinEventProc", Ty::U64, ValueKind::Pointer, BEFORE), ("idProcess", Ty::U32, ValueKind::Scalar, BEFORE), ("idThread", Ty::U32, ValueKind::Scalar, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5249,
@@ -42360,7 +42360,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWinEventHook", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5250,
@@ -42380,7 +42380,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("pointerType", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5252,
@@ -42390,7 +42390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpRGBTriple", Ty::U64, ValueKind::Pointer, BEFORE), ("dlpBuffer", Ty::U64, ValueKind::Pointer, BEFORE), ("nCount", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5253,
@@ -42400,7 +42400,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hPal", Ty::U64, ValueKind::Handle, BEFORE), ("deFirst", Ty::U32, ValueKind::Scalar, BEFORE), ("num", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5254,
@@ -42410,7 +42410,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hdcTarget", Ty::U64, ValueKind::Handle, BEFORE), ("action", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5255,
@@ -42420,7 +42420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lplcs", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5256,
@@ -42430,7 +42430,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lplcs", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5257,
@@ -42440,7 +42440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hcs", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5258,
@@ -42470,7 +42470,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5261,
@@ -42480,7 +42480,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpRamp", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5262,
@@ -42490,7 +42490,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("pBufSize", Ty::U64, ValueKind::Pointer, BEFORE), ("pszFilename", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5263,
@@ -42500,7 +42500,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("pBufSize", Ty::U64, ValueKind::Pointer, BEFORE), ("pszFilename", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5264,
@@ -42510,7 +42510,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hColorSpace", Ty::U64, ValueKind::Handle, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE), ("nSize", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5265,
@@ -42520,7 +42520,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hColorSpace", Ty::U64, ValueKind::Handle, BEFORE), ("lpBuffer", Ty::U64, ValueKind::Pointer, BEFORE), ("nSize", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5266,
@@ -42530,7 +42530,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("hcs", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5267,
@@ -42540,7 +42540,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpRamp", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5268,
@@ -42560,7 +42560,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpFileName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5270,
@@ -42570,7 +42570,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("lpFileName", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5271,
@@ -42580,7 +42580,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("reserved", Ty::U32, ValueKind::Scalar, BEFORE), ("lpszCMID", Ty::U64, ValueKind::Pointer, BEFORE), ("lpszFileName", Ty::U64, ValueKind::Pointer, BEFORE), ("command", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5272,
@@ -42590,7 +42590,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("reserved", Ty::U32, ValueKind::Scalar, BEFORE), ("lpszCMID", Ty::U64, ValueKind::Pointer, BEFORE), ("lpszFileName", Ty::U64, ValueKind::Pointer, BEFORE), ("command", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5273,
@@ -43710,7 +43710,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pParams", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5385,
@@ -43850,7 +43850,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("feedback", Ty::I32, ValueKind::Scalar, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE), ("pSize", Ty::U64, ValueKind::Pointer, BEFORE), ("config", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5399,
@@ -43930,7 +43930,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("feedback", Ty::I32, ValueKind::Scalar, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE), ("size", Ty::U32, ValueKind::Scalar, BEFORE), ("configuration", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5407,
@@ -44920,7 +44920,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("dpiContextA", Ty::U64, ValueKind::Handle, BEFORE), ("dpiContextB", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5506,
@@ -44970,7 +44970,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hProcess", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5511,
@@ -45030,7 +45030,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5517,
@@ -45050,7 +45050,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5519,
@@ -45070,7 +45070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("value", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5521,
@@ -45080,7 +45080,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpPoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5522,
@@ -45090,7 +45090,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpPoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5523,
@@ -45130,7 +45130,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("dpiContext", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5527,
@@ -45180,7 +45180,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("inputMessageSource", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5532,
@@ -46120,7 +46120,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("bEnable", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5626,
@@ -46130,7 +46130,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5627,
@@ -46140,7 +46140,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5628,
@@ -46160,7 +46160,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5630,
@@ -46200,7 +46200,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("idThread", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5634,
@@ -46250,7 +46250,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("plii", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5639,
@@ -46270,7 +46270,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5641,
@@ -46390,7 +46390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5653,
@@ -46430,7 +46430,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("fSwap", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5657,
@@ -46710,7 +46710,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pointerId", Ty::U32, ValueKind::Scalar, BEFORE), ("pointerCount", Ty::U64, ValueKind::Pointer, BEFORE), ("touchpadInfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5685,
@@ -46720,7 +46720,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pointerId", Ty::U32, ValueKind::Scalar, BEFORE), ("entriesCount", Ty::U64, ValueKind::Pointer, BEFORE), ("pointerCount", Ty::U64, ValueKind::Pointer, BEFORE), ("touchpadInfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5686,
@@ -46800,7 +46800,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pointerId", Ty::U32, ValueKind::Scalar, BEFORE), ("touchpadInfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5694,
@@ -46810,7 +46810,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pointerId", Ty::U32, ValueKind::Scalar, BEFORE), ("entriesCount", Ty::U64, ValueKind::Pointer, BEFORE), ("touchpadInfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5695,
@@ -46880,7 +46880,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDevice", Ty::U64, ValueKind::Handle, BEFORE), ("action", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5702,
@@ -46890,7 +46890,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5703,
@@ -46970,7 +46970,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("pulFlags", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 5711,
@@ -53330,7 +53330,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6347,
@@ -53360,7 +53360,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("pAction", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6350,
@@ -53410,7 +53410,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE), ("nCode", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6355,
@@ -53420,7 +53420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE), ("nCode", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6356,
@@ -53460,7 +53460,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6360,
@@ -53480,7 +53480,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hMenu", Ty::U64, ValueKind::Handle, BEFORE), ("cmd", Ty::U32, ValueKind::Scalar, BEFORE), ("lpszNewItem", Ty::U64, ValueKind::Pointer, BEFORE), ("cmdInsert", Ty::U32, ValueKind::Scalar, BEFORE), ("flags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6362,
@@ -53490,7 +53490,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hMenu", Ty::U64, ValueKind::Handle, BEFORE), ("cmd", Ty::U32, ValueKind::Scalar, BEFORE), ("lpszNewItem", Ty::U64, ValueKind::Pointer, BEFORE), ("cmdInsert", Ty::U32, ValueKind::Scalar, BEFORE), ("flags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6363,
@@ -53560,7 +53560,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6370,
@@ -53570,7 +53570,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("CodePage", Ty::U32, ValueKind::Scalar, BEFORE), ("lpCurrentChar", Ty::U64, ValueKind::Pointer, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6371,
@@ -53580,7 +53580,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpsz", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6372,
@@ -53590,7 +53590,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpszStart", Ty::U64, ValueKind::Pointer, BEFORE), ("lpszCurrent", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6373,
@@ -53600,7 +53600,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("CodePage", Ty::U32, ValueKind::Scalar, BEFORE), ("lpStart", Ty::U64, ValueKind::Pointer, BEFORE), ("lpCurrentChar", Ty::U64, ValueKind::Pointer, BEFORE), ("dwFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6374,
@@ -53610,7 +53610,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpszStart", Ty::U64, ValueKind::Pointer, BEFORE), ("lpszCurrent", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Pointer, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6375,
@@ -53740,7 +53740,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6388,
@@ -53750,7 +53750,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("topLevelWindow", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6389,
@@ -54070,7 +54070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6421,
@@ -54080,7 +54080,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hAccel", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6422,
@@ -54230,7 +54230,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hMenu", Ty::U64, ValueKind::Handle, BEFORE), ("uIDEnableItem", Ty::U32, ValueKind::Scalar, BEFORE), ("uEnable", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6437,
@@ -54270,7 +54270,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWndParent", Ty::U64, ValueKind::Handle, BEFORE), ("lpEnumFunc", Ty::U64, ValueKind::Pointer, BEFORE), ("lParam", Ty::I64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6441,
@@ -54320,7 +54320,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("dwThreadId", Ty::U32, ValueKind::Scalar, BEFORE), ("lpfn", Ty::U64, ValueKind::Pointer, BEFORE), ("lParam", Ty::I64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6446,
@@ -54380,7 +54380,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("bInvert", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6452,
@@ -54390,7 +54390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("pfwi", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6453,
@@ -54420,7 +54420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("gaFlags", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6456,
@@ -54540,7 +54540,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6468,
@@ -54570,7 +54570,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6471,
@@ -54640,7 +54640,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6478,
@@ -54670,7 +54670,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hicon", Ty::U64, ValueKind::Handle, BEFORE), ("piconinfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6481,
@@ -54680,7 +54680,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hicon", Ty::U64, ValueKind::Handle, BEFORE), ("piconinfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6482,
@@ -54690,7 +54690,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6483,
@@ -54700,7 +54700,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6484,
@@ -54720,7 +54720,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6486,
@@ -54940,7 +54940,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6508,
@@ -54950,7 +54950,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpString", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6509,
@@ -55010,7 +55010,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6515,
@@ -55020,7 +55020,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hMenu", Ty::U64, ValueKind::Handle, BEFORE), ("nPos", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6516,
@@ -55030,7 +55030,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("bRevert", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6517,
@@ -55190,7 +55190,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("hMenu", Ty::U64, ValueKind::Handle, BEFORE), ("uIDHiliteItem", Ty::U32, ValueKind::Scalar, BEFORE), ("uHilite", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6533,
@@ -55200,7 +55200,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6534,
@@ -55220,7 +55220,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("hwndInherit", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6536,
@@ -55360,7 +55360,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWndParent", Ty::U64, ValueKind::Handle, BEFORE), ("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6550,
@@ -55370,7 +55370,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDlg", Ty::U64, ValueKind::Handle, BEFORE), ("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6551,
@@ -55380,7 +55380,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hDlg", Ty::U64, ValueKind::Handle, BEFORE), ("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6552,
@@ -55390,7 +55390,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("bConvert", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6553,
@@ -55400,7 +55400,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6554,
@@ -55410,7 +55410,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6555,
@@ -55420,7 +55420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("topLevelWindow", Ty::U64, ValueKind::Handle, BEFORE), ("isIntercept", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6556,
@@ -55430,7 +55430,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hMenu", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6557,
@@ -55440,7 +55440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6558,
@@ -55450,7 +55450,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6559,
@@ -55460,7 +55460,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6560,
@@ -55470,7 +55470,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6561,
@@ -55480,7 +55480,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6562,
@@ -55490,7 +55490,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6563,
@@ -55500,7 +55500,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6564,
@@ -55690,7 +55690,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpPoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6583,
@@ -55890,7 +55890,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE), ("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("wMsgFilterMin", Ty::U32, ValueKind::Scalar, BEFORE), ("wMsgFilterMax", Ty::U32, ValueKind::Scalar, BEFORE), ("wRemoveMsg", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6603,
@@ -55900,7 +55900,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("lpPoint", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6604,
@@ -56010,7 +56010,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE), ("fRegister", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6615,
@@ -56040,7 +56040,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("tdFlags", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6618,
@@ -56050,7 +56050,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hwnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6619,
@@ -56060,7 +56060,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("fEnable", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6620,
@@ -56070,7 +56070,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("fEnable", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6621,
@@ -56130,7 +56130,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("lResult", Ty::I64, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6627,
@@ -56140,7 +56140,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("bStartInertia", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6628,
@@ -56270,7 +56270,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("topLevelWindow", Ty::U64, ValueKind::Handle, BEFORE), ("processHandleCount", Ty::U32, ValueKind::Scalar, BEFORE), ("processHandleArray", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6641,
@@ -56360,7 +56360,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hCursor", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6650,
@@ -56420,7 +56420,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6656,
@@ -56440,7 +56440,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("maxSensitivity", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6658,
@@ -56520,7 +56520,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("cMessagesMax", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6666,
@@ -56550,7 +56550,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6669,
@@ -56660,7 +56660,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nFilterType", Ty::I32, ValueKind::Scalar, BEFORE), ("pfnFilterProc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6680,
@@ -56690,7 +56690,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nFilterType", Ty::I32, ValueKind::Scalar, BEFORE), ("pfnFilterProc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6683,
@@ -56730,7 +56730,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("nCmdShow", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6687,
@@ -56740,7 +56740,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6688,
@@ -56830,7 +56830,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWndClient", Ty::U64, ValueKind::Handle, BEFORE), ("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6697,
@@ -56840,7 +56840,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("nCode", Ty::I32, ValueKind::Scalar, BEFORE), ("pfnFilterProc", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6698,
@@ -56900,7 +56900,7 @@ ApiDef {
     level_note: BROAD_LEVEL_NOTE,
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("pULWInfo", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 6704,

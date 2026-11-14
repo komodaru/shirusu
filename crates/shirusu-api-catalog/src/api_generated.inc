@@ -760,7 +760,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE), ("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("wMsgFilterMin", Ty::U32, ValueKind::Scalar, BEFORE), ("wMsgFilterMax", Ty::U32, ValueKind::Scalar, BEFORE), ("wRemoveMsg", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 90,
@@ -780,7 +780,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("lpMsg", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 92,
@@ -830,7 +830,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE), ("nCmdShow", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 97,
@@ -910,7 +910,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNull,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 105,
@@ -920,7 +920,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 106,
@@ -930,7 +930,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("cx", Ty::I32, ValueKind::Scalar, BEFORE), ("cy", Ty::I32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNull,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 107,
@@ -940,7 +940,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("h", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNull,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 108,
@@ -950,7 +950,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("ho", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 109,
@@ -970,7 +970,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hdcDest", Ty::U64, ValueKind::Handle, BEFORE), ("xDest", Ty::I32, ValueKind::Scalar, BEFORE), ("yDest", Ty::I32, ValueKind::Scalar, BEFORE), ("wDest", Ty::I32, ValueKind::Scalar, BEFORE), ("hDest", Ty::I32, ValueKind::Scalar, BEFORE), ("hdcSrc", Ty::U64, ValueKind::Handle, BEFORE), ("xSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("ySrc", Ty::I32, ValueKind::Scalar, BEFORE), ("wSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("hSrc", Ty::I32, ValueKind::Scalar, BEFORE), ("rop", Ty::U32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 111,
@@ -980,7 +980,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("limit", Ty::F32, ValueKind::Scalar, BEFORE), ("old", Ty::U64, ValueKind::Pointer, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 112,
@@ -990,7 +990,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hdc", Ty::U64, ValueKind::Handle, BEFORE), ("x", Ty::I32, ValueKind::Scalar, BEFORE), ("y", Ty::I32, ValueKind::Scalar, BEFORE), ("r", Ty::U32, ValueKind::Scalar, BEFORE), ("StartAngle", Ty::F32, ValueKind::Scalar, BEFORE), ("SweepAngle", Ty::F32, ValueKind::Scalar, BEFORE)],
     leave_fields: &[("return", Ty::I32, ValueKind::Scalar, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 113,
@@ -1010,7 +1010,7 @@ ApiDef {
     level_note: "L1（Win32 Metadata から生成）：型付き引数・戻り値のみ。文字列・バッファ・構造体の中身は取得しない（ポインタ値のみ）",
     enter_fields: &[("hWnd", Ty::U64, ValueKind::Handle, BEFORE)],
     leave_fields: &[("return", Ty::U64, ValueKind::Handle, AFTER), ("last_error", Ty::U32, ValueKind::Scalar, AFTER)],
-    last_error_meaning: LastErrorMeaning::WhenReturnIsNull,
+    last_error_meaning: LastErrorMeaning::Never,
 },
 ApiDef {
     api_id: 115,

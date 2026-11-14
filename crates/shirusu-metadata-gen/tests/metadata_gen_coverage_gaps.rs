@@ -24,8 +24,8 @@
 //! （CI では fetch-winmd.sh が事前に取得する）。
 
 use shirusu_metadata_gen::{
-    emit_api_inc, generate, load_config, map_type, ApiConfig, Config, EntryOutcome, Generated,
-    MappedApi,
+    emit_api_inc, generate, load_config, map_type, ApiConfig, Config, DefaultLastError,
+    EntryOutcome, Generated, MappedApi,
 };
 use shirusu_trace::schema::{LastErrorMeaning, Ty, ValueKind};
 use std::path::{Path, PathBuf};
@@ -96,6 +96,7 @@ fn api(namespace: &str, module: &str, function: &str) -> ApiConfig {
         module: module.to_string(),
         function: function.to_string(),
         last_error: None,
+        default_last_error: DefaultLastError::ReturnKind,
     }
 }
 
@@ -109,6 +110,7 @@ fn config_with(apis: Vec<ApiConfig>, max_params: usize) -> Config {
         skips: vec![],
         broad: None,
         broad_last_errors: vec![],
+        winmd_last_error_modules: vec![],
         broad_apis: vec![],
     }
 }

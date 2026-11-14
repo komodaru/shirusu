@@ -31,7 +31,7 @@ pub mod contracts;
 use serde::Deserialize;
 use shirusu_trace::schema::{LastErrorMeaning, Ty, ValueKind};
 use windows_metadata::reader::{HasAttributes, TypeCategory, TypeIndex};
-use windows_metadata::{MethodCallAttributes, Type};
+use windows_metadata::{MethodCallAttributes, PInvokeAttributes, Type};
 
 /// 生成の設定ファイル (`apis.toml`)。
 #[derive(Debug, Clone, Deserialize)]
@@ -65,9 +65,30 @@ pub struct Config {
     /// API that is not in the broad list is an error.
     #[serde(default, rename = "broad_last_error")]
     pub broad_last_errors: Vec<BroadLastError>,
+    /// Modules whose APIs without a `last_error` take their GetLastError
+    /// meaning from WinMD: a function not marked SetLastError leaves the last
+    /// error alone and gets `never`. Only modules where WinMD's flag was
+    /// checked against Windows (gdi32 and user32 by kikizake's recordings);
+    /// elsewhere WinMD misses documented ones (kernel32 CreateNamedPipeW,
+    /// SetCurrentDirectoryW). Applied by [`load_config`]; a module no API
+    /// comes from is an error.
+    #[serde(default)]
+    pub winmd_last_error_modules: Vec<String>,
     /// Entries loaded from `broad.list` by [`load_config`].
     #[serde(skip)]
     pub broad_apis: Vec<ApiConfig>,
+}
+
+/// Where an API's GetLastError meaning comes from when `last_error` is not
+/// given.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DefaultLastError {
+    /// from the return value's kind ([`default_meaning`])
+    #[default]
+    ReturnKind,
+    /// the return value's kind if WinMD marks the function SetLastError,
+    /// otherwise `never`
+    Winmd,
 }
 
 /// One broad-tier GetLastError override, with the evidence for it.
@@ -151,6 +172,8 @@ pub fn emit_api_inventory(index: &TypeIndex, config: &Config) -> String {
                 module: module.clone(),
                 function: function.clone(),
                 last_error: selected.and_then(|a| a.last_error.clone()),
+                default_last_error: selected
+                    .map_or(DefaultLastError::ReturnKind, |a| a.default_last_error),
             };
             let (status, reason) = match skipped {
                 Some(skip) => ("excluded", skip.reason.clone()),
@@ -209,6 +232,9 @@ pub struct ApiConfig {
     /// `never` / `always` / `unspecified`。
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Set by [`load_config`] from `winmd_last_error_modules`.
+    #[serde(skip)]
+    pub default_last_error: DefaultLastError,
 }
 
 /// 意図的に生成しない API 1 件（理由付き）。
@@ -334,7 +360,26 @@ pub fn load_config(path: &str) -> Result<Config, String> {
         config.broad_apis = parse_broad_list(&text)?;
     }
     apply_broad_last_errors(&mut config)?;
+    apply_winmd_last_error_modules(&mut config)?;
     Ok(config)
+}
+
+/// Mark the APIs of `winmd_last_error_modules` (configured and broad) to
+/// take their GetLastError meaning from WinMD. Every module must have an API.
+pub fn apply_winmd_last_error_modules(config: &mut Config) -> Result<(), String> {
+    for m in &config.winmd_last_error_modules {
+        let mut any = false;
+        for api in config.apis.iter_mut().chain(config.broad_apis.iter_mut()) {
+            if api.module.eq_ignore_ascii_case(m) {
+                api.default_last_error = DefaultLastError::Winmd;
+                any = true;
+            }
+        }
+        if !any {
+            return Err(format!("winmd_last_error_modules: no API comes from {m}"));
+        }
+    }
+    Ok(())
 }
 
 /// Apply `[[broad_last_error]]` to the broad list entries. Every override
@@ -393,6 +438,7 @@ pub fn parse_broad_list(text: &str) -> Result<Vec<ApiConfig>, String> {
             module: module.into(),
             function: function.into(),
             last_error: None,
+            default_last_error: DefaultLastError::ReturnKind,
         });
     }
     Ok(out)
@@ -453,6 +499,7 @@ pub fn refresh_broad_list(index: &TypeIndex, config: &Config) -> Result<String, 
             module: module.clone(),
             function: function.clone(),
             last_error: None,
+            default_last_error: DefaultLastError::ReturnKind,
         };
         if !matches!(
             map_api(index, &candidate, 1, config.max_params),
@@ -659,7 +706,19 @@ fn map_api(
     let last_error_meaning = match &api.last_error {
         Some(s) => parse_last_error(s)
             .map_err(|e| format!("{}!{} の last_error が不正: {e}", api.module, api.function))?,
-        None => default_meaning(flavor),
+        None => match api.default_last_error {
+            DefaultLastError::ReturnKind => default_meaning(flavor),
+            // WinMD marks the functions whose failures set the last error
+            // (SetLastError = true, from their documentation); the others
+            // leave whatever an earlier call set.
+            DefaultLastError::Winmd => {
+                if map.flags().contains(PInvokeAttributes::SupportsLastError) {
+                    default_meaning(flavor)
+                } else {
+                    LastErrorMeaning::Never
+                }
+            }
+        },
     };
     Ok(EntryOutcome::Emitted(MappedApi {
         iat_only: false,
@@ -1200,6 +1259,31 @@ mod tests {
             let mut c = broad_config(&bad);
             assert!(apply_broad_last_errors(&mut c).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn winmd_last_error_marks_only_the_named_modules() {
+        let mut c = broad_config("winmd_last_error_modules = [\"GDI32.dll\"]\n");
+        c.broad_apis.extend(
+            parse_broad_list("Windows.Win32.System.Pipes\tkernel32.dll\tCreateNamedPipeW\n")
+                .unwrap(),
+        );
+        apply_winmd_last_error_modules(&mut c).unwrap();
+        let marks: Vec<_> = c.broad_apis.iter().map(|a| a.default_last_error).collect();
+        assert_eq!(
+            marks,
+            [
+                DefaultLastError::Winmd,
+                DefaultLastError::Winmd,
+                DefaultLastError::ReturnKind
+            ]
+        );
+    }
+
+    #[test]
+    fn winmd_last_error_rejects_a_module_without_apis() {
+        let mut c = broad_config("winmd_last_error_modules = [\"user32.dll\"]\n");
+        assert!(apply_winmd_last_error_modules(&mut c).is_err());
     }
 
     use super::*;

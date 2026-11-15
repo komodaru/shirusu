@@ -889,3 +889,160 @@ mod tests {
         });
     }
 }
+
+/// Agent の受け渡し口 (`shirusu-agent/src/adoption.rs`) を、そのまま loom の
+/// 原子と UnsafeCell で動かす。値の置き場は UnsafeCell なので、状態機械が
+/// 排他を守らなければ loom がデータ競合として落とす。
+mod adoption_sync {
+    pub use loom::cell::UnsafeCell;
+    pub use loom::sync::atomic::{AtomicU64, Ordering};
+}
+#[path = "../../shirusu-agent/src/adoption.rs"]
+#[allow(dead_code)]
+mod adoption;
+
+#[cfg(test)]
+mod adoption_tests {
+    use super::adoption::{AdoptTid, Adoptions};
+    use loom::sync::atomic::{AtomicUsize, Ordering};
+    use loom::sync::Arc;
+    use loom::thread;
+
+    type Cells = Adoptions<Tracked, 2>;
+
+    /// 作った数と捨てた数を数える値。二重解放や置き去りを検出する。
+    struct Tracked(Arc<AtomicUsize>);
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    const T: u64 = 7;
+    fn tid() -> AdoptTid {
+        AdoptTid::new(T).unwrap()
+    }
+
+    /// 管理パス 1 回分: 待っている要求を引き受けて値を置く。置けた数を返す。
+    fn serve(a: &Cells, made: &Arc<AtomicUsize>, dropped: &Arc<AtomicUsize>) -> usize {
+        let mut served = 0;
+        for req in a.waiting() {
+            let Some(fill) = a.begin_fill(req) else {
+                continue;
+            };
+            made.fetch_add(1, Ordering::Relaxed);
+            match fill.offer(Tracked(Arc::clone(dropped))) {
+                Ok(()) => served += 1,
+                Err(v) => drop(v),
+            }
+        }
+        served
+    }
+
+    /// 要求者の受け取りと作り手の提供が並んでも、値はちょうど 1 回だけ
+    /// 要求者へ渡り、捨てられもしない。
+    #[test]
+    fn loom_adoption_value_reaches_the_requester_once() {
+        loom::model(|| {
+            let a = Arc::new(Cells::new());
+            let made = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            assert!(a.request(tid()));
+            let server = {
+                let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
+                thread::spawn(move || serve(&a, &made, &dropped))
+            };
+            let early = a.take(tid());
+            let served = server.join().unwrap();
+            assert_eq!(served, 1, "the only request is served");
+            let late = a.take(tid());
+            assert!(early.is_some() ^ late.is_some(), "delivered exactly once");
+            assert_eq!(dropped.load(Ordering::Relaxed), 0);
+            drop((early, late));
+            assert_eq!(dropped.load(Ordering::Relaxed), 1);
+            assert_eq!(made.load(Ordering::Relaxed), 1);
+        });
+    }
+
+    /// 取り消しと提供が並んでも、値は要求者に届かず、必ず 1 回だけ捨てられ、
+    /// 口は空に戻る。
+    #[test]
+    fn loom_adoption_clear_racing_a_filler_leaks_nothing() {
+        loom::model(|| {
+            let a = Arc::new(Cells::new());
+            let made = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            assert!(a.request(tid()));
+            let server = {
+                let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
+                thread::spawn(move || serve(&a, &made, &dropped))
+            };
+            a.clear(tid());
+            server.join().unwrap();
+            // 取り消しが提供の後なら、置かれた値は取り消しが捨てている。
+            // 提供中なら作り手へ戻り、作り手が捨てている。
+            a.clear(tid());
+            assert!(a.take(tid()).is_none());
+            assert_eq!(a.waiting().count(), 0);
+            assert_eq!(
+                dropped.load(Ordering::Relaxed),
+                made.load(Ordering::Relaxed)
+            );
+            assert!(a.request(tid()), "a cell is free again");
+        });
+    }
+
+    /// 同じ要求を二つの作り手が見ても、引き受けるのは一方だけ。
+    #[test]
+    fn loom_adoption_two_fillers_one_wins() {
+        loom::model(|| {
+            let a = Arc::new(Cells::new());
+            let made = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            assert!(a.request(tid()));
+            let other = {
+                let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
+                thread::spawn(move || serve(&a, &made, &dropped))
+            };
+            let mine = serve(&a, &made, &dropped);
+            let theirs = other.join().unwrap();
+            assert_eq!(mine + theirs, 1);
+            assert_eq!(made.load(Ordering::Relaxed), 1);
+            assert!(a.take(tid()).is_some());
+            assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        });
+    }
+
+    /// 取り消して出し直した要求へ、古い要求を見た作り手は値を置けない
+    /// (Ticket による ABA 防止)。
+    #[test]
+    fn loom_adoption_stale_request_never_fills_a_new_one() {
+        loom::model(|| {
+            let a = Arc::new(Cells::new());
+            let made = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            assert!(a.request(tid()));
+            let stale = a.waiting().next().unwrap();
+            let filler = {
+                let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
+                thread::spawn(move || {
+                    if let Some(fill) = a.begin_fill(stale) {
+                        made.fetch_add(1, Ordering::Relaxed);
+                        if let Err(v) = fill.offer(Tracked(dropped)) {
+                            drop(v);
+                        }
+                    }
+                })
+            };
+            a.clear(tid());
+            assert!(a.request(tid()));
+            filler.join().unwrap();
+            assert!(a.take(tid()).is_none(), "the new request got nothing");
+            assert_eq!(a.waiting().count(), 1, "the new request still waits");
+            assert_eq!(
+                dropped.load(Ordering::Relaxed),
+                made.load(Ordering::Relaxed)
+            );
+        });
+    }
+}

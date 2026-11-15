@@ -11,8 +11,23 @@
 //! 低水位時の非同期 Mapping 追加 (A70) は [`expansion`] モジュールの
 //! 管理スレッドが担う。記録経路は登録も待機もしない。
 
+mod adoption;
 pub mod expansion;
 mod writer_cell;
+/// `adoption` が使う同期原語 (loom 検査では loom の型に差し替える)。
+mod adoption_sync {
+    pub use std::sync::atomic::{AtomicU64, Ordering};
+    /// loom の `UnsafeCell` と同じ形の薄い包み。
+    pub struct UnsafeCell<T>(std::cell::UnsafeCell<T>);
+    impl<T> UnsafeCell<T> {
+        pub const fn new(value: T) -> Self {
+            Self(std::cell::UnsafeCell::new(value))
+        }
+        pub fn with_mut<R>(&self, f: impl FnOnce(*mut T) -> R) -> R {
+            f(self.0.get())
+        }
+    }
+}
 use writer_cell::{Access, WriterCell};
 
 pub use expansion::{ExpansionManager, ExpansionManagerHandle, ExpansionStats};
@@ -176,118 +191,7 @@ unsafe impl Send for PublishedBases {}
 // SAFETY: 同上。
 unsafe impl Sync for PublishedBases {}
 
-/// 受け渡し口の数。埋まっていれば要求は置けず、そのスレッドは記録されない
-/// まま (欠落として数える) 次の機会を待つ。
-const ADOPTION_CELLS: usize = 64;
-
-/// Slot を持てなかったスレッドへ、別のスレッドが作った Ring を渡す口。
-/// `tid` が 0 なら空き。要求したスレッドだけが `tid` を 0 へ戻す。`state` は
-/// `Arc::into_raw` の値で、作る側が null から CAS で置き、要求側が swap で
-/// 取り出す。どちらもロックも Heap も使わない。
-struct Adoptions {
-    cells: [AdoptionCell; ADOPTION_CELLS],
-}
-struct AdoptionCell {
-    tid: AtomicU64,
-    state: AtomicPtr<ThreadSlotState>,
-}
-impl Adoptions {
-    fn new() -> Self {
-        Self {
-            cells: std::array::from_fn(|_| AdoptionCell {
-                tid: AtomicU64::new(0),
-                state: AtomicPtr::new(std::ptr::null_mut()),
-            }),
-        }
-    }
-    /// 要求を置く (既にあれば何もしない)。置けなければ false。
-    fn request(&self, thread_id: u64) -> bool {
-        if self
-            .cells
-            .iter()
-            .any(|c| c.tid.load(Ordering::Acquire) == thread_id)
-        {
-            return true;
-        }
-        self.cells.iter().any(|c| {
-            c.tid
-                .compare_exchange(0, thread_id, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-        })
-    }
-    /// 自分宛てに置かれた Ring を受け取り、口を空ける。
-    fn take(&self, thread_id: u64) -> Option<Arc<ThreadSlotState>> {
-        for c in &self.cells {
-            if c.tid.load(Ordering::Acquire) != thread_id {
-                continue;
-            }
-            let ptr = c.state.swap(std::ptr::null_mut(), Ordering::AcqRel);
-            if ptr.is_null() {
-                return None;
-            }
-            c.tid.store(0, Ordering::Release);
-            // SAFETY: ptr は `offer` が Arc::into_raw で置いた値で、swap に
-            // より取り出したのはこのスレッドだけ。
-            return Some(unsafe { Arc::from_raw(ptr) });
-        }
-        None
-    }
-    /// 受け取り手を待つ要求の thread id (管理パス用)。
-    fn waiting(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
-        self.cells.iter().enumerate().filter_map(|(i, c)| {
-            let tid = c.tid.load(Ordering::Acquire);
-            (tid != 0 && c.state.load(Ordering::Acquire).is_null()).then_some((i, tid))
-        })
-    }
-    /// 作った Ring を口へ置く。別の作り手が先に置いていれば渡さない。
-    fn offer(&self, index: usize, thread_id: u64, state: Arc<ThreadSlotState>) {
-        let c = &self.cells[index];
-        if c.tid.load(Ordering::Acquire) != thread_id {
-            return;
-        }
-        let ptr = Arc::into_raw(state) as *mut ThreadSlotState;
-        if c.state
-            .compare_exchange(
-                std::ptr::null_mut(),
-                ptr,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            )
-            .is_err()
-        {
-            // SAFETY: 置けなかった ptr はこの関数だけが持つ。
-            drop(unsafe { Arc::from_raw(ptr) });
-        }
-    }
-    /// 通常の登録で Ring を得たスレッド (同じ ID の再利用を含む) 宛ての
-    /// 要求と、置かれたままの Ring を片付ける。
-    fn clear(&self, thread_id: u64) {
-        for c in &self.cells {
-            if c.tid.load(Ordering::Acquire) != thread_id {
-                continue;
-            }
-            let ptr = c.state.swap(std::ptr::null_mut(), Ordering::AcqRel);
-            if !ptr.is_null() {
-                // SAFETY: swap で取り出した into_raw の値。
-                drop(unsafe { Arc::from_raw(ptr) });
-            }
-            let _ = c
-                .tid
-                .compare_exchange(thread_id, 0, Ordering::AcqRel, Ordering::Relaxed);
-        }
-    }
-}
-impl Drop for Adoptions {
-    fn drop(&mut self) {
-        for c in &mut self.cells {
-            let ptr = *c.state.get_mut();
-            if !ptr.is_null() {
-                // SAFETY: &mut self により他の参照は無い。
-                drop(unsafe { Arc::from_raw(ptr) });
-            }
-        }
-    }
-}
+type Adoptions = adoption::Adoptions<Arc<ThreadSlotState>>;
 
 /// スレッド (Ring) ごとの書き手状態。`Arc` で共有し、TLS キャッシュと
 /// 登録表の両方から指す。
@@ -569,10 +473,11 @@ impl Agent {
             // Slot を持てなかったスレッド: 記録の途中なので、登録表にも Heap
             // にも触れない。別のスレッドが作った Ring を受け取れれば使う。
             let retry = failed_epoch != epoch || misses % NO_SLOT_RETRY_INTERVAL == 0;
-            let adopted = if retry {
-                let adopted = self.adoptions.take(thread_id);
+            let adopt_tid = adoption::AdoptTid::new(thread_id);
+            let adopted = if let (true, Some(t)) = (retry, adopt_tid) {
+                let adopted = self.adoptions.take(t);
                 if adopted.is_none() {
-                    let _ = self.adoptions.request(thread_id);
+                    let _ = self.adoptions.request(t);
                 }
                 adopted
             } else {
@@ -594,13 +499,16 @@ impl Agent {
             // 初回の登録 (管理パス): ついでに Slot を待つ他のスレッドの Ring を
             // 作って渡す。
             let found = self.state_for_slow(thread_id);
-            if found.is_some() {
-                self.adoptions.clear(thread_id);
+            let adopt_tid = adoption::AdoptTid::new(thread_id);
+            if let (true, Some(t)) = (found.is_some(), adopt_tid) {
+                self.adoptions.clear(t);
             }
             self.serve_adoptions();
             let Some(state) = found else {
                 let _ = NO_SLOT.try_with(|c| c.set((self.id, thread_id, epoch, 1)));
-                let _ = self.adoptions.request(thread_id);
+                if let Some(t) = adopt_tid {
+                    let _ = self.adoptions.request(t);
+                }
                 self.publish_missing_calls();
                 return None;
             };
@@ -648,13 +556,22 @@ impl Agent {
     /// 渡した数を返す。
     pub fn serve_adoptions(&self) -> usize {
         let mut served = 0;
-        for (index, tid) in self.adoptions.waiting() {
+        for request in self.adoptions.waiting() {
             if self.pool.free_count() == 0 {
                 break;
             }
-            if let Some(state) = self.begin_thread_state(tid) {
-                self.adoptions.offer(index, tid, state);
-                served += 1;
+            // 引き受けてから作る。同じ要求を別の作り手が引き受けていれば飛ばす。
+            let Some(fill) = self.adoptions.begin_fill(request) else {
+                continue;
+            };
+            let Some(state) = self.begin_thread_state(fill.tid().get()) else {
+                continue;
+            };
+            match fill.offer(state) {
+                Ok(()) => served += 1,
+                // 作っている間に取り消された (そのスレッドは通常の登録で
+                // Ring を得たか終了した)。登録表の扱いは通常の経路に任せる。
+                Err(state) => drop(state),
             }
         }
         served
@@ -1266,7 +1183,9 @@ impl Agent {
     /// [`Agent::poll_reclaims`] が Host の drain 完了を確認してから
     /// 行う。
     pub fn thread_exit(&self, thread_id: u64) -> bool {
-        self.adoptions.clear(thread_id);
+        if let Some(t) = adoption::AdoptTid::new(thread_id) {
+            self.adoptions.clear(t);
+        }
         let removed = self.threads.write().unwrap().remove(&thread_id);
         let Some(state) = removed else {
             return false;

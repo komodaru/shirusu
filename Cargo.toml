@@ -38,7 +38,9 @@ rust-version = "1.87"
 
 [workspace.lints.rust]
 # Kani の証明ハーネスは #[cfg(kani)] に置く (cargo kani だけが有効にする)。
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+# shirusu_loom は shirusu-loom-tests の build.rs だけが立てる (本体の file を
+# #[path] で読み込んだとき、std 前提の単体テストを外す)。
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(shirusu_loom)"] }
 
 [workspace.lints.clippy]
 all = "warn"

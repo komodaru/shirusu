@@ -114,7 +114,7 @@ fn ring_identity_next_generation_wraps_at_max() {
 // ---------- Enter/Leave 対応付けパターン ----------
 fn setup(desc: usize, pay: usize) -> (SharedRegion, shirusu_transport::RingWriter, DrainWorker) {
     let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let w = unsafe {
         region.writer(
@@ -125,7 +125,7 @@ fn setup(desc: usize, pay: usize) -> (SharedRegion, shirusu_transport::RingWrite
             clock,
         )
     };
-    let worker = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+    let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     (region, w, worker)
 }
 fn ev(kind: EventKind, call: u64) -> EventInput<'static> {
@@ -298,10 +298,10 @@ fn report_missing_and_lost_combine_independently() {
 #[test]
 fn validating_host_generation_mismatch_stops_permanently() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 5, 1);
+    let region = SharedRegion::new(cfg, 5, 1).unwrap();
     let known = KnownConfig::new(cfg, cfg.required_len());
     let mut host = ValidatingHost::new(known, 6); // 世代 5 の像に 6 を期待する
-    assert!(host.drain_image(region.as_slice()).is_err());
+    assert!(host.drain_image(&region.snapshot()).is_err());
     assert!(host.integrity_lost);
     assert!(host.is_stopped());
     assert!(matches!(
@@ -310,14 +310,14 @@ fn validating_host_generation_mismatch_stops_permanently() {
     ));
     // 停止後は正しい像を持ってきても RingStopped のまま
     assert!(matches!(
-        host.drain_image(region.as_slice()),
+        host.drain_image(&region.snapshot()),
         Err(shirusu_transport::validate::IntegrityError::RingStopped)
     ));
 }
 #[test]
 fn validating_host_keys_accumulate_across_drains() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 3, 1);
+    let region = SharedRegion::new(cfg, 3, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe {
         region.writer(
@@ -333,11 +333,11 @@ fn validating_host_keys_accumulate_across_drains() {
     let mut inp = ev(EventKind::CallEnter, 1);
     inp.payload = b"aaa";
     w.write(inp);
-    let _ = host.drain_image(region.as_slice()).unwrap();
+    let _ = host.drain_image(&region.snapshot()).unwrap();
     let mut inp2 = ev(EventKind::CallEnter, 2);
     inp2.payload = b"bb";
     w.write(inp2);
-    let _ = host.drain_image(region.as_slice()).unwrap();
+    let _ = host.drain_image(&region.snapshot()).unwrap();
     assert_eq!(
         host.payload_keys,
         vec![

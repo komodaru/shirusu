@@ -55,7 +55,7 @@ fn writer_degraded_event_above_capacity_passes_validating_reader() {
     // Payload を取得失敗 (MemoryUnreadable) として記録すると、Descriptor
     // には元の長さ 512 と PAYLOAD_DROPPED が入る。これが検証を通ること。
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
     let big = vec![7u8; 512];
@@ -81,7 +81,7 @@ fn writer_degraded_event_above_capacity_passes_validating_reader() {
     });
     let mut vr = ValidatingReader::new(known(8, 256), 1);
     let evs = vr
-        .drain_image(region.as_slice())
+        .drain_image(&region.snapshot())
         .expect("degraded events must validate");
     assert_eq!(evs.len(), 2);
     assert!(evs[0].descriptor.payload_dropped());

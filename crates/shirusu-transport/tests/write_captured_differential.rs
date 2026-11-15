@@ -53,7 +53,7 @@ struct Side {
 }
 
 fn side(cfg: RingConfig, policy: WriterPolicy, ts: &Arc<ManualTimestampSource>) -> Side {
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let writer = unsafe { region.writer_with_timestamps(policy, clock, ts.clone()) };
     let reader = unsafe { region.reader() };
@@ -118,7 +118,7 @@ proptest! {
                 Op::Tick(t) => ts.advance(t),
             }
             prop_assert!(
-                a.region.as_slice() == b.region.as_slice(),
+                a.region.snapshot() == b.region.snapshot(),
                 "op {}: shared memory images differ",
                 i
             );

@@ -24,7 +24,7 @@
 use shirusu_e2e::ev;
 use shirusu_host::DrainWorker;
 use shirusu_transport::clock::{system_clock, Clock, ManualClock};
-use shirusu_transport::layout::{writer_waiting, RingConfig};
+use shirusu_transport::layout::RingConfig;
 use shirusu_transport::notify::ReCheckPolicy;
 use shirusu_transport::ring::{OverflowState, SharedRegion, WriteOutcome, WriterPolicy};
 use shirusu_transport::slot::{SlotPool, SLOT_MEMORY_BYTES};
@@ -79,7 +79,7 @@ struct CapThroughput {
 
 fn run_capacity_throughput(desc: usize, payload: usize, attempts: u64) -> CapThroughput {
     let cfg = RingConfig::new(desc, payload);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1));
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
     let done = Arc::new(AtomicBool::new(false));
     let d2 = done.clone();
     let r2 = region.clone();
@@ -137,7 +137,7 @@ struct CapSlowHost {
 
 fn run_capacity_slow_host(desc: usize, payload: usize, secs: u64) -> CapSlowHost {
     let cfg = RingConfig::new(desc, payload);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1));
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
     let done = Arc::new(AtomicBool::new(false));
     let d2 = done.clone();
     let r2 = region.clone();
@@ -201,7 +201,7 @@ fn run_max_wait_resume(max_wait: Duration, rounds: usize) -> MaxWaitResume {
     let mut published = 0usize;
     for _ in 0..rounds {
         let cfg = RingConfig::new(4, 256);
-        let region = Arc::new(SharedRegion::new(cfg, 1, 1));
+        let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
         let outcome: Arc<Mutex<Option<(bool, Instant, u64)>>> = Arc::new(Mutex::new(None));
         let o2 = outcome.clone();
         let r2 = region.clone();
@@ -229,11 +229,11 @@ fn run_max_wait_resume(max_wait: Duration, rounds: usize) -> MaxWaitResume {
         let host = std::thread::spawn(move || {
             // 書き手が待機に入るまで待つ（最大 50ms。max_wait=0 では立たないのでそのまま進む）。
             let deadline = Instant::now() + Duration::from_millis(50);
-            while !writer_waiting(r3.base()) && Instant::now() < deadline {
+            while !r3.control().writer_waiting() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_micros(200));
             }
             std::thread::sleep(Duration::from_micros(500));
-            let mut worker = unsafe { DrainWorker::new(r3.base(), cfg, 1) };
+            let mut worker = unsafe { DrainWorker::new(r3.shm().clone(), cfg, 1) }.unwrap();
             let _ = worker.drain_all();
             *d2.lock().unwrap() = Some(Instant::now());
         });
@@ -269,7 +269,7 @@ fn run_max_wait_stuck(max_wait: Duration, rounds: usize) -> MaxWaitStuck {
     let mut published = 0usize;
     for _ in 0..rounds {
         let cfg = RingConfig::new(4, 256);
-        let region = Arc::new(SharedRegion::new(cfg, 1, 1));
+        let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
         let r2 = region.clone();
         let producer = std::thread::spawn(move || {
             let mut w = unsafe {
@@ -294,7 +294,7 @@ fn run_max_wait_stuck(max_wait: Duration, rounds: usize) -> MaxWaitStuck {
         let r3 = region.clone();
         let host = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(30));
-            let mut worker = unsafe { DrainWorker::new(r3.base(), cfg, 1) };
+            let mut worker = unsafe { DrainWorker::new(r3.shm().clone(), cfg, 1) }.unwrap();
             let _ = worker.drain_all();
         });
         let (wall, ok) = producer.join().unwrap();
@@ -390,7 +390,7 @@ fn run_recheck_detect(interval: Duration, rounds: usize) -> RecheckResult {
 /// 1 件書く。復帰（Normal）すれば true。
 fn resume_after_batch_drain(pct: u64, drain_n: usize) -> bool {
     let cfg = RingConfig::new(16, 4096);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -435,7 +435,7 @@ fn run_resume_threshold(pct: u64) -> ResumeResult {
         .expect("must resume after draining everything");
     // headroom: 復帰させてから回収なしで書き続け、再 OVERFLOW までの Published 数。
     let cfg = RingConfig::new(16, 4096);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -469,7 +469,7 @@ fn run_resume_threshold(pct: u64) -> ResumeResult {
     }
     // 小刻み回収の確認: drain 1 件→書込 1 件を 32 回繰り返す。
     let cfg2 = RingConfig::new(16, 4096);
-    let region2 = SharedRegion::new(cfg2, 1, 1);
+    let region2 = SharedRegion::new(cfg2, 1, 1).unwrap();
     let mut w2 = unsafe {
         region2.writer(
             WriterPolicy {

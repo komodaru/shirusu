@@ -228,7 +228,7 @@ pub fn replay_dst(ops: &[DstOp]) -> Result<Vec<u64>, String> {
     let monitor = HostMonitor::new(move || alive2.load(Ordering::Relaxed));
     let clock = Arc::new(ManualClock::new());
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let wc: Arc<dyn Clock> = clock.clone();
     let mut w = unsafe {
         region.writer(

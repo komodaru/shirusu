@@ -92,9 +92,10 @@ fn create_file_success_error_follows_creation_disposition() {
         assert_eq!(crate::last_error::get(), 183);
     }
     // SAFETY: this test owns the Agent and exclusively uses the local Ring.
-    let base = unsafe { rt.agent().thread_region_base(tid) }.unwrap();
+    let base = rt.agent().thread_region(tid).unwrap();
     let mut reader =
-        unsafe { shirusu_transport::ring::RingReader::new(base, rt.agent().thread_config()) };
+        unsafe { shirusu_transport::ring::RingReader::new(base, rt.agent().thread_config()) }
+            .unwrap();
     let batch = reader.drain_all();
     assert_eq!(batch.events.len(), 10);
     let api = api_by_id(API_CREATE_FILE_W).unwrap();
@@ -159,9 +160,10 @@ fn create_file_a_success_error_follows_creation_disposition() {
         assert_eq!(crate::last_error::get(), 183);
     }
     // SAFETY: this test owns the Agent and exclusively uses the local Ring.
-    let base = unsafe { rt.agent().thread_region_base(tid) }.unwrap();
+    let base = rt.agent().thread_region(tid).unwrap();
     let mut reader =
-        unsafe { shirusu_transport::ring::RingReader::new(base, rt.agent().thread_config()) };
+        unsafe { shirusu_transport::ring::RingReader::new(base, rt.agent().thread_config()) }
+            .unwrap();
     let batch = reader.drain_all();
     assert_eq!(batch.events.len(), 10);
     let api = crate::api::api_by_import("kernel32.dll", "CreateFileA").unwrap();
@@ -219,8 +221,8 @@ fn measure_generic_detour() {
     rt.ensure_thread(tid);
     // SAFETY: Agent owns the local Ring through all samples; this is its
     // only producer and consumer. No hook patches are installed.
-    let base = unsafe { agent.thread_region_base(tid) }.unwrap();
-    let mut reader = unsafe { RingReader::new(base, config) };
+    let base = agent.thread_region(tid).unwrap();
+    let mut reader = unsafe { RingReader::new(base, config) }.unwrap();
     let direct: unsafe extern "system-unwind" fn(*mut c_void, u32, usize) -> *mut c_void =
         black_box(original);
     let detour: unsafe extern "system-unwind" fn(*mut c_void, u32, usize) -> *mut c_void =

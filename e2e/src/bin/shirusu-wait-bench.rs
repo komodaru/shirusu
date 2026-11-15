@@ -15,7 +15,6 @@
 use shirusu_e2e::ev;
 use shirusu_host::{DrainWorker, NotifyingDrainWorker};
 use shirusu_transport::clock::Clock;
-use shirusu_transport::layout::writer_waiting;
 use shirusu_transport::ring::{SharedRegion, WriterPolicy};
 use shirusu_transport::RingConfig;
 use shirusu_transport_win::{EventClock, RingNotify};
@@ -99,7 +98,7 @@ struct RoundResult {
 
 fn run_round(strategy: Strategy) -> RoundResult {
     let cfg = RingConfig::new(4, 256);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1));
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
     // 書き手と Host で同じ space_available イベントを共有する。
     let notify = Arc::new(RingNotify::new().expect("RingNotify"));
     let bench_clock = Arc::new(BenchClock::new(strategy));
@@ -149,7 +148,7 @@ fn run_round(strategy: Strategy) -> RoundResult {
         }
     };
     loop {
-        if writer_waiting(region.base()) {
+        if region.control().writer_waiting() {
             break;
         }
         if Instant::now() > deadline {
@@ -166,7 +165,7 @@ fn run_round(strategy: Strategy) -> RoundResult {
     }
     // 書き手が待機の最中であることを確定させてから回収する。
     std::thread::sleep(Duration::from_millis(10));
-    let worker = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+    let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     let mut host = NotifyingDrainWorker::new(worker, Arc::clone(&notify), &region);
     let mut drained = host.drain_all().events.len();
     let drain_done = Instant::now();

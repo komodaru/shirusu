@@ -13,11 +13,13 @@
 //!   `std::sync::mpsc::Sender`、Windows プロセス間では実 IPC チャネルをこの
 //!   トレイトの背後に差し替える。Host は `target_pid` 付きの要求に対して
 //!   `SharedMapping::duplicate_to_process` で作ったハンドル値を
-//!   [`ExpansionDelivery::handle_value`] に載せて配送し、Agent は
+//!   [`DeliveredMapping::Handle`] に載せて配送し、Agent は
 //!   `SharedMapping::from_handle_value` で自分の写像を作る。
 //! - 記録経路 (record / Hook 相当) はこのフローに触れない。登録は管理スレッド
 //!   だけが行う (agent クレートの `ExpansionManager`、host クレートの
 //!   `ExpansionService` を参照)。
+
+use crate::shm::Shm;
 
 /// Agent の管理スレッド → Host。新しい Mapping を要求する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +27,7 @@ pub struct ExpansionRequest {
     /// 追加する Slot 数。現行は 1 固定 (要求のたびに 1 Slot ずつ増やす)。
     pub slots: u32,
     /// Windows プロセス間の場合の配送先プロセス ID。同一プロセス
-    /// (in-process) の場合は None で、配送は `base` 付きになる。
+    /// (in-process) の場合は None で、配送は [`DeliveredMapping::InProcess`] になる。
     pub target_pid: Option<u32>,
 }
 impl ExpansionRequest {
@@ -51,34 +53,28 @@ impl Default for ExpansionRequest {
     }
 }
 
+/// 配送する Mapping の実体。どちらか一方だけが型で表せる。
+#[derive(Debug, Clone)]
+pub enum DeliveredMapping {
+    /// 同一プロセスの Host が作った領域。実体は Arc で共有されるので、
+    /// Host が先に手放しても Agent の利用中は解放されない。
+    InProcess(Shm),
+    /// 受け取り側プロセスで有効な File Mapping ハンドル値 (Windows
+    /// プロセス間)。`shirusu_transport_win::HandleValue` と同じ数値表現で、
+    /// Agent は `SharedMapping::from_handle_value` で自分の写像を作る。
+    Handle(usize),
+}
+
 /// Host → Agent の管理スレッド。新しい Mapping の情報。
-///
-/// `base` と `handle_value` のどちらか一方が設定される。両方無い配送は
-/// 使えない (Agent は登録を拒否する)。
 #[derive(Debug)]
 pub struct ExpansionDelivery {
     /// Mapping の大きさ (Ring 1 本分 = `RingConfig::required_len()`)。
     pub len: usize,
-    /// プロセス内で直接使えるベースポインタ。同一プロセスの Host が作った
-    /// Mapping の場合に設定される。指す先は Host 側が保持する Mapping の
-    /// ビューであり、Host が Mapping を保持する間だけ有効。Agent は登録時に
-    /// このポインタを Slot へ紐付け、Mapping 自体の所有は Host 側に残す
-    /// (プロセス内実装の取り決め)。
-    pub base: Option<*mut u8>,
-    /// このプロセスで有効な File Mapping ハンドル値 (Windows プロセス間の
-    /// 場合)。`shirusu_transport_win::HandleValue` (`usize`) と同じ数値表現。
-    /// Agent は `SharedMapping::from_handle_value` で自分の写像を作る。
-    pub handle_value: Option<usize>,
+    pub mapping: DeliveredMapping,
     /// Control 領域に書き込む Generation。追加 Slot の世代
     /// ([`EXPANDED_SLOT_GENERATION`]) と一致すること。
     pub generation: u64,
 }
-// SAFETY: `base` は Host が作った Mapping の有効なビューであり、配送を受け
-// 取った Agent が登録を終えるまで Host が Mapping を保持する (Host 側の
-// `ExpansionService` が作成済み Mapping を保持し続ける設計)。Delivery 自体は
-// スレッド間を移動するだけの値の束で、受取側が `base` を使うのは登録時の
-// 一度だけである。`handle_value` は数値であり、`len` / `generation` も値。
-unsafe impl Send for ExpansionDelivery {}
 
 /// 新しい Slot の初回 Generation。追加 Slot は未使用のため 0 から始める。
 /// (初期 Pool の Slot は generation 1 から始まる。追加 Slot は「まだ誰も

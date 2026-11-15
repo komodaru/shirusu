@@ -1,8 +1,8 @@
 //! 共有メモリ上のレイアウト定義。
 //! Control は「書き手が更新する値」と「読み手が更新する値」を別の 64B キャッシュラインに分離する。
 //! 共有領域には生ポインタを置かず、すべての位置は論理オフセットで表す。
-
-use std::sync::atomic::{AtomicU64, Ordering};
+//! 共有メモリそのものへの操作は [`crate::shm`] の型 (`Shm` / `Control`) だけが
+//! 持つ。ここにはオフセット (コピーした Control を読むため) と純粋な演算を置く。
 
 pub const CACHE_LINE: usize = 64;
 /// Control 領域の大きさ（4 キャッシュライン）。
@@ -45,40 +45,124 @@ pub const OFF_WRITER_WAITING: usize = 192;
 // Host は観測した最大値を保持し、Agent は次の欠落で書き直す。
 pub const OFF_PROCESS_MISSING_CALLS: usize = 200;
 
+/// Ring の容量設定。フィールドは非公開で、構築時に必要容量を checked 算術で
+/// 確定させる (レビュー 2026-11-15 P0-2: 公開フィールドと折り返す乗算の
+/// 組み合わせで、16 バイトしか確保しない Region に 256 バイトの Control を
+/// 書けた)。`required_len` は構築後に変わらず、`Layout` の上限
+/// (`isize::MAX`) にも収まることが保証される。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RingConfig {
-    pub descriptor_capacity: usize,
-    pub payload_capacity: usize,
+    descriptor_capacity: usize,
+    payload_capacity: usize,
+    required_len: usize,
 }
+
+/// [`RingConfig::try_new`] の拒否理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigError {
+    DescriptorCapacityTooSmall,
+    PayloadCapacityTooSmall,
+    /// 必要容量が `usize` または `isize::MAX` (確保の上限) を超える。
+    TooLarge,
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DescriptorCapacityTooSmall => f.write_str("descriptor capacity must be >= 2"),
+            Self::PayloadCapacityTooSmall => f.write_str("payload capacity must be >= 16"),
+            Self::TooLarge => f.write_str("ring does not fit in the address space"),
+        }
+    }
+}
+impl std::error::Error for ConfigError {}
+
+// 容量は共有領域へ u64 で置く。usize が u64 に収まるので `as u64` は無損失。
+const _: () = assert!(usize::BITS <= u64::BITS);
+
+/// Descriptor 1 件の大きさ。
+pub const DESCRIPTOR_SIZE: usize = 64;
 
 impl RingConfig {
     /// 本番既定: Descriptor 4096 件 (=256KiB) / Payload 1MiB。
-    pub const PRODUCTION: Self = Self {
-        descriptor_capacity: 4096,
-        payload_capacity: 1024 * 1024,
-    };
+    pub const PRODUCTION: Self = Self::new(4096, 1024 * 1024);
     /// Opt-in burst capacity: 5 MiB + Control per Ring. This absorbs short
     /// producer bursts, but cannot guarantee loss-free sustained capture.
-    pub const BURST: Self = Self {
-        descriptor_capacity: 65536,
-        payload_capacity: 1024 * 1024,
-    };
-    pub fn new(descriptor_capacity: usize, payload_capacity: usize) -> Self {
-        assert!(descriptor_capacity >= 2, "descriptor capacity must be >= 2");
-        assert!(payload_capacity >= 16, "payload capacity must be >= 16");
-        Self {
+    pub const BURST: Self = Self::new(65536, 1024 * 1024);
+
+    /// 容量を検証して設定を作る。必要容量は checked 算術で求める。
+    pub const fn try_new(
+        descriptor_capacity: usize,
+        payload_capacity: usize,
+    ) -> Result<Self, ConfigError> {
+        if descriptor_capacity < 2 {
+            return Err(ConfigError::DescriptorCapacityTooSmall);
+        }
+        if payload_capacity < 16 {
+            return Err(ConfigError::PayloadCapacityTooSmall);
+        }
+        let Some(descriptors) = descriptor_capacity.checked_mul(DESCRIPTOR_SIZE) else {
+            return Err(ConfigError::TooLarge);
+        };
+        let Some(payload_offset) = CONTROL_SIZE.checked_add(descriptors) else {
+            return Err(ConfigError::TooLarge);
+        };
+        let Some(required_len) = payload_offset.checked_add(payload_capacity) else {
+            return Err(ConfigError::TooLarge);
+        };
+        // Layout::from_size_align の上限 (整列 64 の切り上げ分を含む)。
+        if required_len > isize::MAX as usize - CACHE_LINE {
+            return Err(ConfigError::TooLarge);
+        }
+        Ok(Self {
             descriptor_capacity,
             payload_capacity,
+            required_len,
+        })
+    }
+    /// 定数とテスト用: 不正な容量なら panic する (未定義動作にはならない)。
+    /// 外部入力から作るときは [`RingConfig::try_new`] を使う。
+    pub const fn new(descriptor_capacity: usize, payload_capacity: usize) -> Self {
+        match Self::try_new(descriptor_capacity, payload_capacity) {
+            Ok(c) => c,
+            Err(ConfigError::DescriptorCapacityTooSmall) => {
+                panic!("descriptor capacity must be >= 2")
+            }
+            Err(ConfigError::PayloadCapacityTooSmall) => panic!("payload capacity must be >= 16"),
+            Err(ConfigError::TooLarge) => panic!("ring does not fit in the address space"),
         }
+    }
+    /// 共有領域に置いた u64 の容量から作る (Host が受け取った値など)。
+    pub fn try_from_u64(
+        descriptor_capacity: u64,
+        payload_capacity: u64,
+    ) -> Result<Self, ConfigError> {
+        let d = usize::try_from(descriptor_capacity).map_err(|_| ConfigError::TooLarge)?;
+        let p = usize::try_from(payload_capacity).map_err(|_| ConfigError::TooLarge)?;
+        Self::try_new(d, p)
+    }
+    pub const fn descriptor_capacity(&self) -> usize {
+        self.descriptor_capacity
+    }
+    pub const fn payload_capacity(&self) -> usize {
+        self.payload_capacity
+    }
+    /// 共有領域上の表現 (u64)。構築時に損失なく変換できることを確かめてある。
+    pub const fn descriptor_capacity_u64(&self) -> u64 {
+        self.descriptor_capacity as u64
+    }
+    pub const fn payload_capacity_u64(&self) -> u64 {
+        self.payload_capacity as u64
     }
     pub const fn descriptors_offset(&self) -> usize {
         CONTROL_SIZE
     }
     pub const fn payload_offset(&self) -> usize {
-        CONTROL_SIZE + self.descriptor_capacity * 64
+        // 構築時に checked で確かめた和 (required_len - payload_capacity)。
+        self.required_len - self.payload_capacity
     }
     pub const fn required_len(&self) -> usize {
-        self.payload_offset() + self.payload_capacity
+        self.required_len
     }
 }
 
@@ -114,106 +198,6 @@ pub fn usage_percent(used: u64, capacity: u64) -> u64 {
         .unwrap_or(100)
 }
 
-/// 書き手が空き待ち中かどうか（Host が space_available の通知要否を判断する）。
-#[inline]
-pub fn writer_waiting(base: *const u8) -> bool {
-    load(base, OFF_WRITER_WAITING, Ordering::Acquire) != 0
-}
-
-/// Agent 側: プロセス全体の欠落呼び出し数を掲示する（単調、P1-1）。
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // 呼び手が領域の有効性を保証する内部部品
-#[inline]
-pub fn publish_process_missing_calls(base: *mut u8, total: u64) {
-    // SAFETY: load/store と同じ前提（整列済みの有効な共有領域）。
-    unsafe { atomic_at(base, OFF_PROCESS_MISSING_CALLS) }.fetch_max(total, Ordering::Relaxed);
-}
-
-/// Host 側: 掲示された欠落呼び出し数を読む（信用しない参考値。下限として使う）。
-#[inline]
-pub fn process_missing_calls(base: *const u8) -> u64 {
-    load(base, OFF_PROCESS_MISSING_CALLS, Ordering::Relaxed)
-}
-
-/// # Safety
-/// `base + offset` が 8 バイト境界にあり、共有領域の存続期間中有効であること。
-/// base は File Mapping / ヒープ確保いずれでもページまたは 64 バイト境界に揃っている前提。
-pub(crate) unsafe fn atomic_at<'a>(base: *const u8, offset: usize) -> &'a AtomicU64 {
-    &*(base.add(offset) as *const AtomicU64)
-}
-
-/// 前提 (load/store/fetch_add/init_control 共通): `base` は 8 バイト境界に
-/// 揃い、領域が存続期間中有効であること。AtomicU64 の参照を作るため、
-/// 整列していないポインタ (例: Vec<u8> の先頭) を渡すと未定義動作になる
-/// (Miri 検出済み)。実ベースは File Mapping か 64 バイト整列の確保であり、
-/// テストで画像を自前確保する場合は u64 バッファ等で整列を保証すること。
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // 呼び手が領域の有効性を保証する内部部品
-#[inline]
-pub fn load(base: *const u8, offset: usize, order: Ordering) -> u64 {
-    unsafe { atomic_at(base, offset) }.load(order)
-}
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // 呼び手が領域の有効性を保証する内部部品
-#[inline]
-pub fn store(base: *mut u8, offset: usize, v: u64, order: Ordering) {
-    unsafe { atomic_at(base, offset) }.store(v, order)
-}
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // 呼び手が領域の有効性を保証する内部部品
-#[inline]
-pub fn swap(base: *mut u8, offset: usize, v: u64, order: Ordering) -> u64 {
-    unsafe { atomic_at(base, offset) }.swap(v, order)
-}
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // 呼び手が領域の有効性を保証する内部部品
-#[inline]
-pub fn fetch_add(base: *mut u8, offset: usize, v: u64) -> u64 {
-    unsafe { atomic_at(base, offset) }.fetch_add(v, Ordering::Relaxed)
-}
-
-/// Control 領域を初期化する（生成者のみが呼ぶ）。前提は load/store と共通。
-///
-/// 公開順序（レビュー第5回 #4）: Magic は**最後**に `Release` で書く。
-/// それ以外の全フィールド（ゼロクリア・版数・容量・Generation・
-/// Owner）を先に書き終えてから Magic を公開することで、Magic を
-/// `Acquire` で読んだ Host は「現れた Magic の向こうには初期化済みの
-/// 全フィールドがある」ことを保証される。旧実装は Magic を最初に
-/// Relaxed で書いていたため、Host が半初期化の Control（容量 0 や
-/// Generation 0）を検証して Ring を止める競合があった。読み手の
-/// 述語は `layout::load(base, OFF_MAGIC, Ordering::Acquire) == MAGIC`
-/// に統一する（通常のバイト読みは使わない）。
-pub fn init_control(base: *mut u8, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
-    init_control_fields(base, cfg, generation, owner_thread_id);
-    // 単一公開点: この Release store より前の書き込みは、Acquire で
-    // Magic を観測した読み手から全て見える。
-    store(base, OFF_MAGIC, MAGIC, Ordering::Release);
-}
-
-/// [`init_control`] のうち Magic 以外の全て（ゼロクリアと Meta
-/// フィールド）を書く。まだ公開はされない。段階的な公開順序の
-/// テスト（書き手の途中段階で読み手述語を回す）ために分離してある。
-fn init_control_fields(base: *mut u8, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
-    for off in (0..CONTROL_SIZE).step_by(8) {
-        store(base, off, 0, Ordering::Relaxed);
-    }
-    store(base, OFF_LAYOUT_VERSION, LAYOUT_VERSION, Ordering::Relaxed);
-    store(
-        base,
-        OFF_DESCRIPTOR_CAPACITY,
-        cfg.descriptor_capacity as u64,
-        Ordering::Relaxed,
-    );
-    store(
-        base,
-        OFF_PAYLOAD_CAPACITY,
-        cfg.payload_capacity as u64,
-        Ordering::Relaxed,
-    );
-    store(base, OFF_GENERATION, generation, Ordering::Relaxed);
-    store(
-        base,
-        OFF_OWNER_THREAD_ID,
-        owner_thread_id,
-        Ordering::Relaxed,
-    );
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LossCounters {
     pub dropped_events: u64,
@@ -221,13 +205,6 @@ pub struct LossCounters {
     pub degraded_events: u64,
 }
 impl LossCounters {
-    pub fn read_from(base: *const u8) -> Self {
-        Self {
-            dropped_events: load(base, OFF_DROPPED_EVENTS, Ordering::Relaxed),
-            dropped_payload_bytes: load(base, OFF_DROPPED_PAYLOAD_BYTES, Ordering::Relaxed),
-            degraded_events: load(base, OFF_DEGRADED_EVENTS, Ordering::Relaxed),
-        }
-    }
     /// 前回値との差分（単調増加が前提。後退は破損として None）。
     pub fn diff_since(&self, prev: &Self) -> Option<Self> {
         Some(Self {
@@ -273,54 +250,79 @@ mod tests {
     #[test]
     fn production_config_sizes() {
         let c = RingConfig::PRODUCTION;
-        assert_eq!(c.descriptor_capacity * 64, 256 * 1024);
+        assert_eq!(c.descriptor_capacity() * 64, 256 * 1024);
         assert_eq!(c.required_len(), 256 + 256 * 1024 + 1024 * 1024);
     }
-    /// 読み手述語 (Host と同一の形): Magic を Acquire で読む。
-    fn reader_sees_initialized(base: *const u8) -> bool {
-        load(base, OFF_MAGIC, Ordering::Acquire) == MAGIC
-    }
-
     #[test]
     fn init_control_publishes_magic_last_staged() {
         // レビュー第5回 #4 の段階テスト: 書き手の途中段階ごとに読み手
         // 述語を回し、最終の Magic 公開より前は「初期化済み」に
-        // ならないことを確認する。旧順序 (Magic を最初に書く) では
-        // fields 書き込みの前に述語が真になり、このテストが落ちる
-        // (旧順序そのものは loom の検出モデルでも固定してある)。
+        // ならないことを確認する。
+        use crate::shm::{Shm, Word};
         use crate::validate::{validate_control, IntegrityError, KnownConfig};
+        use std::sync::atomic::Ordering;
         let cfg = RingConfig::new(8, 256);
-        let mut words = [0xDEAD_BEEF_DEAD_BEEFu64; CONTROL_SIZE / 8];
-        let base = words.as_mut_ptr() as *mut u8;
+        let shm = Shm::alloc_zeroed(cfg.required_len()).unwrap();
+        let ctl = shm.control();
+        for w in Word::ALL {
+            ctl.store(w, 0xDEAD_BEEF_DEAD_BEEF, Ordering::Relaxed);
+        }
         // 段階 0: 未初期化 (ゴミ)。述語は偽。
-        assert!(!reader_sees_initialized(base));
+        assert!(!ctl.is_published());
         // 段階 1: ゼロクリア + 全フィールド書き込み (公開前)。
-        // フィールドは直接読めば揃っているが、述語はまだ偽であり、
-        // 検証側も BadMagic で弾く (Host が Ring を作らない)。
-        init_control_fields(base, cfg, 7, 42);
-        assert_eq!(load(base, OFF_LAYOUT_VERSION, Ordering::Relaxed), 1);
-        assert_eq!(load(base, OFF_DESCRIPTOR_CAPACITY, Ordering::Relaxed), 8);
-        assert_eq!(load(base, OFF_GENERATION, Ordering::Relaxed), 7);
-        assert_eq!(load(base, OFF_OWNER_THREAD_ID, Ordering::Relaxed), 42);
-        assert!(!reader_sees_initialized(base));
-        let copy: [u8; CONTROL_SIZE] = unsafe { *(base as *const [u8; CONTROL_SIZE]) };
+        ctl.init_fields(cfg, 7, 42);
+        assert_eq!(ctl.load(Word::LayoutVersion, Ordering::Relaxed), 1);
+        assert_eq!(ctl.load(Word::DescriptorCapacity, Ordering::Relaxed), 8);
+        assert_eq!(ctl.load(Word::Generation, Ordering::Relaxed), 7);
+        assert_eq!(ctl.load(Word::OwnerThreadId, Ordering::Relaxed), 42);
+        assert!(!ctl.is_published());
         let known = KnownConfig::new(cfg, cfg.required_len());
         assert_eq!(
-            validate_control(&copy, &known, None),
+            validate_control(&ctl.snapshot(), &known, None),
             Err(IntegrityError::BadMagic)
         );
-        // 段階 2: Magic を Release で公開 (init_control の最終段と同一)。
-        store(base, OFF_MAGIC, MAGIC, Ordering::Release);
-        assert!(reader_sees_initialized(base));
-        let copy: [u8; CONTROL_SIZE] = unsafe { *(base as *const [u8; CONTROL_SIZE]) };
-        let snap = validate_control(&copy, &known, None).expect("initialized control validates");
+        // 段階 2: Magic を Release で公開 (init の最終段と同一)。
+        ctl.store(Word::Magic, MAGIC, Ordering::Release);
+        assert!(ctl.is_published());
+        let snap =
+            validate_control(&ctl.snapshot(), &known, None).expect("initialized control validates");
         assert_eq!(snap.generation, 7);
-        // 一括の init_control でも同じ到達状態になる。
-        let mut words2 = [0u64; CONTROL_SIZE / 8];
-        let base2 = words2.as_mut_ptr() as *mut u8;
-        init_control(base2, cfg, 7, 42);
-        assert!(reader_sees_initialized(base2));
-        assert_eq!(words2, words);
+        // 一括の init でも同じ到達状態になる。
+        let shm2 = Shm::alloc_zeroed(cfg.required_len()).unwrap();
+        shm2.control().init(cfg, 7, 42);
+        assert!(shm2.control().is_published());
+        assert_eq!(shm2.control().snapshot(), ctl.snapshot());
+    }
+
+    /// P0-2 (レビュー 2026-11-15): 旧実装では `RingConfig::new(2, usize::MAX - 367)`
+    /// の必要容量が Release ビルドで 16 に折り返し、16 バイトの Region に
+    /// 256 バイトの Control を書いた。
+    #[test]
+    fn overflowing_capacities_are_refused() {
+        assert_eq!(
+            RingConfig::try_new(2, usize::MAX - 367),
+            Err(ConfigError::TooLarge)
+        );
+        assert_eq!(
+            RingConfig::try_new(usize::MAX / 64 + 1, 16),
+            Err(ConfigError::TooLarge)
+        );
+        assert_eq!(
+            RingConfig::try_new(usize::MAX / 128, usize::MAX / 2),
+            Err(ConfigError::TooLarge)
+        );
+        assert_eq!(
+            RingConfig::try_new(1, 16),
+            Err(ConfigError::DescriptorCapacityTooSmall)
+        );
+        assert_eq!(
+            RingConfig::try_new(2, 15),
+            Err(ConfigError::PayloadCapacityTooSmall)
+        );
+        assert_eq!(
+            RingConfig::try_from_u64(u64::MAX, 16),
+            Err(ConfigError::TooLarge)
+        );
     }
 
     #[test]
@@ -390,6 +392,28 @@ mod proofs {
         let idx = slot_index(c, cap);
         assert!(idx == c % cap);
         assert!(idx < cap);
+    }
+
+    /// try_new は u128 で計算した真の長さと一致し、Layout の上限を超える
+    /// 組み合わせ (桁あふれを含む) だけを TooLarge として拒む。
+    /// 乗算 1 回と加算 2 回だけなので任意幅のまま解ける。
+    #[kani::proof]
+    fn try_new_matches_wide_arithmetic() {
+        let d: usize = kani::any();
+        let p: usize = kani::any();
+        let wide = CONTROL_SIZE as u128 + d as u128 * DESCRIPTOR_SIZE as u128 + p as u128;
+        let limit = (isize::MAX as usize - CACHE_LINE) as u128;
+        match RingConfig::try_new(d, p) {
+            Ok(cfg) => {
+                assert!(d >= 2 && p >= 16);
+                assert!(cfg.required_len() as u128 == wide);
+                assert!(wide <= limit);
+                assert!(cfg.payload_offset() as u128 + p as u128 == wide);
+            }
+            Err(ConfigError::DescriptorCapacityTooSmall) => assert!(d < 2),
+            Err(ConfigError::PayloadCapacityTooSmall) => assert!(d >= 2 && p < 16),
+            Err(ConfigError::TooLarge) => assert!(d >= 2 && p >= 16 && wide > limit),
+        }
     }
 
     /// 容量 0 では除算せず 0 に潰れる (任意の Cursor 値で)。

@@ -39,7 +39,7 @@ fn full_ring_wait_does_not_block_other_threads() {
         agent.record_enter(1, 1, 1, 2, 0, b"b"),
         RecordResult::Written(_)
     ));
-    let base = unsafe { agent.thread_region_base(1) }.expect("region base");
+    let base = agent.thread_region(1).expect("region base");
     // 別スレッドが満杯 Ring へ記録し、BOUNDED_WAIT (最大 800ms) に入る。
     let a2 = Arc::clone(&agent);
     let waiter = std::thread::spawn(move || {
@@ -47,7 +47,7 @@ fn full_ring_wait_does_not_block_other_threads() {
     });
     // writer_waiting フラグが立つまで待つ (待機区間に入ったことの同期)。
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !shirusu_transport::layout::writer_waiting(base as *const u8) {
+    while !base.control().writer_waiting() {
         assert!(
             Instant::now() < deadline,
             "writer never entered bounded wait"

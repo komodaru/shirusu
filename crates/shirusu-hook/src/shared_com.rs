@@ -852,11 +852,14 @@ mod tests {
             Some(0x80000001)
         );
         let tid = crate::thread_id::current() as u64;
-        let base =
-            unsafe { rt.agent().thread_region_base(tid) }.expect("recorded main-thread Ring");
+        let base = rt
+            .agent()
+            .thread_region(tid)
+            .expect("recorded main-thread Ring");
         let mut reader = unsafe {
             shirusu_transport::ring::RingReader::new(base, RingConfig::new(8192, 1024 * 1024))
-        };
+        }
+        .unwrap();
         let batch = reader.drain_all();
         let types =
             shirusu_trace::schema::schema_types(&crate::com::com_method_leave_schema()).unwrap();

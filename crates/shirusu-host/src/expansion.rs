@@ -10,6 +10,7 @@
 //! `target_pid` へ Mapping を duplicate したハンドル値を配送し、Agent は
 //! 自分の写像を作る (Host は自分の写像を保持し続け、そこから回収する)。
 
+use shirusu_transport::expansion::DeliveredMapping;
 use shirusu_transport::expansion::{
     ExpansionDeliverer, ExpansionDelivery, ExpansionRequest, EXPANDED_SLOT_GENERATION,
 };
@@ -144,19 +145,17 @@ impl ExpansionService {
             },
             None => None,
         };
-        let base = if handle_value.is_none() {
-            Some(mapping.as_ptr())
-        } else {
-            None
+        let delivered = match handle_value {
+            Some(h) => DeliveredMapping::Handle(h),
+            None => DeliveredMapping::InProcess(mapping.shm().clone()),
         };
-        // 保持: プロセス内では Agent が base を借りるため、Mapping を落としては
-        // ならない。Windows でも Host は自分の写像から回収するため保持する。
+        // 保持: Host は自分の写像から回収する (プロセス内の Agent は実体を
+        // Shm で共有するので、保持しなくても解放はされない)。
         self.mappings.push(mapping);
         self.created += 1;
         self.deliverer.deliver(ExpansionDelivery {
             len,
-            base,
-            handle_value,
+            mapping: delivered,
             generation: EXPANDED_SLOT_GENERATION,
         });
     }

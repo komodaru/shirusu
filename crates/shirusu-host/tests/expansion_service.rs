@@ -3,6 +3,7 @@
 //! `ExpansionService` が要求を受けて新しい Mapping を作り、Agent へ配送する。
 
 use shirusu_host::expansion::ExpansionService;
+use shirusu_transport::expansion::DeliveredMapping;
 use shirusu_transport::expansion::ExpansionRequest;
 use shirusu_transport::RingConfig;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,9 +25,10 @@ fn service_creates_mapping_and_delivers_base() {
     assert!(!service.poll_once(), "no more requests");
     let delivery = del_rx.try_recv().expect("delivery must arrive");
     assert_eq!(delivery.len, cfg().required_len());
-    assert!(delivery.base.is_some(), "in-process delivery carries base");
-    assert!(!delivery.base.unwrap().is_null());
-    assert_eq!(delivery.handle_value, None);
+    assert!(
+        matches!(&delivery.mapping, DeliveredMapping::InProcess(shm) if shm.len() >= cfg().required_len()),
+        "in-process delivery carries the region"
+    );
     assert_eq!(delivery.generation, 0);
     assert_eq!(service.created, 1);
     assert_eq!(service.mappings_held(), 1);
@@ -57,8 +59,7 @@ fn service_with_target_pid_duplicate_path() {
         assert_eq!(service.created, 1);
         assert_eq!(service.declined_duplicate, 0);
         let delivery = del_rx.try_recv().expect("delivery must arrive");
-        assert!(delivery.handle_value.is_some());
-        assert_eq!(delivery.base, None);
+        assert!(matches!(delivery.mapping, DeliveredMapping::Handle(_)));
     }
 }
 
@@ -86,7 +87,7 @@ fn service_spawn_and_stop() {
     let delivery = del_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("delivery must arrive");
-    assert!(delivery.base.is_some());
+    assert!(matches!(delivery.mapping, DeliveredMapping::InProcess(_)));
     let service = handle.stop();
     assert_eq!(service.created, 1);
     assert_eq!(service.mappings_held(), 1);

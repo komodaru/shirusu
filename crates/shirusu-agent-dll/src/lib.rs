@@ -402,8 +402,7 @@ mod win {
         for &mapping in b.mapping_handles.iter().take(b.ring_count as usize) {
             let delivery = ExpansionDelivery {
                 len: config.required_len(),
-                base: None,
-                handle_value: Some(mapping as usize),
+                mapping: shirusu_transport::expansion::DeliveredMapping::Handle(mapping as usize),
                 generation: EXPANDED_SLOT_GENERATION,
             };
             if agent.register_slot_mapping(delivery).is_none() {

@@ -9,11 +9,11 @@
 
 use shirusu_transport::descriptor::{flags, EventDescriptor, EventKind};
 use shirusu_transport::layout::*;
+use shirusu_transport::shm::Image;
 use shirusu_transport::validate::{
     decode_descriptor, decode_descriptor_checked, decode_payload, validate_control,
     validate_cursor_pair, DescriptorExpectation, IntegrityError, KnownConfig,
 };
-use std::sync::atomic::Ordering;
 
 fn known() -> KnownConfig {
     let cfg = RingConfig::new(16, 256);
@@ -346,26 +346,14 @@ fn dp_position_u64_max_rotates_by_remainder() {
 }
 
 // ---------- validate_control: 像の改変行列 ----------
-/// u64 バッファで整列を保証する画像 (layout の原子操作は 8B 整列が前提)。
-struct Img {
-    words: Vec<u64>,
-    len: usize,
-}
+/// 像 (所有データ)。共有メモリではないのでバイト操作で書く。
+struct Img(Image);
 impl Img {
-    fn blank(len: usize) -> Self {
-        Self {
-            words: vec![0; len.div_ceil(8)],
-            len,
-        }
-    }
-    fn ptr(&mut self) -> *mut u8 {
-        self.words.as_mut_ptr() as *mut u8
-    }
     fn bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.words.as_ptr() as *const u8, self.len) }
+        self.0.as_slice()
     }
     fn set(&mut self, off: usize, v: u64) {
-        store(self.ptr(), off, v, Ordering::Relaxed);
+        self.0.as_mut_slice()[off..off + 8].copy_from_slice(&v.to_le_bytes());
     }
 }
 struct Fields {
@@ -378,8 +366,7 @@ struct Fields {
 }
 fn control(f: &Fields) -> Img {
     let cfg = RingConfig::new(16, 256);
-    let mut img = Img::blank(cfg.required_len());
-    init_control(img.ptr(), cfg, f.gen, 9);
+    let mut img = Img(Image::initialized(cfg, f.gen, 9));
     img.set(OFF_WRITE_CURSOR, f.write);
     img.set(OFF_READ_CURSOR, f.read);
     img.set(OFF_PAYLOAD_WRITE_POSITION, f.pwrite);

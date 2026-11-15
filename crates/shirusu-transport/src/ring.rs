@@ -14,6 +14,7 @@ use crate::clock::{system_timestamp_source, Clock, TimestampSource};
 use crate::descriptor::{flags, CaptureState, EventDescriptor, EventKind};
 use crate::layout::*;
 use crate::notify::{threshold_min_used, NotifySignal, PublishNotifyTracker};
+use crate::shm::{Control, Shm, ShmError, Word};
 use crate::tsc::EventTimestamper;
 use crate::validate::{IntegrityError, MAX_DROPPED_ORIGINAL_LEN};
 
@@ -109,76 +110,74 @@ pub enum WriteOutcome {
     },
 }
 
-/// 共有領域（プロセス内ではヒープ、Windows では File Mapping が背後にある想定）。
-/// バッファは u64 配列で確保し、ベースが 8 バイト（実際はそれ以上）境界に揃うことを保証する。
+/// プロセス内の共有領域 (ヒープ確保の [`Shm`] と、その Ring 設定)。
+/// 構築時に Control を初期化する。Writer / Reader は領域の実体を共有するので、
+/// この値を先に落としても解放済みメモリへは触れない。
 pub struct SharedRegion {
-    // Box<[u64]> で保持すると、Box の move のたびに中身へ Unique retag が
-    // 走り、導出済みポインタのタグが無効化される (Miri 検出)。共有メモリ
-    // 領域は生割当てのまま保持するのが正しいモデル: アロケータから生まれた
-    // ポインタは以後いかなる retag も受けず、構造体の move はスカラの
-    // コピーでしかない。Drop で同じ Layout で解放する。
-    ptr: *mut u8,
-    layout: std::alloc::Layout,
-    pub config: RingConfig,
+    shm: Shm,
+    config: RingConfig,
 }
-// SAFETY: 領域へのアクセスは全て base ポインタ経由に限定され、
-// 制御ワードはアトミック操作、Descriptor/Payload は SPSC 公開プロトコル
-// (write_cursor の Release/Acquire) でのみ触れる。OS 共有メモリと同格の
-// 対象であり、&SharedRegion をスレッド間で共有すること自体は安全。
-unsafe impl Sync for SharedRegion {}
-// SAFETY: 同上。所有権のスレッド間移動は Box を保持していた頃と同格。
-unsafe impl Send for SharedRegion {}
 impl SharedRegion {
-    pub fn new(config: RingConfig, generation: u64, owner_thread_id: u64) -> Self {
-        let layout =
-            std::alloc::Layout::from_size_align(config.required_len(), 64).expect("region layout");
-        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-        assert!(!ptr.is_null(), "shared region allocation failed");
-        init_control(ptr, config, generation, owner_thread_id);
-        Self {
-            ptr,
-            layout,
-            config,
-        }
+    /// 確保に失敗したら Err (対象プロセスを止めない)。
+    pub fn new(
+        config: RingConfig,
+        generation: u64,
+        owner_thread_id: u64,
+    ) -> Result<Self, ShmError> {
+        let shm = Shm::alloc_zeroed(config.required_len())?;
+        shm.control().init(config, generation, owner_thread_id);
+        Ok(Self { shm, config })
     }
-    pub fn base(&self) -> *mut u8 {
-        self.ptr
+    pub fn config(&self) -> RingConfig {
+        self.config
     }
-    pub fn as_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.base() as *const u8, self.config.required_len()) }
+    pub fn shm(&self) -> &Shm {
+        &self.shm
+    }
+    pub fn control(&self) -> Control<'_> {
+        self.shm.control()
+    }
+    /// 領域全体の写し (検証器・テスト用の所有データ)。
+    pub fn snapshot(&self) -> Vec<u8> {
+        self.shm.snapshot()
     }
     /// # Safety
-    /// 返した writer/reader が生きている間、この領域を破棄・移動してはならない。
+    /// この Ring の書き手は同時に 1 つだけであること (SPSC)。
     pub unsafe fn writer(&self, policy: WriterPolicy, clock: Arc<dyn Clock>) -> RingWriter {
-        RingWriter::new(self.base(), self.config, policy, clock)
+        // SAFETY: 呼び出し側の約束をそのまま渡す。領域は config を収める。
+        unsafe {
+            RingWriter::from_fitting(
+                self.shm.clone(),
+                self.config,
+                policy,
+                clock,
+                system_timestamp_source(),
+            )
+        }
     }
     /// イベント時刻源を指定して書き手を作る (Windows の QPC 実装用)。
     ///
     /// # Safety
-    /// 返した writer が生きている間、この領域を破棄・移動してはならない。
+    /// この Ring の書き手は同時に 1 つだけであること (SPSC)。
     pub unsafe fn writer_with_timestamps(
         &self,
         policy: WriterPolicy,
         clock: Arc<dyn Clock>,
         timestamps: Arc<dyn TimestampSource>,
     ) -> RingWriter {
-        RingWriter::new_with_timestamps(self.base(), self.config, policy, clock, timestamps)
+        // SAFETY: 同上。
+        unsafe {
+            RingWriter::from_fitting(self.shm.clone(), self.config, policy, clock, timestamps)
+        }
     }
     /// # Safety
-    /// 返した reader が生きている間、この領域を破棄・移動してはならない。
+    /// この Ring の読み手は同時に 1 つだけであること (SPSC)。
     ///
     /// 注意: 返る `RingReader` は検証なしの信頼済み内部用である (R2)。
     /// Host の通常回収経路では使わず、`shirusu-host` の検証付き経路を使うこと。
     pub unsafe fn reader(&self) -> RingReader {
-        RingReader::new(self.base(), self.config)
-    }
-}
-impl Drop for SharedRegion {
-    fn drop(&mut self) {
-        // SAFETY: ptr は new で同じ layout により確保したもので、二重解放はない
-        // (SharedRegion はコピーを作らない)。writer/reader の借用が残ったまま
-        // 落とすことは呼び出し側の契約違反であり、本クレート内の利用では無い。
-        unsafe { std::alloc::dealloc(self.ptr, self.layout) }
+        // SAFETY: 同上。
+        unsafe { RingReader::from_fitting(self.shm.clone(), self.config) }
     }
 }
 
@@ -186,7 +185,7 @@ impl Drop for SharedRegion {
 #[inline(always)]
 unsafe fn write_descriptor_at(base: *mut u8, cfg: RingConfig, cursor: u64, desc: &EventDescriptor) {
     let off = cfg.descriptors_offset()
-        + (slot_index(cursor, cfg.descriptor_capacity as u64) as usize) * 64;
+        + (slot_index(cursor, cfg.descriptor_capacity_u64()) as usize) * 64;
     std::ptr::copy_nonoverlapping(
         desc as *const EventDescriptor as *const u8,
         base.add(off),
@@ -195,7 +194,7 @@ unsafe fn write_descriptor_at(base: *mut u8, cfg: RingConfig, cursor: u64, desc:
 }
 unsafe fn read_descriptor_at(base: *const u8, cfg: RingConfig, cursor: u64) -> EventDescriptor {
     let off = cfg.descriptors_offset()
-        + (slot_index(cursor, cfg.descriptor_capacity as u64) as usize) * 64;
+        + (slot_index(cursor, cfg.descriptor_capacity_u64()) as usize) * 64;
     let mut buf = [0u8; 64];
     std::ptr::copy_nonoverlapping(base.add(off), buf.as_mut_ptr(), 64);
     EventDescriptor::from_bytes(&buf).expect("64 bytes always decode")
@@ -206,8 +205,8 @@ unsafe fn copy_payload_write(base: *mut u8, cfg: RingConfig, position: u64, data
     if data.is_empty() {
         return;
     }
-    let start = payload_index(position, cfg.payload_capacity as u64) as usize;
-    let first = core::cmp::min(data.len(), cfg.payload_capacity - start);
+    let start = payload_index(position, cfg.payload_capacity_u64()) as usize;
+    let first = core::cmp::min(data.len(), cfg.payload_capacity() - start);
     let dst = base.add(cfg.payload_offset() + start);
     std::ptr::copy_nonoverlapping(data.as_ptr(), dst, first);
     if first < data.len() {
@@ -225,8 +224,8 @@ unsafe fn copy_payload_read(
     if len == 0 {
         return out;
     }
-    let start = payload_index(position, cfg.payload_capacity as u64) as usize;
-    let first = core::cmp::min(len, cfg.payload_capacity - start);
+    let start = payload_index(position, cfg.payload_capacity_u64()) as usize;
+    let first = core::cmp::min(len, cfg.payload_capacity() - start);
     std::ptr::copy_nonoverlapping(
         base.add(cfg.payload_offset() + start),
         out.as_mut_ptr(),
@@ -256,6 +255,9 @@ fn payload_len_u32(len: usize) -> u32 {
 }
 
 pub struct RingWriter {
+    /// 領域の実体 (Arc で共有。Writer が生きている間は解放されない)。
+    shm: Shm,
+    /// `shm.as_ptr()` の写し (生コピーの起点)。
     base: *mut u8,
     cfg: RingConfig,
     policy: WriterPolicy,
@@ -296,52 +298,75 @@ pub struct RingWriter {
 /// 呼び出しスレッドが今 Loader Lock を保持しているかを返す判定。
 /// 判定できないときは true（保持中とみなし、待たない）を返すこと。
 pub type LoaderLockProbe = fn() -> bool;
-// SPSC: 書き手は 1 スレッドだけが使う。共有領域自体は Host スレッドと共有される。
+// SAFETY: SPSC: 書き手は 1 スレッドだけが使う。base は shm の実体 (Send + Sync)
+// を指し、shm が実体を生かしている。
 unsafe impl Send for RingWriter {}
 
 impl RingWriter {
     /// # Safety
-    /// `base` は cfg 分の共有領域を指し、Ring の存続期間中有効であること。
+    /// この Ring の書き手は同時に 1 つだけであること (SPSC)。
     pub unsafe fn new(
-        base: *mut u8,
+        shm: Shm,
         cfg: RingConfig,
         policy: WriterPolicy,
         clock: Arc<dyn Clock>,
-    ) -> Self {
-        Self::new_with_timestamps(base, cfg, policy, clock, system_timestamp_source())
+    ) -> Result<Self, ShmError> {
+        // SAFETY: 呼び出し側の約束をそのまま渡す。
+        unsafe { Self::new_with_timestamps(shm, cfg, policy, clock, system_timestamp_source()) }
     }
     /// イベント時刻源を指定する構築。Windows では transport-win の QPC
-    /// 実装を渡し、プロセス間で比較可能な刻印にする。
+    /// 実装を渡し、プロセス間で比較可能な刻印にする。領域が `cfg` を
+    /// 収めなければ Err。
     ///
     /// # Safety
-    /// `base` は cfg 分の共有領域を指し、Ring の存続期間中有効であること。
+    /// この Ring の書き手は同時に 1 つだけであること (SPSC)。
     pub unsafe fn new_with_timestamps(
-        base: *mut u8,
+        shm: Shm,
+        cfg: RingConfig,
+        policy: WriterPolicy,
+        clock: Arc<dyn Clock>,
+        timestamps: Arc<dyn TimestampSource>,
+    ) -> Result<Self, ShmError> {
+        shm.check_fits(cfg)?;
+        // SAFETY: 領域は cfg を収める。単一書き手は呼び出し側の約束。
+        Ok(unsafe { Self::from_fitting(shm, cfg, policy, clock, timestamps) })
+    }
+    /// # Safety
+    /// `shm.len() >= cfg.required_len()` で、書き手は同時に 1 つだけであること。
+    unsafe fn from_fitting(
+        shm: Shm,
         cfg: RingConfig,
         policy: WriterPolicy,
         clock: Arc<dyn Clock>,
         timestamps: Arc<dyn TimestampSource>,
     ) -> Self {
+        debug_assert!(shm.len() >= cfg.required_len());
+        let base = shm.as_ptr();
+        let ctl = shm.control();
+        let payload_write_position = ctl.load(Word::PayloadWritePosition, Ordering::Relaxed);
+        let cached_read_cursor = ctl.load(Word::ReadCursor, Ordering::Acquire);
+        let cached_payload_read_position = ctl.load(Word::PayloadReadPosition, Ordering::Acquire);
         let descriptor_notify_min = threshold_min_used(
-            cfg.descriptor_capacity as u64,
+            cfg.descriptor_capacity_u64(),
             policy.notify_threshold_percent,
         );
         let payload_notify_min =
-            threshold_min_used(cfg.payload_capacity as u64, policy.notify_threshold_percent);
+            threshold_min_used(cfg.payload_capacity_u64(), policy.notify_threshold_percent);
         Self {
+            shm,
             base,
             cfg,
             policy,
             clock,
             timestamps: EventTimestamper::new(timestamps),
             next_sequence: 1,
-            payload_write_position: load(base, OFF_PAYLOAD_WRITE_POSITION, Ordering::Relaxed),
+            payload_write_position,
             state: OverflowState::Normal,
             dropped_enter_calls: Vec::with_capacity(DROPPED_ENTER_PREALLOC),
             notify_tracker: PublishNotifyTracker::new(),
             payload_notify_tracker: PublishNotifyTracker::new(),
-            cached_read_cursor: load(base, OFF_READ_CURSOR, Ordering::Acquire),
-            cached_payload_read_position: load(base, OFF_PAYLOAD_READ_POSITION, Ordering::Acquire),
+            cached_read_cursor,
+            cached_payload_read_position,
             descriptor_notify_min,
             payload_notify_min,
             last_wait_ns: 0,
@@ -351,6 +376,14 @@ impl RingWriter {
             loader_lock_state: LoaderLockState::NotHeld,
             loader_lock_probe: None,
         }
+    }
+    #[inline(always)]
+    fn ctl(&self) -> Control<'_> {
+        self.shm.control()
+    }
+    /// 書いている領域。
+    pub fn shm(&self) -> &Shm {
+        &self.shm
     }
     pub fn state(&self) -> OverflowState {
         self.state
@@ -396,15 +429,16 @@ impl RingWriter {
     }
     #[inline]
     fn write_cursor(&self) -> u64 {
-        load(self.base, OFF_WRITE_CURSOR, Ordering::Relaxed)
+        self.ctl().load(Word::WriteCursor, Ordering::Relaxed)
     }
     #[inline]
     fn read_cursor(&self) -> u64 {
-        load(self.base, OFF_READ_CURSOR, Ordering::Acquire)
+        self.ctl().load(Word::ReadCursor, Ordering::Acquire)
     }
     #[inline]
     fn payload_read_position(&self) -> u64 {
-        load(self.base, OFF_PAYLOAD_READ_POSITION, Ordering::Acquire)
+        self.ctl()
+            .load(Word::PayloadReadPosition, Ordering::Acquire)
     }
     /// Reload both Host read positions (Acquire) into the cache.
     #[inline]
@@ -420,12 +454,12 @@ impl RingWriter {
         let fits = |w: &Self| {
             let wc = w.write_cursor();
             let desc_free =
-                descriptor_free(wc, w.cached_read_cursor, w.cfg.descriptor_capacity as u64)
+                descriptor_free(wc, w.cached_read_cursor, w.cfg.descriptor_capacity_u64())
                     .unwrap_or(0);
             let payload_used = w
                 .payload_write_position
                 .saturating_sub(w.cached_payload_read_position);
-            let payload_free = (w.cfg.payload_capacity as u64).saturating_sub(payload_used);
+            let payload_free = (w.cfg.payload_capacity_u64()).saturating_sub(payload_used);
             desc_free >= need_desc && (payload_len == 0 || payload_free >= payload_len)
         };
         self.refresh_read_positions();
@@ -433,28 +467,29 @@ impl RingWriter {
     }
     fn descriptor_free(&self) -> u64 {
         let wc = self.write_cursor();
-        descriptor_free(wc, self.read_cursor(), self.cfg.descriptor_capacity as u64).unwrap_or(0)
+        descriptor_free(wc, self.read_cursor(), self.cfg.descriptor_capacity_u64()).unwrap_or(0)
     }
     fn payload_free(&self) -> u64 {
         let used = self
             .payload_write_position
             .saturating_sub(self.payload_read_position());
-        (self.cfg.payload_capacity as u64).saturating_sub(used)
+        (self.cfg.payload_capacity_u64()).saturating_sub(used)
     }
     fn usage_percent(&self) -> u64 {
         let wc = self.write_cursor();
         let used = wc.saturating_sub(self.read_cursor());
-        usage_percent(used, self.cfg.descriptor_capacity as u64)
+        usage_percent(used, self.cfg.descriptor_capacity_u64())
     }
     fn payload_usage_percent(&self) -> u64 {
         let used = self
             .payload_write_position
             .saturating_sub(self.payload_read_position());
-        usage_percent(used, self.cfg.payload_capacity as u64)
+        usage_percent(used, self.cfg.payload_capacity_u64())
     }
     fn set_state(&mut self, s: OverflowState) {
         self.state = s;
-        store(self.base, OFF_OVERFLOW_STATE, s.to_u64(), Ordering::Relaxed);
+        self.ctl()
+            .store(Word::OverflowState, s.to_u64(), Ordering::Relaxed);
     }
 
     /// 唯一の公開点。Payload コピー → Descriptor 書込 → write_cursor Release 更新。
@@ -467,16 +502,16 @@ impl RingWriter {
         if let Some(p) = payload {
             unsafe { copy_payload_write(self.base, self.cfg, desc.payload_position, p) };
             self.payload_write_position = desc.payload_position + p.len() as u64;
-            store(
-                self.base,
-                OFF_PAYLOAD_WRITE_POSITION,
+            self.ctl().store(
+                Word::PayloadWritePosition,
                 self.payload_write_position,
                 Ordering::Relaxed,
             );
         }
         unsafe { write_descriptor_at(self.base, self.cfg, wc, &desc) };
         // 単一公開点: この Release store より前の書込みは、Acquire で読む読み手から見える。
-        store(self.base, OFF_WRITE_CURSOR, wc + 1, Ordering::Release);
+        self.ctl()
+            .store(Word::WriteCursor, wc + 1, Ordering::Release);
         // The Host raises the flag before it sleeps on an idle Ring. The
         // first publication after that consumes it, so one wait costs the
         // writer one notification; while the flag is down (always under
@@ -532,7 +567,7 @@ impl RingWriter {
         let descriptor_signal = self.notify_tracker.after_publish(
             used_before,
             used_after,
-            self.cfg.descriptor_capacity as u64,
+            self.cfg.descriptor_capacity_u64(),
             self.policy.notify_threshold_percent,
             host_waiting,
         );
@@ -540,7 +575,7 @@ impl RingWriter {
             self.payload_notify_tracker.after_publish(
                 payload_before,
                 payload_before + payload_len,
-                self.cfg.payload_capacity as u64,
+                self.cfg.payload_capacity_u64(),
                 self.policy.notify_threshold_percent,
                 false,
             )
@@ -555,8 +590,8 @@ impl RingWriter {
     /// Host waiting flag check after a publication (see `publish`).
     #[inline]
     fn take_host_waiting(&self) -> bool {
-        load(self.base, OFF_HOST_WAITING, Ordering::Relaxed) != 0
-            && swap(self.base, OFF_HOST_WAITING, 0, Ordering::Relaxed) != 0
+        self.ctl().load(Word::HostWaiting, Ordering::Relaxed) != 0
+            && self.ctl().swap(Word::HostWaiting, 0, Ordering::Relaxed) != 0
     }
 
     /// Captured event on the common path: NORMAL state, no dropped Enter
@@ -602,9 +637,8 @@ impl RingWriter {
             // SAFETY: fits_cached reserved `len` bytes from `position`.
             unsafe { copy_payload_write(self.base, self.cfg, position, payload) };
             self.payload_write_position = position + len;
-            store(
-                self.base,
-                OFF_PAYLOAD_WRITE_POSITION,
+            self.ctl().store(
+                Word::PayloadWritePosition,
                 self.payload_write_position,
                 Ordering::Relaxed,
             );
@@ -625,7 +659,8 @@ impl RingWriter {
         // SAFETY: fits_cached reserved the descriptor slot at `wc`.
         unsafe { write_descriptor_at(self.base, self.cfg, wc, &descriptor) };
         // 単一公開点 (publish と同じ順序)。
-        store(self.base, OFF_WRITE_CURSOR, wc + 1, Ordering::Release);
+        self.ctl()
+            .store(Word::WriteCursor, wc + 1, Ordering::Release);
         let host_waiting = self.take_host_waiting();
         let notify = self.notify_after_publish(wc, payload_before, len, host_waiting);
         WriteOutcome::Published {
@@ -676,10 +711,10 @@ impl RingWriter {
         }
         self.set_state(OverflowState::BoundedWait);
         self.wait_count += 1;
-        store(self.base, OFF_WRITER_WAITING, 1, Ordering::Release);
+        self.ctl().store(Word::WriterWaiting, 1, Ordering::Release);
         std::sync::atomic::fence(Ordering::SeqCst);
         let got_space = self.bounded_wait_inner(need_desc, need_payload);
-        store(self.base, OFF_WRITER_WAITING, 0, Ordering::Release);
+        self.ctl().store(Word::WriterWaiting, 0, Ordering::Release);
         got_space
     }
     fn bounded_wait_inner(&mut self, need_desc: u64, need_payload: u64) -> bool {
@@ -704,7 +739,7 @@ impl RingWriter {
     fn record_wait(&mut self, ns: u64) {
         self.last_wait_ns = ns;
         self.total_wait_ns = self.total_wait_ns.saturating_add(ns);
-        store(self.base, OFF_LAST_WAIT_NS, ns, Ordering::Relaxed);
+        self.ctl().store(Word::LastWaitNs, ns, Ordering::Relaxed);
     }
 
     /// イベントを 1 件書く（満杯ポリシー状態機械を通す）。
@@ -720,8 +755,8 @@ impl RingWriter {
             && !self.dropped_enter_calls.is_empty()
             && self.forget_dropped_enter(input.call_id)
         {
-            fetch_add(self.base, OFF_DROPPED_EVENTS, 1);
-            fetch_add(self.base, OFF_DROPPED_PAYLOAD_BYTES, payload_len);
+            self.ctl().fetch_add(Word::DroppedEvents, 1);
+            self.ctl().fetch_add(Word::DroppedPayloadBytes, payload_len);
             return WriteOutcome::Dropped {
                 sequence: seq,
                 reason: CaptureState::DroppedByBackpressure,
@@ -743,7 +778,7 @@ impl RingWriter {
             }
             // A payload larger than the whole Ring can never fit: waiting only
             // delays the caller before the same degradation.
-            let can_ever_fit = payload_len <= self.cfg.payload_capacity as u64;
+            let can_ever_fit = payload_len <= self.cfg.payload_capacity_u64();
             // 容量不足 → BOUNDED_WAIT（危険経路/0ms では待たず OVERFLOW へ）
             if can_ever_fit
                 && self.bounded_wait(need_desc, payload_len)
@@ -790,8 +825,8 @@ impl RingWriter {
         // (1) Payload だけ落として Descriptor を残す
         if self.descriptor_free() >= 1 {
             self.refresh_read_positions();
-            fetch_add(self.base, OFF_DEGRADED_EVENTS, 1);
-            fetch_add(self.base, OFF_DROPPED_PAYLOAD_BYTES, payload_len);
+            self.ctl().fetch_add(Word::DegradedEvents, 1);
+            self.ctl().fetch_add(Word::DroppedPayloadBytes, payload_len);
             let pos = self.payload_write_position;
             let d = self.make_desc(
                 seq,
@@ -808,8 +843,8 @@ impl RingWriter {
             };
         }
         // (2) Descriptor も書けないのでイベントを捨てる
-        fetch_add(self.base, OFF_DROPPED_EVENTS, 1);
-        fetch_add(self.base, OFF_DROPPED_PAYLOAD_BYTES, payload_len);
+        self.ctl().fetch_add(Word::DroppedEvents, 1);
+        self.ctl().fetch_add(Word::DroppedPayloadBytes, payload_len);
         if input.kind == EventKind::CallEnter {
             self.remember_dropped_enter(input.call_id);
         }
@@ -839,7 +874,7 @@ impl RingWriter {
     }
 
     pub fn loss_counters(&self) -> LossCounters {
-        LossCounters::read_from(self.base)
+        self.ctl().loss_counters()
     }
 }
 
@@ -968,6 +1003,7 @@ pub struct DrainBatch {
 /// ただし Control 全体の検証や世代照合までは行わないため、本番の代替には
 /// ならない。
 pub struct RingReader {
+    shm: Shm,
     base: *mut u8,
     cfg: RingConfig,
     expected_sequence: u64,
@@ -978,14 +1014,25 @@ pub struct RingReader {
     /// `--order=global` 有効なセッションとして検証する (L11)。既定は false。
     allow_global_order: bool,
 }
+// SAFETY: base は shm の実体 (Send + Sync) を指し、shm が実体を生かしている。
 unsafe impl Send for RingReader {}
 
 impl RingReader {
+    /// 領域が `cfg` を収めなければ Err。
+    ///
     /// # Safety
-    /// `base` は cfg 分の共有領域を指し、Ring の存続期間中有効であること。
-    pub unsafe fn new(base: *mut u8, cfg: RingConfig) -> Self {
+    /// この Ring の読み手は同時に 1 つだけであること (SPSC)。
+    pub unsafe fn new(shm: Shm, cfg: RingConfig) -> Result<Self, ShmError> {
+        shm.check_fits(cfg)?;
+        // SAFETY: 領域は cfg を収める。単一読み手は呼び出し側の約束。
+        Ok(unsafe { Self::from_fitting(shm, cfg) })
+    }
+    /// # Safety
+    /// `shm.len() >= cfg.required_len()` で、読み手は同時に 1 つだけであること。
+    unsafe fn from_fitting(shm: Shm, cfg: RingConfig) -> Self {
         Self {
-            base,
+            base: shm.as_ptr(),
+            shm,
             cfg,
             expected_sequence: 1,
             expected_payload_position: None,
@@ -998,11 +1045,15 @@ impl RingReader {
         self.allow_global_order = allow;
         self
     }
+    #[inline(always)]
+    fn ctl(&self) -> Control<'_> {
+        self.shm.control()
+    }
     pub fn write_cursor(&self) -> u64 {
-        load(self.base, OFF_WRITE_CURSOR, Ordering::Acquire)
+        self.ctl().load(Word::WriteCursor, Ordering::Acquire)
     }
     pub fn read_cursor(&self) -> u64 {
-        load(self.base, OFF_READ_CURSOR, Ordering::Relaxed)
+        self.ctl().load(Word::ReadCursor, Ordering::Relaxed)
     }
     /// 未回収の Descriptor 数（write_cursor - read_cursor）。バッファ使用率の
     /// 観測用（L10）。Cursor は進めない。読み取りだけなので回収中の
@@ -1013,15 +1064,16 @@ impl RingReader {
     /// 未回収の Payload バイト数（payload_write_position -
     /// payload_read_position）。同上。
     pub fn payload_used(&self) -> u64 {
-        load(self.base, OFF_PAYLOAD_WRITE_POSITION, Ordering::Acquire).saturating_sub(load(
-            self.base,
-            OFF_PAYLOAD_READ_POSITION,
-            Ordering::Acquire,
-        ))
+        self.ctl()
+            .load(Word::PayloadWritePosition, Ordering::Acquire)
+            .saturating_sub(
+                self.ctl()
+                    .load(Word::PayloadReadPosition, Ordering::Acquire),
+            )
     }
     /// 書き手が空き待ち中かどうか（Host が `space_available` 通知の要否を判断する）。
     pub fn writer_waiting(&self) -> bool {
-        crate::layout::writer_waiting(self.base)
+        self.ctl().writer_waiting()
     }
     /// 確定済みイベントを取り出す（最大 max 件）。契約どおりコピーしてから Release で解放する。
     /// コピーの前に多層防御の最小検証を行い、破損を検出したらその Descriptor
@@ -1038,7 +1090,9 @@ impl RingReader {
         let n = core::cmp::min(avail, max as u64);
         // 検証の上限は書き手が Control に公開した書込み済み位置。write_cursor を
         // Acquire で読んだ後なので、確定分についてはこの値以下に収まる。
-        let payload_write_position = load(self.base, OFF_PAYLOAD_WRITE_POSITION, Ordering::Acquire);
+        let payload_write_position = self
+            .ctl()
+            .load(Word::PayloadWritePosition, Ordering::Acquire);
         let mut processed: u64 = 0;
         let mut last_payload_end: Option<u64> = None;
         for i in 0..n {
@@ -1080,15 +1134,12 @@ impl RingReader {
         }
         if processed > 0 {
             if let Some(end) = last_payload_end {
-                store(self.base, OFF_PAYLOAD_READ_POSITION, end, Ordering::Release);
+                self.ctl()
+                    .store(Word::PayloadReadPosition, end, Ordering::Release);
             }
-            store(
-                self.base,
-                OFF_READ_CURSOR,
-                rc + processed,
-                Ordering::Release,
-            );
-            fetch_add(self.base, OFF_HOST_DRAIN_COUNT, 1);
+            self.ctl()
+                .store(Word::ReadCursor, rc + processed, Ordering::Release);
+            self.ctl().fetch_add(Word::HostDrainCount, 1);
         }
         batch
     }
@@ -1120,10 +1171,10 @@ impl RingReader {
             }
             0
         } else {
-            if desc.payload_len as u64 > self.cfg.payload_capacity as u64 {
+            if desc.payload_len as u64 > self.cfg.payload_capacity_u64() {
                 return Err(IntegrityError::PayloadTooLarge {
                     len: desc.payload_len as u64,
-                    capacity: self.cfg.payload_capacity as u64,
+                    capacity: self.cfg.payload_capacity_u64(),
                 });
             }
             desc.payload_len as u64
@@ -1154,7 +1205,7 @@ impl RingReader {
         self.drain(usize::MAX)
     }
     pub fn loss_counters(&self) -> LossCounters {
-        LossCounters::read_from(self.base)
+        self.ctl().loss_counters()
     }
 }
 
@@ -1165,7 +1216,7 @@ mod tests {
 
     fn test_writer_reader(cap: usize, pcap: usize) -> (SharedRegion, RingWriter, RingReader) {
         let cfg = RingConfig::new(cap, pcap);
-        let region = SharedRegion::new(cfg, 1, 100);
+        let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let w = unsafe { region.writer(WriterPolicy::default(), clock) };
         let r = unsafe { region.reader() };
@@ -1240,7 +1291,7 @@ mod tests {
     }
 
     fn writer_with_manual_clock(cap: usize, pcap: usize) -> (SharedRegion, RingWriter) {
-        let region = SharedRegion::new(RingConfig::new(cap, pcap), 1, 100);
+        let region = SharedRegion::new(RingConfig::new(cap, pcap), 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let w = unsafe { region.writer(WriterPolicy::default(), clock) };
         (region, w)
@@ -1263,7 +1314,7 @@ mod tests {
 
     #[test]
     fn overflow_resumes_after_payload_drains() {
-        let region = SharedRegion::new(RingConfig::new(64, 64), 1, 100);
+        let region = SharedRegion::new(RingConfig::new(64, 64), 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         let mut rd = unsafe { region.reader() };
@@ -1382,7 +1433,7 @@ mod tests {
         ));
         // 満杯: 3 件目は BOUNDED_WAIT (仮想 1ms) の末に劣化または欠落する。
         let _ = w.write(input(EventKind::CallEnter, 3, b"c"));
-        assert!(!crate::layout::writer_waiting(region.base()));
+        assert!(!region.control().writer_waiting());
     }
 
     #[test]
@@ -1402,14 +1453,14 @@ mod tests {
         let _ = w.write(input(EventKind::CallEnter, 3, b"c"));
         assert_eq!(w.wait_count, 0);
         assert_eq!(w.state(), OverflowState::Overflow);
-        assert!(!crate::layout::writer_waiting(region.base()));
+        assert!(!region.control().writer_waiting());
     }
 
     #[test]
     fn loader_lock_unknown_waits_when_policy_allows() {
         // zero_wait_when_loader_lock_unknown=false なら、Unknown でも上限まで待つ。
         let cfg = RingConfig::new(2, 64);
-        let region = SharedRegion::new(cfg, 1, 100);
+        let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -1425,7 +1476,7 @@ mod tests {
         w.set_loader_lock_state(LoaderLockState::Unknown);
         let _ = w.write(input(EventKind::CallEnter, 3, b"c"));
         assert_eq!(w.wait_count, 1);
-        assert!(!crate::layout::writer_waiting(region.base()));
+        assert!(!region.control().writer_waiting());
     }
 
     #[test]
@@ -1434,7 +1485,7 @@ mod tests {
         // 答えた書き込みは待ち、「保持中」と答えた書き込みは待たない。
         for (held, waits) in [(false, 1), (true, 0)] {
             let cfg = RingConfig::new(2, 64);
-            let region = SharedRegion::new(cfg, 1, 100);
+            let region = SharedRegion::new(cfg, 1, 100).unwrap();
             let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
             let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
             w.write(input(EventKind::CallEnter, 1, b"a"));
@@ -1443,7 +1494,7 @@ mod tests {
             w.set_loader_lock_probe(Some(if held { || true } else { || false }));
             let _ = w.write(input(EventKind::CallEnter, 3, b"c"));
             assert_eq!(w.wait_count, waits, "probe held={held}");
-            assert!(!crate::layout::writer_waiting(region.base()));
+            assert!(!region.control().writer_waiting());
         }
     }
 
@@ -1451,7 +1502,7 @@ mod tests {
     fn loader_lock_held_never_waits() {
         // 保持中 (Held) の申告なら、max_wait が長く設定が false でも待たない。
         let cfg = RingConfig::new(2, 64);
-        let region = SharedRegion::new(cfg, 1, 100);
+        let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -1469,7 +1520,7 @@ mod tests {
         let _ = w.write(input(EventKind::CallEnter, 3, b"c"));
         assert_eq!(w.wait_count, 0);
         assert_eq!(w.loader_lock_state(), LoaderLockState::Held);
-        assert!(!crate::layout::writer_waiting(region.base()));
+        assert!(!region.control().writer_waiting());
         // NotHeld に戻し、空きを作ってから再度満杯にすれば待つようになる
         w.set_loader_lock_state(LoaderLockState::NotHeld);
         let mut rd = unsafe { region.reader() };
@@ -1486,7 +1537,7 @@ mod tests {
         use crate::clock::SystemClock;
         use std::sync::atomic::{AtomicBool, Ordering as AOrd};
         let cfg = RingConfig::new(2, 64);
-        let region = SharedRegion::new(cfg, 1, 100);
+        let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(SystemClock::default());
         let mut w = unsafe {
             region.writer(
@@ -1505,7 +1556,7 @@ mod tests {
             w.write(input(EventKind::CallEnter, 2, b"b")),
             WriteOutcome::Published { .. }
         ));
-        let base = region.base();
+        let base = region.shm().clone();
         let seen = Arc::new(AtomicBool::new(false));
         let seen_writer = seen.clone();
         std::thread::scope(|s| {
@@ -1514,7 +1565,7 @@ mod tests {
             });
             let deadline = std::time::Instant::now() + Duration::from_secs(1);
             while std::time::Instant::now() < deadline {
-                if crate::layout::writer_waiting(base) {
+                if base.control().writer_waiting() {
                     seen_writer.store(true, AOrd::Relaxed);
                     break;
                 }
@@ -1526,6 +1577,6 @@ mod tests {
             seen.load(AOrd::Relaxed),
             "writer_waiting flag was never observed during bounded wait"
         );
-        assert!(!crate::layout::writer_waiting(base));
+        assert!(!base.control().writer_waiting());
     }
 }

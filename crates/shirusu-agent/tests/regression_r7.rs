@@ -51,13 +51,11 @@ fn each_ring_waits_on_its_own_event_clock() {
     // スレッド 1 の Ring (Descriptor 容量 2) を埋める。
     a.record_enter(1, 1, 1, 1, 0, b"a");
     a.record_enter(1, 1, 1, 2, 0, b"b");
-    let base = unsafe { a.thread_region_base(1) }.expect("region base");
+    let base = a.thread_region(1).expect("region base");
     // 別 OS スレッドから満杯 Ring へ書くと、その Ring の EventClock で待つ。
     let aw = Arc::clone(&a);
     let waiter = std::thread::spawn(move || aw.record_enter(1, 1, 1, 3, 0, b"c"));
-    wait_until("writer_waiting flag", || {
-        shirusu_transport::layout::writer_waiting(base as *const u8)
-    });
+    wait_until("writer_waiting flag", || base.control().writer_waiting());
     wait_until("ring 1 clock sleeping", || c1.sleep_calls() > 0);
     assert_eq!(
         c2.sleep_calls(),

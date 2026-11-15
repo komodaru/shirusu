@@ -508,7 +508,7 @@ mod tests {
             let parsed = parse_args(&args(&["--buffer", name]), &[]).unwrap();
             let opts = CaptureOptions::parse(&parsed).unwrap();
             assert_eq!(opts.ring_config, expected);
-            assert_eq!(opts.ring_config.payload_capacity, 1024 * 1024);
+            assert_eq!(opts.ring_config.payload_capacity(), 1024 * 1024);
         }
         let parsed = parse_args(&args(&["--buffer=unlimited"]), &[]).unwrap();
         assert!(matches!(

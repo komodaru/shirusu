@@ -14,8 +14,9 @@
 use proptest::prelude::*;
 use shirusu_transport::clock::{ManualClock, ManualTimestampSource};
 use shirusu_transport::descriptor::{flags, CaptureState, EventDescriptor, EventKind};
-use shirusu_transport::layout::{self, CONTROL_SIZE};
+use shirusu_transport::layout::CONTROL_SIZE;
 use shirusu_transport::ring::{EventInput, RingReader, RingWriter, SharedRegion, WriterPolicy};
+use shirusu_transport::shm::Word;
 use shirusu_transport::validate::{CommittedChunk, IntegrityError, KnownConfig, ValidatingReader};
 use shirusu_transport::{Clock, RingConfig};
 use std::sync::atomic::Ordering;
@@ -30,7 +31,7 @@ struct Rig {
 }
 
 fn rig(cfg: RingConfig, wait: bool) -> Rig {
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let ts = Arc::new(ManualTimestampSource::new(100, 10_000_000));
     let policy = WriterPolicy {
@@ -68,17 +69,17 @@ impl Rig {
     fn known(&self) -> KnownConfig {
         KnownConfig::new(self.cfg, self.cfg.required_len())
     }
-    fn load(&self, off: usize) -> u64 {
-        layout::load(self.region.base(), off, Ordering::Acquire)
+    fn load(&self, w: Word) -> u64 {
+        self.region.control().load(w, Ordering::Acquire)
     }
     /// Host の回収と同じ手順: Control を写し、`[read_cursor, +max)` の
     /// Descriptor と、最後の Descriptor の格納終端までの Payload を写す。
     fn chunk(&self, read_cursor: u64, payload_read: u64, max: usize) -> CommittedChunk {
-        let image = self.region.as_slice();
+        let image = self.region.snapshot();
         let control = image[..CONTROL_SIZE].to_vec();
-        let wc = self.load(layout::OFF_WRITE_CURSOR);
+        let wc = self.load(Word::WriteCursor);
         let count = (wc - read_cursor).min(max as u64);
-        let cap = self.cfg.descriptor_capacity as u64;
+        let cap = self.cfg.descriptor_capacity_u64();
         let mut descriptors = Vec::new();
         for c in read_cursor..read_cursor + count {
             let off = self.cfg.descriptors_offset() + ((c % cap) as usize) * 64;
@@ -93,7 +94,7 @@ impl Rig {
                 last.payload_len as u64
             };
             let end = last.payload_position + stored;
-            let pcap = self.cfg.payload_capacity as u64;
+            let pcap = self.cfg.payload_capacity_u64();
             for p in payload_read..end {
                 payload.push(image[self.cfg.payload_offset() + (p % pcap) as usize]);
             }
@@ -168,10 +169,10 @@ proptest! {
                     prop_assert_eq!(chunk_gaps, batch.sequence_gaps, "op {} gaps", i);
                     prop_assert_eq!(vr.take_sequence_gaps(), 0, "gaps are taken once");
                     prop_assert_eq!(vr.read_cursor(), r.reader.read_cursor());
-                    prop_assert_eq!(vr.read_cursor(), r.load(layout::OFF_READ_CURSOR));
+                    prop_assert_eq!(vr.read_cursor(), r.load(Word::ReadCursor));
                     prop_assert_eq!(
                         vr.payload_read_position(),
-                        r.load(layout::OFF_PAYLOAD_READ_POSITION),
+                        r.load(Word::PayloadReadPosition),
                         "op {} payload read position", i
                     );
                     received += from_chunk.len() as u64;
@@ -310,7 +311,7 @@ fn chunk_of_exactly_capacity_is_accepted_and_more_is_not() {
     }
     assert_eq!(r.reader.drain(1).events.len(), 1);
     r.write(4, 0, 9);
-    assert_eq!(r.load(layout::OFF_WRITE_CURSOR), 5);
+    assert_eq!(r.load(Word::WriteCursor), 5);
     let mut c = r.chunk(0, 0, 4);
     let extra = c.descriptors[..64].to_vec();
     c.descriptors.extend_from_slice(&extra);
@@ -457,11 +458,11 @@ fn global_order_needs_the_session_setting_on_both_readers() {
 /// 共有メモリ上の Descriptor を書き換える（対象プロセスの改竄に相当）。
 fn tamper(r: &Rig, cursor: u64, f: impl FnOnce(&mut EventDescriptor)) {
     let off =
-        r.cfg.descriptors_offset() + ((cursor % r.cfg.descriptor_capacity as u64) as usize) * 64;
-    let mut d = EventDescriptor::from_bytes(&r.region.as_slice()[off..off + 64]).unwrap();
+        r.cfg.descriptors_offset() + ((cursor % r.cfg.descriptor_capacity_u64()) as usize) * 64;
+    let mut d = EventDescriptor::from_bytes(&r.region.snapshot()[off..off + 64]).unwrap();
     f(&mut d);
     let bytes = d.to_bytes();
-    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), r.region.base().add(off), 64) };
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), r.region.shm().as_ptr().add(off), 64) };
 }
 
 #[test]
@@ -507,7 +508,7 @@ fn dropped_payload_may_declare_the_largest_original_length() {
         CaptureState::DroppedByBackpressure
     );
     // 最後の Descriptor の終端まで Payload の読み位置が進む。
-    assert_eq!(r.load(layout::OFF_PAYLOAD_READ_POSITION), 30);
+    assert_eq!(r.load(Word::PayloadReadPosition), 30);
 }
 
 #[test]
@@ -520,7 +521,7 @@ fn dropped_last_descriptor_still_releases_the_payload_before_it() {
     assert_eq!(batch.integrity_error, None);
     assert!(batch.events[2].payload.is_empty());
     // 落とした Descriptor は Payload を持たないので、読み位置は 2 件目の終端。
-    assert_eq!(r.load(layout::OFF_PAYLOAD_READ_POSITION), 10);
+    assert_eq!(r.load(Word::PayloadReadPosition), 10);
 }
 
 #[test]
@@ -533,14 +534,14 @@ fn mapping_larger_than_required_is_accepted() {
 #[test]
 fn empty_drain_does_not_count_as_a_host_drain() {
     let mut r = three_events();
-    let before = r.load(layout::OFF_HOST_DRAIN_COUNT);
+    let before = r.load(Word::HostDrainCount);
     assert!(r.reader.drain(0).events.is_empty());
-    assert_eq!(r.load(layout::OFF_HOST_DRAIN_COUNT), before);
+    assert_eq!(r.load(Word::HostDrainCount), before);
     assert_eq!(r.reader.drain(2).events.len(), 2);
-    assert_eq!(r.load(layout::OFF_HOST_DRAIN_COUNT), before + 1);
+    assert_eq!(r.load(Word::HostDrainCount), before + 1);
     assert_eq!(r.reader.drain(9).events.len(), 1);
     assert!(r.reader.drain(9).events.is_empty());
-    assert_eq!(r.load(layout::OFF_HOST_DRAIN_COUNT), before + 2);
+    assert_eq!(r.load(Word::HostDrainCount), before + 2);
 }
 
 #[test]
@@ -549,5 +550,5 @@ fn drain_all_takes_every_committed_event() {
     let batch = r.reader.drain_all();
     assert_eq!(batch.events.len(), 3);
     assert_eq!(r.reader.read_cursor(), 3);
-    assert_eq!(r.load(layout::OFF_PAYLOAD_READ_POSITION), 30);
+    assert_eq!(r.load(Word::PayloadReadPosition), 30);
 }

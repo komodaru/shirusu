@@ -10,6 +10,7 @@ use shirusu_transport::context::HostMonitor;
 use shirusu_transport::ring::WriterPolicy;
 use shirusu_transport::slot::SlotPool;
 use shirusu_transport::RingConfig;
+use shirusu_transport::Shm;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,7 +49,7 @@ fn config(order_global: bool) -> CaptureSessionConfig {
     }
 }
 
-fn agent_and_region(tid: u64, order_global: bool) -> (Arc<Agent>, u64, *mut u8) {
+fn agent_and_region(tid: u64, order_global: bool) -> (Arc<Agent>, u64, Shm) {
     let cfg = RingConfig::new(64, 4096);
     let pool = Arc::new(SlotPool::new(4));
     let agent = Arc::new(
@@ -60,7 +61,7 @@ fn agent_and_region(tid: u64, order_global: bool) -> (Arc<Agent>, u64, *mut u8) 
             .with_order_global(order_global),
     );
     let handle = agent.thread_begin(tid).expect("slot");
-    let base = unsafe { agent.thread_region_base(tid) }.expect("region");
+    let base = agent.thread_region(tid).expect("region");
     (agent, handle.generation, base)
 }
 
@@ -85,23 +86,15 @@ fn global_order_flows_agent_to_trace() {
     let path = temp_trace("flow");
     let (agent, gen1, base1) = agent_and_region(11, true);
     let handle2 = agent.thread_begin(12).expect("slot 12");
-    let base2 = unsafe { agent.thread_region_base(12) }.expect("region 12");
+    let base2 = agent.thread_region(12).expect("region 12");
 
     let mut session = CaptureSession::create_file(&path, config(true)).unwrap();
-    unsafe {
+    {
         session
-            .add_borrowed_ring(
-                base1,
-                RingConfig::new(64, 4096).required_len(),
-                spec(gen1, 11),
-            )
+            .add_shared_ring(base1.clone(), spec(gen1, 11))
             .unwrap();
         session
-            .add_borrowed_ring(
-                base2,
-                RingConfig::new(64, 4096).required_len(),
-                spec(handle2.generation, 12),
-            )
+            .add_shared_ring(base2.clone(), spec(handle2.generation, 12))
             .unwrap();
     }
     session.start().unwrap();
@@ -139,15 +132,9 @@ fn global_order_disabled_session_rejects_stamped_descriptors() {
     let path = temp_trace("mismatch");
     let (agent, gen1, base1) = agent_and_region(11, true);
     let mut session = CaptureSession::create_file(&path, config(false)).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(
-                base1,
-                RingConfig::new(64, 4096).required_len(),
-                spec(gen1, 11),
-            )
-            .unwrap();
-    }
+    session
+        .add_shared_ring(base1.clone(), spec(gen1, 11))
+        .unwrap();
     session.start().unwrap();
     record(&agent, 11, 1);
     // Collection only copies; validation on the Trace worker rejects the
@@ -164,15 +151,9 @@ fn global_order_absent_when_disabled_everywhere() {
     let path = temp_trace("off");
     let (agent, gen1, base1) = agent_and_region(11, false);
     let mut session = CaptureSession::create_file(&path, config(false)).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(
-                base1,
-                RingConfig::new(64, 4096).required_len(),
-                spec(gen1, 11),
-            )
-            .unwrap();
-    }
+    session
+        .add_shared_ring(base1.clone(), spec(gen1, 11))
+        .unwrap();
     session.start().unwrap();
     record(&agent, 11, 1);
     let stats = session.poll_once().unwrap();

@@ -26,7 +26,7 @@ fn pbt_cases(default: u32) -> u32 {
 
 fn setup(desc: usize, pay: usize) -> (SharedRegion, RingWriter, RingReader) {
     let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let w = unsafe {
         region.writer(
@@ -244,7 +244,7 @@ fn run_dst_case(ops: &[DstOp]) -> Result<(), TestCaseError> {
     let clock = Arc::new(ManualClock::new());
     let (_rg, mut w, mut rd) = {
         let cfg = RingConfig::new(8, 256);
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let wc: Arc<dyn Clock> = clock.clone();
         let w = unsafe {
             region.writer(

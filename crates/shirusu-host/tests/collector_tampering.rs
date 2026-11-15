@@ -5,8 +5,8 @@
 use shirusu_host::{CommittedRangeCollector, DrainWorker};
 use shirusu_transport::clock::ManualClock;
 use shirusu_transport::descriptor::EventDescriptor;
-use shirusu_transport::layout;
 use shirusu_transport::ring::{EventInput, RingWriter, SharedRegion, WriterPolicy};
+use shirusu_transport::shm::Word;
 use shirusu_transport::{CaptureState, Clock, EventKind, RingConfig};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ struct Rig {
 
 fn rig() -> Rig {
     let cfg = RingConfig::new(4, 64);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let writer = unsafe {
         region.writer(
@@ -33,8 +33,8 @@ fn rig() -> Rig {
             clock,
         )
     };
-    let collector = unsafe { CommittedRangeCollector::new(region.base(), cfg) };
-    let worker = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+    let collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
+    let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     Rig {
         cfg,
         region,
@@ -58,16 +58,18 @@ impl Rig {
             global_order: 0,
         });
     }
-    fn load(&self, off: usize) -> u64 {
-        layout::load(self.region.base(), off, Ordering::Acquire)
+    fn load(&self, w: Word) -> u64 {
+        self.region.control().load(w, Ordering::Acquire)
     }
     fn tamper(&self, cursor: u64, f: impl FnOnce(&mut EventDescriptor)) {
         let off = self.cfg.descriptors_offset()
-            + ((cursor % self.cfg.descriptor_capacity as u64) as usize) * 64;
-        let mut d = EventDescriptor::from_bytes(&self.region.as_slice()[off..off + 64]).unwrap();
+            + ((cursor % self.cfg.descriptor_capacity_u64()) as usize) * 64;
+        let mut d = EventDescriptor::from_bytes(&self.region.snapshot()[off..off + 64]).unwrap();
         f(&mut d);
         let bytes = d.to_bytes();
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.region.base().add(off), 64) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.region.shm().as_ptr().add(off), 64)
+        };
     }
     /// 回収が止まり、何も写さず・解放せず、検証側も Ring を止めること。
     fn expect_stop(&mut self, read_cursor: u64, payload_read: u64) {
@@ -77,8 +79,8 @@ impl Rig {
             chunk.payload.is_empty(),
             "nothing beyond the bad descriptor is copied"
         );
-        assert_eq!(self.load(layout::OFF_READ_CURSOR), read_cursor);
-        assert_eq!(self.load(layout::OFF_PAYLOAD_READ_POSITION), payload_read);
+        assert_eq!(self.load(Word::ReadCursor), read_cursor);
+        assert_eq!(self.load(Word::PayloadReadPosition), payload_read);
         let batch = self.worker.ingest_chunk(&chunk);
         assert!(batch.events.is_empty(), "{batch:?}");
         assert!(
@@ -100,8 +102,8 @@ fn untouched_ring_is_collected_and_released() {
     let chunk = r.collector.collect(|| {}).unwrap();
     assert_eq!(chunk.descriptor_count(), 2);
     assert_eq!(chunk.payload.len(), 30);
-    assert_eq!(r.load(layout::OFF_READ_CURSOR), 2);
-    assert_eq!(r.load(layout::OFF_PAYLOAD_READ_POSITION), 30);
+    assert_eq!(r.load(Word::ReadCursor), 2);
+    assert_eq!(r.load(Word::PayloadReadPosition), 30);
     let batch = r.worker.ingest_chunk(&chunk);
     assert_eq!(batch.integrity_error, None);
     assert_eq!(batch.events.len(), 2);
@@ -139,12 +141,9 @@ fn last_descriptor_spanning_more_than_the_payload_capacity_stops_collection() {
     r.write(10);
     r.write(20);
     // 書込み済み位置を超えない範囲で、容量 (64) を超える長さの区間を作る。
-    layout::store(
-        r.region.base(),
-        layout::OFF_PAYLOAD_WRITE_POSITION,
-        200,
-        Ordering::Release,
-    );
+    r.region
+        .control()
+        .store(Word::PayloadWritePosition, 200, Ordering::Release);
     r.tamper(1, |d| d.payload_len = 100);
     r.expect_stop(0, 0);
 }
@@ -153,16 +152,13 @@ fn last_descriptor_spanning_more_than_the_payload_capacity_stops_collection() {
 fn write_cursor_beyond_the_capacity_stops_collection() {
     let mut r = rig();
     r.write(10);
-    layout::store(
-        r.region.base(),
-        layout::OFF_WRITE_CURSOR,
-        5,
-        Ordering::Release,
-    );
+    r.region
+        .control()
+        .store(Word::WriteCursor, 5, Ordering::Release);
     let chunk = r.collector.collect(|| {}).unwrap();
     assert!(r.collector.is_stopped());
     assert!(chunk.descriptors.is_empty());
-    assert_eq!(r.load(layout::OFF_READ_CURSOR), 0);
+    assert_eq!(r.load(Word::ReadCursor), 0);
     assert!(r.worker.ingest_chunk(&chunk).events.is_empty());
     assert!(r.worker.is_stopped());
 }
@@ -192,8 +188,8 @@ fn drain_once_takes_at_most_the_limit_in_order() {
     assert_eq!(rest.events[0].payload.len(), 7);
     assert!(r.worker.total_bytes_copied() > after_first);
     assert!(r.worker.drain_once(2).events.is_empty());
-    assert_eq!(r.load(layout::OFF_READ_CURSOR), 3);
-    assert_eq!(r.load(layout::OFF_PAYLOAD_READ_POSITION), 15);
+    assert_eq!(r.load(Word::ReadCursor), 3);
+    assert_eq!(r.load(Word::PayloadReadPosition), 15);
 }
 
 #[test]
@@ -218,7 +214,7 @@ fn resume_counts_the_copied_range_and_continues() {
     r.write(10);
     r.write(4);
     assert_eq!(r.worker.drain_once(1).events.len(), 1);
-    let mut resumed = unsafe { DrainWorker::new(r.region.base(), r.cfg, 1) };
+    let mut resumed = unsafe { DrainWorker::new(r.region.shm().clone(), r.cfg, 1) }.unwrap();
     resumed.resume_from_shared();
     assert!(!resumed.is_stopped());
     assert!(resumed.total_bytes_copied() > 0);

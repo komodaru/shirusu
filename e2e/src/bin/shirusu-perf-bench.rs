@@ -270,17 +270,15 @@ fn measure_ratio(
         let monitor = Arc::new(HostMonitor::always_alive());
         let agent = Arc::new(Agent::new(pool, cfg, monitor));
         agent.thread_begin(1);
-        let base = unsafe { agent.thread_region_base(1) }.expect("agent region");
-        // 生ポインタは Send ではないためアドレスを usize で渡す。Agent は
-        // join まで生きており、領域はその間有効（thread_region_base の契約）。
-        let base_addr = base as usize;
+        let base = agent.thread_region(1).expect("agent region");
+        let worker_shm = base.clone();
         let done = Arc::new(AtomicBool::new(false));
         let consumer_done = Arc::new(AtomicBool::new(false));
         let consumer = {
             let done = done.clone();
             let consumer_done = consumer_done.clone();
             std::thread::spawn(move || {
-                let mut worker = unsafe { DrainWorker::new(base_addr as *mut u8, cfg, 1) };
+                let mut worker = unsafe { DrainWorker::new(worker_shm, cfg, 1) }.unwrap();
                 let mut recorder =
                     TraceRecorder::from_environment(Vec::new(), env(session)).expect("recorder");
                 let ctx = TraceBatchContext {
@@ -403,19 +401,17 @@ fn measure_burst(spec: &WorkloadSpec, rounds: usize) -> (BufferUsage, u64, u64, 
         let monitor = Arc::new(HostMonitor::always_alive());
         let agent = Arc::new(Agent::new(pool, cfg, monitor));
         agent.thread_begin(1);
-        let base = unsafe { agent.thread_region_base(1) }.expect("agent region");
-        // 生ポインタは Send ではないためアドレスを usize で渡す。Agent は
-        // join まで生きており、領域はその間有効（thread_region_base の契約）。
-        let base_addr = base as usize;
+        let base = agent.thread_region(1).expect("agent region");
+        let worker_shm = base.clone();
         // Cursor だけを読む観測用 Reader。回収は DrainWorker が行う。
-        let observer = unsafe { RingReader::new(base, cfg) };
+        let observer = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         let done = Arc::new(AtomicBool::new(false));
         let peak_desc = Arc::new(AtomicU64::new(0));
         let peak_pay = Arc::new(AtomicU64::new(0));
         let consumer = {
             let done = done.clone();
             std::thread::spawn(move || {
-                let mut worker = unsafe { DrainWorker::new(base_addr as *mut u8, cfg, 1) };
+                let mut worker = unsafe { DrainWorker::new(worker_shm, cfg, 1) }.unwrap();
                 let mut total = 0u64;
                 loop {
                     // 終了確認を先に行う（比率測定と同じ理由。done 後の最終

@@ -6,6 +6,9 @@
 //! Windows 以外では同じ API 形のスタブとしてコンパイルでき、プロセス間機能は Unsupported を返す。
 
 use shirusu_transport::notify::ReCheckPolicy;
+#[cfg(windows)]
+use shirusu_transport::Backing;
+use shirusu_transport::Shm;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -207,16 +210,60 @@ mod imp {
         ((size >> 32) as u32, (size & 0xFFFF_FFFF) as u32)
     }
 
+    /// Mapping のビュー。最後の [`Shm`] が消えたときに解放する (セクションは
+    /// ビューが残る限り OS が保つので、ハンドルを先に閉じてもよい)。
+    struct MappedView {
+        view: std::ptr::NonNull<u8>,
+        len: usize,
+    }
+    // SAFETY: ビューのアドレスは全スレッドで同じで、中身へは Shm 経由でしか触れない。
+    unsafe impl Send for MappedView {}
+    // SAFETY: 同上。
+    unsafe impl Sync for MappedView {}
+    // SAFETY: MapViewOfFile のビューは割り当て粒度 (64 KiB) 境界にあり、
+    // UnmapViewOfFile (Drop) まで len バイトが読み書きできる。参照は作らない。
+    unsafe impl Backing for MappedView {
+        fn base(&self) -> std::ptr::NonNull<u8> {
+            self.view
+        }
+        fn byte_len(&self) -> usize {
+            self.len
+        }
+    }
+    impl Drop for MappedView {
+        fn drop(&mut self) {
+            // SAFETY: MapViewOfFile が返したビューを一度だけ解放する。
+            unsafe {
+                UnmapViewOfFile(
+                    windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                        Value: self.view.as_ptr() as *mut c_void,
+                    },
+                );
+            }
+        }
+    }
+    /// ビューを Shm にする。Control が入らない大きさなら解放して Err。
+    fn map_view(handle: HANDLE, len: usize, api: &'static str) -> Result<Shm> {
+        // SAFETY: handle は呼び出し側が検証した File Mapping ハンドル。
+        let view = unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, len) };
+        let Some(view) = std::ptr::NonNull::new(view.Value as *mut u8) else {
+            return Err(last_err(api));
+        };
+        Shm::new(std::sync::Arc::new(MappedView { view, len }))
+            .map_err(|_| WinError::InvalidArgument("len"))
+    }
+
     pub struct SharedMapping {
         handle: HANDLE,
-        view: *mut u8,
-        len: usize,
-        owns_handle: bool,
+        shm: Shm,
     }
+    // SAFETY: handle はカーネルオブジェクトで、どのスレッドからも閉じられる。
     unsafe impl Send for SharedMapping {}
+    // SAFETY: &self の操作 (DuplicateHandle / SetHandleInformation) はスレッドセーフ。
+    unsafe impl Sync for SharedMapping {}
     impl SharedMapping {
         pub fn create(len: usize) -> Result<Self> {
-            if len == 0 {
+            if len < shirusu_transport::layout::CONTROL_SIZE {
                 return Err(WinError::InvalidArgument("len"));
             }
             let (size_high, size_low) = split_mapping_size(len);
@@ -233,17 +280,14 @@ mod imp {
             if handle.is_null() {
                 return Err(last_err("CreateFileMappingW"));
             }
-            let view = unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, len) };
-            if view.Value.is_null() {
-                unsafe { CloseHandle(handle) };
-                return Err(last_err("MapViewOfFile"));
+            match map_view(handle, len, "MapViewOfFile") {
+                Ok(shm) => Ok(Self { handle, shm }),
+                Err(e) => {
+                    // SAFETY: 作ったばかりのハンドルを閉じる。
+                    unsafe { CloseHandle(handle) };
+                    Err(e)
+                }
             }
-            Ok(Self {
-                handle,
-                view: view.Value as *mut u8,
-                len,
-                owns_handle: true,
-            })
         }
         /// アクセス制御付きで作る。仕様: 共有メモリのセクションには、Host と対象
         /// プロセス以外から開けないアクセス制御を付ける。DACL は現在のユーザーの
@@ -251,7 +295,7 @@ mod imp {
         /// 対象プロセスは同じユーザーで動く前提）。Event 等のハンドル受け渡しは
         /// DuplicateHandle 経由のため、この DACL では妨げない。
         pub fn create_restricted(len: usize) -> Result<Self> {
-            if len == 0 {
+            if len < shirusu_transport::layout::CONTROL_SIZE {
                 return Err(WinError::InvalidArgument("len"));
             }
             let restricted = restricted_security_attributes()?;
@@ -269,33 +313,22 @@ mod imp {
             if handle.is_null() {
                 return Err(last_err("CreateFileMappingW(restricted)"));
             }
-            let view = unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, len) };
-            if view.Value.is_null() {
-                unsafe { CloseHandle(handle) };
-                return Err(last_err("MapViewOfFile(restricted)"));
+            match map_view(handle, len, "MapViewOfFile(restricted)") {
+                Ok(shm) => Ok(Self { handle, shm }),
+                Err(e) => {
+                    // SAFETY: 作ったばかりのハンドルを閉じる。
+                    unsafe { CloseHandle(handle) };
+                    Err(e)
+                }
             }
-            Ok(Self {
-                handle,
-                view: view.Value as *mut u8,
-                len,
-                owns_handle: true,
-            })
         }
         ///
         /// # Safety
         /// `handle_value` は有効な File Mapping ハンドルで、`len` はその大きさ以下であること。
         pub unsafe fn from_handle_value(handle_value: HandleValue, len: usize) -> Result<Self> {
             let handle = h(handle_value);
-            let view = MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, len);
-            if view.Value.is_null() {
-                return Err(last_err("MapViewOfFile(from handle)"));
-            }
-            Ok(Self {
-                handle,
-                view: view.Value as *mut u8,
-                len,
-                owns_handle: true,
-            })
+            let shm = map_view(handle, len, "MapViewOfFile(from handle)")?;
+            Ok(Self { handle, shm })
         }
         pub fn handle_value(&self) -> HandleValue {
             hv(self.handle)
@@ -334,32 +367,23 @@ mod imp {
             }
             Ok(())
         }
-        pub fn as_ptr(&self) -> *mut u8 {
-            self.view
+        /// ビュー。複製はビューの参照を増やすだけで、Mapping を落としても
+        /// 複製が生きている間はビューが残る。
+        pub fn shm(&self) -> &Shm {
+            &self.shm
         }
         pub fn len(&self) -> usize {
-            self.len
+            self.shm.len()
         }
         pub fn is_empty(&self) -> bool {
-            self.len == 0
-        }
-        pub fn as_slice(&self) -> &[u8] {
-            unsafe { std::slice::from_raw_parts(self.view, self.len) }
+            self.shm.is_empty()
         }
     }
     impl Drop for SharedMapping {
         fn drop(&mut self) {
+            // SAFETY: 自分が所有するハンドルを一度だけ閉じる (ビューは Shm が保つ)。
             unsafe {
-                if !self.view.is_null() {
-                    UnmapViewOfFile(
-                        windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
-                            Value: self.view as *mut c_void,
-                        },
-                    );
-                }
-                if self.owns_handle && !self.handle.is_null() {
-                    CloseHandle(self.handle);
-                }
+                CloseHandle(self.handle);
             }
         }
     }
@@ -1128,19 +1152,13 @@ mod imp {
 mod imp {
     use super::*;
     pub struct SharedMapping {
-        view: Vec<u8>,
-        len: usize,
+        shm: Shm,
     }
     impl SharedMapping {
         pub fn create(len: usize) -> Result<Self> {
-            if len == 0 {
-                return Err(WinError::InvalidArgument("len"));
-            }
             // スタブ: ローカルヒープで代替し API 形だけ保つ（プロセス間共有ではない）
-            Ok(Self {
-                view: vec![0u8; len],
-                len,
-            })
+            let shm = Shm::alloc_zeroed(len).map_err(|_| WinError::InvalidArgument("len"))?;
+            Ok(Self { shm })
         }
         /// スタブ: アクセス制御は Windows の概念のため Unsupported。
         pub fn create_restricted(_len: usize) -> Result<Self> {
@@ -1160,17 +1178,14 @@ mod imp {
         pub fn make_inheritable(&self) -> Result<()> {
             Err(WinError::Unsupported)
         }
-        pub fn as_ptr(&self) -> *mut u8 {
-            self.view.as_ptr() as *mut u8
+        pub fn shm(&self) -> &Shm {
+            &self.shm
         }
         pub fn len(&self) -> usize {
-            self.len
+            self.shm.len()
         }
         pub fn is_empty(&self) -> bool {
-            self.len == 0
-        }
-        pub fn as_slice(&self) -> &[u8] {
-            &self.view
+            self.shm.is_empty()
         }
     }
     pub struct EventObject {
@@ -1475,14 +1490,11 @@ impl RingNotify {
 /// Host 側: 回収で空きができ、書き手が空き待ち中なら `space_available` を SetEvent する。
 /// 書き手は待機の意思表示＋全順序フェンスの後に空きを再確認しているので、この通知と
 /// 再確認の組合せで空き待ちの取りこぼしが起きない。
-///
-/// # Safety
-/// `control_base` は Control 領域の先頭を指し、呼び出し中有効であること。
-pub unsafe fn notify_space_if_writer_waiting(
-    control_base: *const u8,
+pub fn notify_space_if_writer_waiting(
+    control: shirusu_transport::Control<'_>,
     notify: &RingNotify,
 ) -> Result<bool> {
-    if shirusu_transport::layout::writer_waiting(control_base) {
+    if control.writer_waiting() {
         notify.notify_space()?;
         Ok(true)
     } else {
@@ -1964,8 +1976,12 @@ mod tests {
     #[test]
     fn mapping_and_event_roundtrip() {
         let m = SharedMapping::create(4096).unwrap();
-        unsafe { std::ptr::write_bytes(m.as_ptr(), 0xAB, 16) };
-        assert_eq!(m.as_slice()[0], 0xAB);
+        m.shm().control().store(
+            shirusu_transport::Word::WriteCursor,
+            0xAB,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        assert_eq!(m.shm().copy_out(0..1).unwrap()[0], 0xAB);
         let e = EventObject::new(true, false).unwrap();
         assert!(e.is_auto_reset());
         assert!(!e.wait_timeout(Duration::from_millis(1)));
@@ -1984,8 +2000,12 @@ mod tests {
     fn restricted_mapping_roundtrip() {
         // 現在のユーザーだけに開ける DACL 付き Mapping が作れて使えること。
         let m = SharedMapping::create_restricted(4096).unwrap();
-        unsafe { std::ptr::write_bytes(m.as_ptr(), 0x5A, 16) };
-        assert_eq!(m.as_slice()[0], 0x5A);
+        m.shm().control().store(
+            shirusu_transport::Word::WriteCursor,
+            0x5A,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        assert_eq!(m.shm().copy_out(0..1).unwrap()[0], 0x5A);
         assert_eq!(m.len(), 4096);
     }
     #[test]
@@ -2083,8 +2103,8 @@ mod portable_tests {
     }
     #[test]
     fn stub_mapping_has_requested_len() {
-        let m = SharedMapping::create(128).unwrap();
-        assert_eq!(m.len(), 128);
+        let m = SharedMapping::create(4096).unwrap();
+        assert_eq!(m.len(), 4096);
     }
 
     /// L05: プロセス一覧の列挙。Windows では自プロセスが含まれ、
@@ -2110,16 +2130,15 @@ mod portable_tests {
     #[test]
     fn notify_space_only_when_writer_waiting() {
         let cfg = shirusu_transport::RingConfig::new(8, 256);
-        let region = shirusu_transport::ring::SharedRegion::new(cfg, 1, 1);
+        let region = shirusu_transport::ring::SharedRegion::new(cfg, 1, 1).unwrap();
         let notify = RingNotify::new().unwrap();
-        assert!(!unsafe { notify_space_if_writer_waiting(region.base(), &notify) }.unwrap());
-        shirusu_transport::layout::store(
-            region.base(),
-            shirusu_transport::layout::OFF_WRITER_WAITING,
+        assert!(!notify_space_if_writer_waiting(region.control(), &notify).unwrap());
+        region.control().store(
+            shirusu_transport::Word::WriterWaiting,
             1,
             std::sync::atomic::Ordering::Relaxed,
         );
-        assert!(unsafe { notify_space_if_writer_waiting(region.base(), &notify) }.unwrap());
+        assert!(notify_space_if_writer_waiting(region.control(), &notify).unwrap());
     }
     #[test]
     fn event_clock_wakes_on_space_available() {
@@ -2151,12 +2170,15 @@ mod portable_tests {
         );
     }
     #[test]
-    fn mapping_create_zero_len_is_invalid_argument() {
-        // Windows 実装でも len==0 は CreateFileMappingW の前に弾く
-        assert!(matches!(
-            SharedMapping::create(0),
-            Err(WinError::InvalidArgument("len"))
-        ));
+    fn mapping_create_shorter_than_control_is_invalid_argument() {
+        // Windows 実装でも Control が入らない長さは CreateFileMappingW の前に弾く
+        for len in [0, 1, shirusu_transport::layout::CONTROL_SIZE - 1] {
+            assert!(matches!(
+                SharedMapping::create(len),
+                Err(WinError::InvalidArgument("len"))
+            ));
+        }
+        assert!(SharedMapping::create(shirusu_transport::layout::CONTROL_SIZE).is_ok());
     }
     #[test]
     fn win_error_display_strings() {
@@ -2227,9 +2249,9 @@ mod portable_tests {
     #[cfg(not(windows))]
     #[test]
     fn stub_process_operations_are_unsupported() {
-        let m = SharedMapping::create(64).unwrap();
+        let m = SharedMapping::create(4096).unwrap();
         assert!(matches!(
-            SharedMapping::create_restricted(64),
+            SharedMapping::create_restricted(4096),
             Err(WinError::Unsupported)
         ));
         assert!(matches!(

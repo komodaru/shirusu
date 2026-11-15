@@ -25,7 +25,7 @@ fn input(payload: &[u8], call: u64) -> EventInput<'_> {
 #[test]
 fn spsc_concurrent_writer_reader_100k() {
     let cfg = RingConfig::new(1024, 65536);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1));
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
     let r2 = region.clone();
     let reader_thread = std::thread::spawn(move || {
         let mut rd = unsafe { r2.reader() };
@@ -91,7 +91,7 @@ fn soak_10m_ops_throughput_and_integrity() {
         });
     const BATCH: u64 = 4096;
     let cfg = RingConfig::new(8192, 65536);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe {
         region.writer(
@@ -142,7 +142,7 @@ fn soak_10m_ops_throughput_and_integrity() {
 #[test]
 fn host_pause_then_resume_recovers_via_recheck_drain() {
     let cfg = RingConfig::new(256, 16384);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe {
         region.writer(
@@ -167,8 +167,8 @@ fn corrupted_image_never_panics_and_stops_ring() {
     let cfg = RingConfig::new(16, 512);
     let known = KnownConfig::new(cfg, cfg.required_len());
     for seed in 0..64u64 {
-        let region = SharedRegion::new(cfg, 1, 1);
-        let mut image = region.as_slice().to_vec();
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
+        let mut image = region.snapshot().to_vec();
         // 疑似ランダムにバイトを壊す
         let mut x = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         for _ in 0..24 {
@@ -191,17 +191,17 @@ fn generation_rollover_isolation() {
     // 同じ slot を何世代も使い回しても、検証側は世代を区別できる
     let cfg = RingConfig::new(8, 256);
     for gen in 1..=8u64 {
-        let region = SharedRegion::new(cfg, gen, 55);
+        let region = SharedRegion::new(cfg, gen, 55).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         w.write(input(b"gen-data", gen));
         let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), gen);
-        let events = vr.drain_image(region.as_slice()).unwrap();
+        let events = vr.drain_image(&region.snapshot()).unwrap();
         assert_eq!(events.len(), 1);
         let mut vr_old = ValidatingReader::new(
             KnownConfig::new(cfg, cfg.required_len()),
             gen.wrapping_add(100),
         );
-        assert!(vr_old.drain_image(region.as_slice()).is_err());
+        assert!(vr_old.drain_image(&region.snapshot()).is_err());
     }
 }

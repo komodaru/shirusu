@@ -8,6 +8,7 @@ use shirusu_transport::descriptor::{flags, CaptureState, EventDescriptor, EventK
 use shirusu_transport::layout::*;
 use shirusu_transport::notify::{NotifySignal, PublishNotifyTracker, ReCheckPolicy};
 use shirusu_transport::ring::*;
+use shirusu_transport::shm::{Image as AlignedImage, Shm, Word};
 use shirusu_transport::slot::{SlotPool, SlotState, SLOT_MEMORY_BYTES};
 use shirusu_transport::snapshot::{reassemble, write_snapshot, FailAfterSource, SliceSource};
 use shirusu_transport::validate::{
@@ -27,7 +28,7 @@ fn setup(
     policy: WriterPolicy,
 ) -> (SharedRegion, RingWriter, RingReader, Arc<ManualClock>) {
     let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock = Arc::new(ManualClock::new());
     let w = unsafe { region.writer(policy, clock.clone() as Arc<dyn Clock>) };
     let r = unsafe { region.reader() };
@@ -51,8 +52,8 @@ fn input(kind: EventKind, call: u64, payload: &[u8]) -> EventInput<'_> {
         global_order: 0,
     }
 }
-fn ctrl(base: *const u8, off: usize) -> u64 {
-    load(base, off, Ordering::Relaxed)
+fn ctrl(shm: &Shm, w: Word) -> u64 {
+    shm.control().load(w, Ordering::Relaxed)
 }
 
 // ---------- layout 純粋関数の極値 ----------
@@ -220,20 +221,14 @@ fn non_power_of_two_capacities_roundtrip_with_wraparound() {
 #[test]
 fn cursors_near_u64_max_publish_and_drain() {
     let cfg = RingConfig::new(4, 64);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     // Cursor を u64::MAX-2 に置いてから writer/reader を作る。
-    store(
-        region.base(),
-        OFF_WRITE_CURSOR,
-        u64::MAX - 2,
-        Ordering::Relaxed,
-    );
-    store(
-        region.base(),
-        OFF_READ_CURSOR,
-        u64::MAX - 2,
-        Ordering::Relaxed,
-    );
+    region
+        .control()
+        .store(Word::WriteCursor, u64::MAX - 2, Ordering::Relaxed);
+    region
+        .control()
+        .store(Word::ReadCursor, u64::MAX - 2, Ordering::Relaxed);
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe { region.writer(no_wait(), clock) };
     let mut rd = unsafe { region.reader() };
@@ -260,26 +255,20 @@ fn cursors_near_u64_max_publish_and_drain() {
 #[test]
 fn payload_position_near_u64_max() {
     let cfg = RingConfig::new(4, 64);
-    let region = SharedRegion::new(cfg, 1, 1);
-    store(
-        region.base(),
-        OFF_PAYLOAD_WRITE_POSITION,
-        u64::MAX - 3,
-        Ordering::Relaxed,
-    );
-    store(
-        region.base(),
-        OFF_PAYLOAD_READ_POSITION,
-        u64::MAX - 3,
-        Ordering::Relaxed,
-    );
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    region
+        .control()
+        .store(Word::PayloadWritePosition, u64::MAX - 3, Ordering::Relaxed);
+    region
+        .control()
+        .store(Word::PayloadReadPosition, u64::MAX - 3, Ordering::Relaxed);
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe { region.writer(no_wait(), clock) };
     let mut rd = unsafe { region.reader() };
     let out = w.write(input(EventKind::CallEnter, 1, b"xyz"));
     assert!(matches!(out, WriteOutcome::Published { .. }));
     assert_eq!(
-        ctrl(region.base(), OFF_PAYLOAD_WRITE_POSITION),
+        ctrl(region.shm(), Word::PayloadWritePosition),
         u64::MAX,
         "position advances to MAX exactly"
     );
@@ -288,7 +277,7 @@ fn payload_position_near_u64_max() {
     assert_eq!(b.events[0].descriptor.payload_position, u64::MAX - 3);
     assert_eq!(b.events[0].payload, b"xyz", "position % capacity で読める");
     assert_eq!(
-        ctrl(region.base(), OFF_PAYLOAD_READ_POSITION),
+        ctrl(region.shm(), Word::PayloadReadPosition),
         u64::MAX,
         "read position tracks the logical (unwrapped) position"
     );
@@ -558,14 +547,14 @@ fn bounded_wait_timeout_exact_boundary_values() {
         );
         assert_eq!(w.total_wait_ns, deadline_ns);
         assert_eq!(w.state(), OverflowState::Overflow);
-        assert_eq!(ctrl(region.base(), OFF_OVERFLOW_STATE), 2, "OVERFLOW=2");
+        assert_eq!(ctrl(region.shm(), Word::OverflowState), 2, "OVERFLOW=2");
         assert_eq!(
-            ctrl(region.base(), OFF_LAST_WAIT_NS),
+            ctrl(region.shm(), Word::LastWaitNs),
             deadline_ns,
             "wait time is recorded in Control"
         );
         assert!(
-            !shirusu_transport::layout::writer_waiting(region.base()),
+            !region.control().writer_waiting(),
             "waiting flag must be cleared after timeout"
         );
     }
@@ -578,7 +567,7 @@ struct DrainClock {
     drain_on_sleep: u64,
     sleeps: AtomicU64,
     states_seen: Mutex<Vec<u64>>,
-    base: usize,
+    shm: Shm,
 }
 impl Clock for DrainClock {
     fn now_ticks(&self) -> u64 {
@@ -591,11 +580,10 @@ impl Clock for DrainClock {
         self.ticks
             .fetch_add(dur.as_nanos() as u64, Ordering::Relaxed);
         let n = self.sleeps.fetch_add(1, Ordering::Relaxed) + 1;
-        let st = load(
-            self.base as *const u8,
-            OFF_OVERFLOW_STATE,
-            Ordering::Relaxed,
-        );
+        let st = self
+            .shm
+            .control()
+            .load(Word::OverflowState, Ordering::Relaxed);
         self.states_seen.lock().unwrap().push(st);
         if n == self.drain_on_sleep {
             self.reader.lock().unwrap().drain_all();
@@ -605,7 +593,7 @@ impl Clock for DrainClock {
 
 fn drain_clock_setup(drain_on_sleep: u64) -> (SharedRegion, RingWriter, Arc<DrainClock>) {
     let cfg = RingConfig::new(2, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let reader = unsafe { region.reader() };
     let clock = Arc::new(DrainClock {
         ticks: AtomicU64::new(0),
@@ -613,7 +601,7 @@ fn drain_clock_setup(drain_on_sleep: u64) -> (SharedRegion, RingWriter, Arc<Drai
         drain_on_sleep,
         sleeps: AtomicU64::new(0),
         states_seen: Mutex::new(Vec::new()),
-        base: region.base() as usize,
+        shm: region.shm().clone(),
     });
     let policy = WriterPolicy {
         max_wait: Duration::from_nanos(100_000), // 50µs スライス 2 回分
@@ -700,12 +688,12 @@ fn overflow_resume_threshold_is_strictly_below() {
         "at exactly the threshold the writer stays in OVERFLOW, got {out:?}"
     );
     assert_eq!(w.state(), OverflowState::Overflow);
-    assert_eq!(ctrl(region.base(), OFF_OVERFLOW_STATE), 2);
+    assert_eq!(ctrl(region.shm(), Word::OverflowState), 2);
     rd.drain(2); // 劣化分も含め回収し使用率 0%: 復帰する (劣化書込でも Cursor は進む)
     let out = w.write(input(EventKind::CallEnter, 7, b"x"));
     assert!(matches!(out, WriteOutcome::Published { .. }));
     assert_eq!(w.state(), OverflowState::Normal);
-    assert_eq!(ctrl(region.base(), OFF_OVERFLOW_STATE), 0);
+    assert_eq!(ctrl(region.shm(), Word::OverflowState), 0);
 }
 
 #[test]
@@ -750,7 +738,7 @@ fn publish_notify_signal_crossing_and_host_waiting() {
     // 誰も検証していなかったため生き残っていた。
     use shirusu_transport::notify::NotifySignal;
     let cfg = RingConfig::new(4, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock = Arc::new(ManualClock::new());
     let mut w = unsafe { region.writer(no_wait(), clock as Arc<dyn Clock>) };
     let notify_of = |o: WriteOutcome| match o {
@@ -767,8 +755,10 @@ fn publish_notify_signal_crossing_and_host_waiting() {
         NotifySignal::ThresholdCrossing
     );
     // Host 待機中フラグが立っていれば、crossing でなくても HostWaiting
-    let region2 = SharedRegion::new(cfg, 1, 1);
-    store(region2.base(), OFF_HOST_WAITING, 1, Ordering::Relaxed);
+    let region2 = SharedRegion::new(cfg, 1, 1).unwrap();
+    region2
+        .control()
+        .store(Word::HostWaiting, 1, Ordering::Relaxed);
     let clock2 = Arc::new(ManualClock::new());
     let mut w2 = unsafe { region2.writer(no_wait(), clock2 as Arc<dyn Clock>) };
     assert_eq!(
@@ -798,7 +788,7 @@ fn leave_after_published_enter_is_published() {
 /// elapsed_ns の呼び出しにフックを持つ時計で決定的に再現する。
 struct RacingClock {
     inner: ManualClock,
-    base: usize,
+    shm: Shm,
     trigger_call: u64,
     calls: AtomicU64,
 }
@@ -816,7 +806,9 @@ impl Clock for RacingClock {
         let n = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
         if n == self.trigger_call {
             // 競合する Host の回収: Descriptor を 1 つ空ける
-            store(self.base as *mut u8, OFF_READ_CURSOR, 1, Ordering::Relaxed);
+            self.shm
+                .control()
+                .store(Word::ReadCursor, 1, Ordering::Relaxed);
         }
         end.saturating_sub(start)
     }
@@ -828,10 +820,10 @@ fn bounded_wait_timeout_wins_over_racing_drain() {
     // 変える mutant。待機がタイムアウトした後に空きができても、その試行は
     // OVERFLOW 経路に落ちるのが仕様 (次の書込で再評価される)。
     let cfg = RingConfig::new(2, 4096);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock = Arc::new(RacingClock {
         inner: ManualClock::new(),
-        base: region.base() as usize,
+        shm: region.shm().clone(),
         trigger_call: 2,
         calls: AtomicU64::new(0),
     });
@@ -860,7 +852,7 @@ fn drain_payload_read_position_ignores_degraded_descriptors() {
     w.write(input(EventKind::CallEnter, 1, b"aaaa"));
     w.write(input(EventKind::CallEnter, 2, b"bbbb"));
     rd.drain_all();
-    assert_eq!(ctrl(region.base(), OFF_PAYLOAD_READ_POSITION), 8);
+    assert_eq!(ctrl(region.shm(), Word::PayloadReadPosition), 8);
     let mut degraded = input(EventKind::CallEnter, 3, b"012345678901234567890123456789");
     degraded.capture_state = CaptureState::DroppedByBackpressure;
     assert!(matches!(w.write(degraded), WriteOutcome::Published { .. }));
@@ -868,7 +860,7 @@ fn drain_payload_read_position_ignores_degraded_descriptors() {
     assert_eq!(b.events.len(), 1);
     assert!(b.events[0].descriptor.payload_dropped());
     assert_eq!(
-        ctrl(region.base(), OFF_PAYLOAD_READ_POSITION),
+        ctrl(region.shm(), Word::PayloadReadPosition),
         8,
         "degraded descriptors must not advance the payload read position"
     );
@@ -881,9 +873,13 @@ fn reader_level_accessors_reflect_shared_state() {
     // (Host 側テストでのみ間接検証されていた)。
     let (region, mut w, rd, _clock) = setup(2, 64, no_wait());
     assert!(!rd.writer_waiting());
-    store(region.base(), OFF_WRITER_WAITING, 1, Ordering::Relaxed);
+    region
+        .control()
+        .store(Word::WriterWaiting, 1, Ordering::Relaxed);
     assert!(rd.writer_waiting());
-    store(region.base(), OFF_WRITER_WAITING, 0, Ordering::Relaxed);
+    region
+        .control()
+        .store(Word::WriterWaiting, 0, Ordering::Relaxed);
     assert!(!rd.writer_waiting());
     // 欠落を起こしてから Reader 側カウンタが Writer 側と一致すること
     w.write(input(EventKind::CallEnter, 1, b"a"));
@@ -945,13 +941,13 @@ fn validating_reader_accepts_oversized_mapping() {
     // 「マッピングがちょうど必要サイズ」のテストでは区別できない。
     // マッピングの方が大きい正当なケースで倒す。
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 7, 1);
+    let region = SharedRegion::new(cfg, 7, 1).unwrap();
     let mut w2 =
         unsafe { region.writer(no_wait(), Arc::new(ManualClock::new()) as Arc<dyn Clock>) };
     w2.write(input(EventKind::CallEnter, 1, b"m"));
     let known = KnownConfig::new(cfg, cfg.required_len() + 8192);
     let mut vr = ValidatingReader::new(known, 7);
-    let evs = vr.drain_image(region.as_slice()).unwrap();
+    let evs = vr.drain_image(&region.snapshot()).unwrap();
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0].payload, b"m");
 }
@@ -1114,16 +1110,16 @@ fn reader_drain_zero_and_partial_advance() {
     assert_eq!(b.events.len(), 2);
     assert_eq!(rd.read_cursor(), 2);
     assert_eq!(
-        ctrl(region.base(), OFF_PAYLOAD_READ_POSITION),
+        ctrl(region.shm(), Word::PayloadReadPosition),
         6,
         "payload read position = end of last drained event"
     );
     let b = rd.drain(99);
     assert_eq!(b.events.len(), 1, "drain clamps to available");
-    assert_eq!(ctrl(region.base(), OFF_PAYLOAD_READ_POSITION), 7);
+    assert_eq!(ctrl(region.shm(), Word::PayloadReadPosition), 7);
     assert!(rd.drain_all().events.is_empty());
     assert_eq!(
-        ctrl(region.base(), OFF_HOST_DRAIN_COUNT),
+        ctrl(region.shm(), Word::HostDrainCount),
         2,
         "two non-empty drains"
     );
@@ -1133,7 +1129,9 @@ fn reader_drain_zero_and_partial_advance() {
 fn writer_with_regressed_reader_cursor_drops_safely() {
     // 読み手 Cursor が書き手より先行する破損状態でも、書込は落として前に進む。
     let (region, mut w, _rd, _ck) = setup(4, 64, no_wait());
-    store(region.base(), OFF_READ_CURSOR, 10, Ordering::Relaxed);
+    region
+        .control()
+        .store(Word::ReadCursor, 10, Ordering::Relaxed);
     let out = w.write(input(EventKind::CallEnter, 1, b"data"));
     assert!(matches!(out, WriteOutcome::Dropped { .. }));
     assert_eq!(w.loss_counters().dropped_events, 1);
@@ -1523,56 +1521,16 @@ fn known_small() -> KnownConfig {
         RingConfig::new(16, 256).required_len(),
     )
 }
-/// Vec<u8> はポインタの 8 バイト整列を保証しないため、layout の原子操作
-/// (AtomicU64 参照を作る) を適用する画像は u64 バッファで保持する。
-/// 整列していないポインタへの原子操作は UB (Miri 検出)。
-struct AlignedImage {
-    words: Vec<u64>,
-    len: usize,
-}
-impl AlignedImage {
-    fn zeroed(len: usize) -> Self {
-        Self {
-            words: vec![0; len.div_ceil(8)],
-            len,
-        }
-    }
-    fn copy_of(src: &[u8]) -> Self {
-        let mut s = Self::zeroed(src.len());
-        s.as_mut_slice().copy_from_slice(src);
-        s
-    }
-    fn as_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.words.as_ptr() as *const u8, self.len) }
-    }
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.words.as_mut_ptr() as *mut u8, self.len) }
-    }
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.words.as_mut_ptr() as *mut u8
-    }
-}
-impl std::ops::Deref for AlignedImage {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        self.as_slice()
-    }
-}
-impl std::ops::DerefMut for AlignedImage {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        self.as_mut_slice()
-    }
-}
 
 fn control_image(mutate: impl FnOnce(&mut [u8])) -> AlignedImage {
     let cfg = RingConfig::new(16, 256);
     let mut img = AlignedImage::zeroed(cfg.required_len());
-    init_control(img.as_mut_ptr(), cfg, 3, 9);
+    img.init(cfg, 3, 9);
     mutate(img.as_mut_slice());
     img
 }
 fn set(img: &mut [u8], off: usize, v: u64) {
-    store(img.as_mut_ptr(), off, v, Ordering::Relaxed);
+    img[off..off + 8].copy_from_slice(&v.to_le_bytes());
 }
 
 #[test]
@@ -1594,10 +1552,7 @@ fn validate_control_length_magic_and_mapping_boundaries() {
         Err(IntegrityError::BadMagic)
     ));
     // Host 既知の mapping が小さい場合は Control が正しくても弾く
-    let tiny = KnownConfig {
-        mapping_len: 10,
-        ..known_small()
-    };
+    let tiny = KnownConfig::new(RingConfig::new(16, 256), 10);
     assert!(matches!(
         validate_control(&img[..256], &tiny, None),
         Err(IntegrityError::ImageTooSmall)
@@ -1628,7 +1583,7 @@ fn validate_control_prev_snapshot_priority_and_counter_regression() {
     let other_snap_img = {
         let cfg = RingConfig::new(16, 256);
         let mut v = AlignedImage::zeroed(cfg.required_len());
-        init_control(v.as_mut_ptr(), cfg, 4, 9);
+        v.init(cfg, 4, 9);
         v
     };
     let _ = other;
@@ -1774,21 +1729,21 @@ fn validating_reader_boundaries() {
     );
 
     // 正常な像を 2 回読んでも 2 回目は空
-    let region = SharedRegion::new(cfg, 7, 1);
+    let region = SharedRegion::new(cfg, 7, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe { region.writer(no_wait(), clock) };
     w.write(input(EventKind::CallEnter, 1, b"one"));
     let mut vr = ValidatingReader::new(known, 7);
-    let evs = vr.drain_image(region.as_slice()).unwrap();
+    let evs = vr.drain_image(&region.snapshot()).unwrap();
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0].payload, b"one");
-    assert!(vr.drain_image(region.as_slice()).unwrap().is_empty());
+    assert!(vr.drain_image(&region.snapshot()).unwrap().is_empty());
     assert!(!vr.is_stopped());
     assert_eq!(vr.control_snapshot().unwrap().write_cursor, 1);
 
     // Sequence 0 の Descriptor は確定済みスロットでは矛盾（書き手は 1 から振る）。
     // write_cursor だけが進んだ壊れた像として SequenceRegressed で止まる。
-    let mut image = AlignedImage::copy_of(region.as_slice());
+    let mut image = AlignedImage::copy_of(&region.snapshot());
     let mut zero_seq = EventDescriptor::new(EventKind::CallEnter, 0);
     zero_seq.payload_len = 0;
     let off = cfg.descriptors_offset() + 64; // slot 1
@@ -1806,9 +1761,9 @@ fn validating_reader_boundaries() {
     // Sequence が後退した Descriptor を置くと SequenceRegressed で止まる
     // （止まった Reader は再利用できないため、新しい Reader で確認する）
     let mut vr = ValidatingReader::new(known, 7);
-    let evs = vr.drain_image(region.as_slice()).unwrap();
+    let evs = vr.drain_image(&region.snapshot()).unwrap();
     assert_eq!(evs.len(), 1);
-    let mut image2 = AlignedImage::copy_of(region.as_slice());
+    let mut image2 = AlignedImage::copy_of(&region.snapshot());
     // slot 1 は正常な後続イベントにする（seq 2、Payload 位置は "one" の終端 3）。
     // そうしないと Reader は slot 1 のゼロ埋め像で UnknownKind になってしまう。
     let mut next = EventDescriptor::new(EventKind::CallEnter, 2);
@@ -1835,28 +1790,28 @@ fn validating_reader_boundaries() {
 #[test]
 fn init_control_writes_meta_and_zeroes_cursors() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 42, 777);
-    let base = region.base();
-    assert_eq!(ctrl(base, OFF_MAGIC), MAGIC);
-    assert_eq!(ctrl(base, OFF_LAYOUT_VERSION), LAYOUT_VERSION);
-    assert_eq!(ctrl(base, OFF_DESCRIPTOR_CAPACITY), 8);
-    assert_eq!(ctrl(base, OFF_PAYLOAD_CAPACITY), 256);
-    assert_eq!(ctrl(base, OFF_GENERATION), 42);
-    assert_eq!(ctrl(base, OFF_OWNER_THREAD_ID), 777);
-    for off in [
-        OFF_WRITE_CURSOR,
-        OFF_READ_CURSOR,
-        OFF_PAYLOAD_WRITE_POSITION,
-        OFF_PAYLOAD_READ_POSITION,
-        OFF_DROPPED_EVENTS,
-        OFF_DROPPED_PAYLOAD_BYTES,
-        OFF_DEGRADED_EVENTS,
-        OFF_OVERFLOW_STATE,
-        OFF_HOST_WAITING,
-        OFF_RING_STOPPED,
-        OFF_WRITER_WAITING,
+    let region = SharedRegion::new(cfg, 42, 777).unwrap();
+    let base = region.shm().clone();
+    assert_eq!(ctrl(&base, Word::Magic), MAGIC);
+    assert_eq!(ctrl(&base, Word::LayoutVersion), LAYOUT_VERSION);
+    assert_eq!(ctrl(&base, Word::DescriptorCapacity), 8);
+    assert_eq!(ctrl(&base, Word::PayloadCapacity), 256);
+    assert_eq!(ctrl(&base, Word::Generation), 42);
+    assert_eq!(ctrl(&base, Word::OwnerThreadId), 777);
+    for w in [
+        Word::WriteCursor,
+        Word::ReadCursor,
+        Word::PayloadWritePosition,
+        Word::PayloadReadPosition,
+        Word::DroppedEvents,
+        Word::DroppedPayloadBytes,
+        Word::DegradedEvents,
+        Word::OverflowState,
+        Word::HostWaiting,
+        Word::RingStopped,
+        Word::WriterWaiting,
     ] {
-        assert_eq!(ctrl(base, off), 0, "offset {off} starts at zero");
+        assert_eq!(ctrl(&base, w), 0, "{w:?} starts at zero");
     }
 }
 

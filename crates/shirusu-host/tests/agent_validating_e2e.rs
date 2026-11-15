@@ -44,8 +44,8 @@ fn agent_multi_thread_to_validating_host_all_events_accounted() {
     let mut workers = Vec::new();
     for tid in 1..=threads {
         let handle = agent.thread_begin(tid).expect("slot for thread");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region base");
-        let mut worker = unsafe { DrainWorker::new(base, cfg, handle.generation) };
+        let base = agent.thread_region(tid).expect("region base");
+        let mut worker = unsafe { DrainWorker::new(base.clone(), cfg, handle.generation) }.unwrap();
         worker.set_identity(RingIdentity::new(
             ProcessInstanceId(1),
             RingId(tid),
@@ -101,8 +101,8 @@ fn independent_host_drains_32_rings_while_producers_write() {
     let mut workers = Vec::new();
     for tid in 1..=threads {
         let handle = agent.thread_begin(tid).expect("slot for thread");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region base");
-        let worker = unsafe { DrainWorker::new(base, cfg, handle.generation) };
+        let base = agent.thread_region(tid).expect("region base");
+        let worker = unsafe { DrainWorker::new(base.clone(), cfg, handle.generation) }.unwrap();
         workers.push(worker);
     }
     let mut producers = Vec::new();

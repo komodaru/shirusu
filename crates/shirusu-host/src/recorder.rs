@@ -24,8 +24,8 @@ use crate::trace_pipeline::{RingValidation, SharedDrainWorker, TracePipeline};
 use crate::{CommittedRangeCollector, DrainWorker, IntegrityLevel, IntegrityReport};
 use shirusu_trace::proto::{CaptureEnvironment, ProfileSummary};
 use shirusu_trace::writer::{Durability, WriterOptions};
-use shirusu_transport::layout;
 use shirusu_transport::ring::SharedRegion;
+use shirusu_transport::shm::{Shm, Word};
 use shirusu_transport::RingConfig;
 #[cfg(windows)]
 use shirusu_transport_win::SharedMapping;
@@ -158,44 +158,26 @@ pub struct RingSpec {
     pub expected_generation: u64,
 }
 
-/// Ring の裏付けメモリ。
-enum RingMapping {
-    /// Host が所有する共有領域（同一プロセスの記録用）。
-    Local(Box<SharedRegion>),
-    /// 呼び出し側が所有する領域への借用ビュー。テストと同一プロセス
-    /// ホスティング用。存続期間は呼び出し側が保証する。
-    Borrowed { base: *mut u8, len: usize },
-    /// Windows の File Mapping（Host が作成し対象へ複製したもの）。
-    #[cfg(windows)]
-    Win(SharedMapping),
-}
+/// Ring の裏付けメモリ。ヒープ・借用・Windows の File Mapping のどれでも
+/// 実体は [`Shm`] が共有して保つ (セッションより先に元の所有者が手放しても
+/// 解放されない)。
+struct RingMapping(Shm);
 impl RingMapping {
-    fn base(&self) -> *mut u8 {
-        match self {
-            Self::Local(r) => r.base(),
-            Self::Borrowed { base, .. } => *base,
-            #[cfg(windows)]
-            Self::Win(m) => m.as_ptr(),
-        }
+    fn control(&self) -> shirusu_transport::Control<'_> {
+        self.0.control()
     }
     fn len(&self) -> usize {
-        match self {
-            Self::Local(r) => r.config.required_len(),
-            Self::Borrowed { len, .. } => *len,
-            #[cfg(windows)]
-            Self::Win(m) => m.len(),
-        }
+        self.0.len()
     }
     /// Agent が Control 領域を初期化済みか（Magic の出現で判定する）。
     ///
     /// 判定は通常のバイト読みではなく Magic の `Acquire` 読みで行う
-    /// (レビュー第5回 #4)。書き手 (init_control) は全フィールドを
+    /// (レビュー第5回 #4)。書き手 (init) は全フィールドを
     /// 書いてから Magic を `Release` で公開するため、この Acquire
     /// 読みで Magic を観測した時点で、初期化済みの全フィールドが
     /// 見えることが保証される。
     fn agent_initialized(&self) -> bool {
-        self.len() >= layout::OFF_MAGIC + 8
-            && layout::load(self.base(), layout::OFF_MAGIC, Ordering::Acquire) == layout::MAGIC
+        self.control().is_published()
     }
 }
 
@@ -418,11 +400,10 @@ fn retire_ring_worker(retiring: &mut Vec<RetiringWorker>, ring: &mut RingEndpoin
         trace_thread_id: ring.trace_thread_id,
     });
     ring.stopped = false;
-    ring.generation = layout::load(
-        ring.mapping.base(),
-        layout::OFF_GENERATION,
-        Ordering::Acquire,
-    );
+    ring.generation = ring
+        .mapping
+        .control()
+        .load(Word::Generation, Ordering::Acquire);
 }
 
 /// Space the Trace file keeps allocated ahead of its end (P2-10).
@@ -496,8 +477,8 @@ impl CaptureSession {
         config.environment.capture_config.push_str(&format!(
             "; host_pipeline=copy-release-then-validate; host_queue_bytes={}; host_event_compression=backlog-adaptive; ring_descriptors={}; ring_payload_bytes={}",
             crate::trace_pipeline::QUEUE_BYTE_BUDGET,
-            config.ring_config.descriptor_capacity,
-            config.ring_config.payload_capacity,
+            config.ring_config.descriptor_capacity(),
+            config.ring_config.payload_capacity(),
         ));
         let file = File::create(path.as_ref())?;
         let mut recorder = TraceRecorder::from_environment_with_options(
@@ -599,20 +580,17 @@ impl CaptureSession {
                 && ring.mapping.agent_initialized()
         };
         for ring in self.rings.iter().filter(|r| active(r)) {
-            layout::store(
-                ring.mapping.base(),
-                layout::OFF_HOST_WAITING,
-                1,
-                Ordering::Relaxed,
-            );
+            ring.mapping
+                .control()
+                .store(Word::HostWaiting, 1, Ordering::Relaxed);
         }
         // Order the flag stores before the cursor loads (Dekker with the
         // writer's cursor store and flag load).
         std::sync::atomic::fence(Ordering::SeqCst);
         self.rings.iter().filter(|r| active(r)).any(|ring| {
-            let base = ring.mapping.base();
-            layout::load(base, layout::OFF_WRITE_CURSOR, Ordering::Acquire)
-                != layout::load(base, layout::OFF_READ_CURSOR, Ordering::Relaxed)
+            let ctl = ring.mapping.control();
+            ctl.load(Word::WriteCursor, Ordering::Acquire)
+                != ctl.load(Word::ReadCursor, Ordering::Relaxed)
         })
     }
 
@@ -620,12 +598,9 @@ impl CaptureSession {
     pub fn disarm_host_waiting(&mut self) {
         for ring in &self.rings {
             if ring.mapping.agent_initialized() {
-                layout::store(
-                    ring.mapping.base(),
-                    layout::OFF_HOST_WAITING,
-                    0,
-                    Ordering::Relaxed,
-                );
+                ring.mapping
+                    .control()
+                    .store(Word::HostWaiting, 0, Ordering::Relaxed);
             }
         }
     }
@@ -635,7 +610,7 @@ impl CaptureSession {
     fn observe_process_missing_calls(&mut self) {
         for ring in &self.rings {
             // 未初期化の Mapping も 0 で埋まっているため、Magic を問わず読む。
-            let seen = layout::process_missing_calls(ring.mapping.base());
+            let seen = ring.mapping.control().process_missing_calls();
             self.coverage_missing_calls = self.coverage_missing_calls.max(seen);
         }
     }
@@ -712,22 +687,13 @@ impl CaptureSession {
         region: SharedRegion,
         spec: RingSpec,
     ) -> Result<usize, SessionError> {
-        self.add_ring(RingMapping::Local(Box::new(region)), spec, None)
+        self.add_ring(RingMapping(region.shm().clone()), spec, None)
     }
 
-    /// 呼び出し側所有の領域を借用ビューで登録する。
-    ///
-    /// # Safety
-    /// `base` は `len` 分の共有領域を指し、セッションが終わるまで
-    /// 有効であること。Agent 側の領域（Agent が保持する SharedRegion）を
+    /// 他の所有者 (Agent が保持する領域など) と実体を共有して登録する。
     /// Host と同一プロセスで回収する場合に使う。
-    pub unsafe fn add_borrowed_ring(
-        &mut self,
-        base: *mut u8,
-        len: usize,
-        spec: RingSpec,
-    ) -> Result<usize, SessionError> {
-        self.add_ring(RingMapping::Borrowed { base, len }, spec, None)
+    pub fn add_shared_ring(&mut self, shm: Shm, spec: RingSpec) -> Result<usize, SessionError> {
+        self.add_ring(RingMapping(shm), spec, None)
     }
 
     /// Windows の File Mapping を Ring として登録する。space_available
@@ -740,7 +706,7 @@ impl CaptureSession {
         spec: RingSpec,
         space_notify: Option<std::sync::Arc<shirusu_transport_win::RingNotify>>,
     ) -> Result<usize, SessionError> {
-        self.add_ring(RingMapping::Win(mapping), spec, space_notify)
+        self.add_ring(RingMapping(mapping.shm().clone()), spec, space_notify)
     }
 
     fn add_ring(
@@ -799,11 +765,10 @@ impl CaptureSession {
             // `CommittedRangeCollector::collect`)。張り替えは世代が
             // 安定してから次の poll で効く。
             if ring.worker.is_some() && ring.mapping.agent_initialized() {
-                let found = layout::load(
-                    ring.mapping.base(),
-                    layout::OFF_GENERATION,
-                    Ordering::Acquire,
-                );
+                let found = ring
+                    .mapping
+                    .control()
+                    .load(Word::Generation, Ordering::Acquire);
                 if found != ring.generation {
                     retire_ring_worker(&mut self.retiring, ring);
                     // 新しい incarnation は Trace 上の別スレッドとして
@@ -829,12 +794,17 @@ impl CaptureSession {
                 // per payload for the entire Ring lifetime. Event context and
                 // generation validation remain independent of that history.
                 ring.worker = Some(RingValidation::new(worker));
-                // SAFETY: mapping は RingConfig 分の共有領域を指し、
-                // セッションの存続期間中有効（add_ring の契約）。新しい
-                // incarnation は読み位置 0 から始まる。
-                ring.collector = Some(unsafe {
-                    CommittedRangeCollector::new(ring.mapping.base(), self.config.ring_config)
-                });
+                // SAFETY: この Ring の読み手はこの collector だけで、新しい
+                // incarnation は読み位置 0 から始まる。領域の長さは add_ring で
+                // 確かめてあるので Err にはならない。
+                let Ok(collector) = (unsafe {
+                    CommittedRangeCollector::new(ring.mapping.0.clone(), self.config.ring_config)
+                }) else {
+                    ring.stopped = true;
+                    stats.stopped_rings += 1;
+                    continue;
+                };
+                ring.collector = Some(collector);
             }
             let shared = ring.worker.as_ref().expect("worker just ensured");
             let collector = ring.collector.as_mut().expect("collector just ensured");

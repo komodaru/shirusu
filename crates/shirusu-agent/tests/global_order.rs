@@ -40,9 +40,10 @@ fn enter(a: &Agent, thread_id: u64, call_id: u64) {
 }
 
 fn drain_orders(a: &Agent, thread_id: u64, allow: bool) -> Vec<u64> {
-    let base = unsafe { a.thread_region_base(thread_id) }.expect("region base");
-    let mut reader =
-        unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.with_global_order(allow);
+    let base = a.thread_region(thread_id).expect("region base");
+    let mut reader = unsafe { RingReader::new(base.clone(), RingConfig::new(64, 4096)) }
+        .unwrap()
+        .with_global_order(allow);
     reader
         .drain_all()
         .events
@@ -130,8 +131,8 @@ fn reader_rejects_stamped_descriptors_when_disabled() {
     // 無効な設定で読むと GlobalOrderNotAllowed で Ring が止まる。
     let a = agent(true);
     enter(&a, 1, 1);
-    let base = unsafe { a.thread_region_base(1) }.expect("region base");
-    let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+    let base = a.thread_region(1).expect("region base");
+    let mut reader = unsafe { RingReader::new(base.clone(), RingConfig::new(64, 4096)) }.unwrap();
     let batch = reader.drain_all();
     assert!(batch.integrity_error.is_some());
     assert_eq!(batch.events.len(), 0);

@@ -30,8 +30,8 @@ fn agent_stamps_come_from_timestamp_source_not_wait_clock() {
     ts.advance(5);
     a.record_enter(1, 1, 1, 2, 0, b"y");
 
-    let base = unsafe { a.thread_region_base(1) }.expect("region base");
-    let mut rd = unsafe { RingReader::new(base, cfg) };
+    let base = a.thread_region(1).expect("region base");
+    let mut rd = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
     let b = rd.drain_all();
     assert_eq!(b.integrity_error, None);
     assert_eq!(b.events.len(), 2);

@@ -383,7 +383,7 @@ fn main() {
 
     // M2: Host の処理量 (DrainWorker の検証付き回収＋TraceRecorder 変換)。
     let cfg2 = RingConfig::new(65536, 4 * 1024 * 1024);
-    let region = Arc::new(SharedRegion::new(cfg2, 1, 1));
+    let region = Arc::new(SharedRegion::new(cfg2, 1, 1).unwrap());
     {
         let r2 = region.clone();
         let mut w = shirusu_e2e::writer_over(&r2, true);
@@ -396,7 +396,7 @@ fn main() {
         }
     }
     let t0 = Instant::now();
-    let mut worker = unsafe { DrainWorker::new(region.base(), cfg2, 1) };
+    let mut worker = unsafe { DrainWorker::new(region.shm().clone(), cfg2, 1) }.unwrap();
     let drained = worker.drain_all();
     assert!(
         worker.loss_events.is_empty() && !worker.integrity_lost,

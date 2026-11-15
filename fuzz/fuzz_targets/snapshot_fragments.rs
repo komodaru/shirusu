@@ -19,7 +19,7 @@ fuzz_target!(|data: &[u8]| {
     let mode = data[1] % 3;
     let payload = &data[2..];
     let cfg = RingConfig::new(512, 32768);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut w = unsafe {
         region.writer(

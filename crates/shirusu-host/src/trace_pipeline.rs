@@ -919,7 +919,7 @@ mod tests {
         use shirusu_transport::ring::{EventInput, SharedRegion, WriterPolicy};
         use shirusu_transport::RingConfig;
         let cfg = RingConfig::new(16, 512);
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut ring = unsafe {
             region.writer(
@@ -930,7 +930,8 @@ mod tests {
                 clock,
             )
         };
-        let mut collector = unsafe { crate::CommittedRangeCollector::new(region.base(), cfg) };
+        let mut collector =
+            unsafe { crate::CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
         let mut validator = DrainWorker::for_chunks(cfg, 1);
         validator.loss_events.extend(
             (0..LOSS_FLUSH_RECORDS as u64).map(|count| LossEvent::SequenceGap { count: count + 1 }),

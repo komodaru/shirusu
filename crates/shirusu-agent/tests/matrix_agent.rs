@@ -98,7 +98,7 @@ fn record_auto_begins_unknown_thread() {
         RecordResult::Written(_)
     ));
     // 自動で Slot が確保されている
-    assert!(unsafe { a.thread_region_base(55) }.is_some());
+    assert!(a.thread_region(55).is_some());
     assert_eq!(a.pool().free_count(), 1);
 }
 #[test]
@@ -175,7 +175,7 @@ fn forget_releases_agent_side_but_pool_slot_stays() {
     let a = agent(1);
     a.thread_begin(1).unwrap();
     a.thread_forget(1);
-    assert!(unsafe { a.thread_region_base(1) }.is_none());
+    assert!(a.thread_region(1).is_none());
     assert_eq!(
         a.record(1, CallOrigin::Application, inp(b"x")),
         RecordResult::NoSlot

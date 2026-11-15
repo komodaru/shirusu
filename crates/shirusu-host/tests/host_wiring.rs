@@ -4,8 +4,8 @@
 
 use shirusu_host::{DrainWorker, IntegrityLevel, NotifyingDrainWorker, ValidatingHost};
 use shirusu_transport::clock::ManualClock;
-use shirusu_transport::layout;
 use shirusu_transport::ring::{EventInput, RingWriter, SharedRegion, WriterPolicy};
+use shirusu_transport::shm::Word;
 use shirusu_transport::validate::KnownConfig;
 use shirusu_transport::{CaptureState, Clock, EventKind, RingConfig};
 use shirusu_transport_win::RingNotify;
@@ -40,20 +40,17 @@ fn write(w: &mut RingWriter, kind: EventKind, call: u64, order: u64) {
 }
 
 fn set_writer_waiting(region: &SharedRegion, on: bool) {
-    layout::store(
-        region.base(),
-        layout::OFF_WRITER_WAITING,
-        on as u64,
-        Ordering::Release,
-    );
+    region
+        .control()
+        .store(Word::WriterWaiting, on as u64, Ordering::Release);
 }
 
 #[test]
 fn space_is_notified_only_while_the_writer_waits() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer(&region);
-    let inner = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+    let inner = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     let mut nw = NotifyingDrainWorker::new(inner, Arc::new(RingNotify::new().unwrap()), &region);
 
     write(&mut w, EventKind::CallEnter, 1, 0);
@@ -85,9 +82,9 @@ fn space_is_notified_only_while_the_writer_waits() {
 #[test]
 fn wrapper_reports_the_inner_worker_counts() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer(&region);
-    let inner = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+    let inner = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     let mut nw = NotifyingDrainWorker::new(inner, Arc::new(RingNotify::new().unwrap()), &region);
     write(&mut w, EventKind::CallEnter, 1, 0);
     write(&mut w, EventKind::CallEnter, 2, 0);
@@ -108,9 +105,9 @@ fn wrapper_reports_the_inner_worker_counts() {
 #[test]
 fn aborted_calls_are_counted_each() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer(&region);
-    let mut worker = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+    let mut worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     assert_eq!(worker.aborted_call_count(), 0);
     for call in 1..=3 {
         write(&mut w, EventKind::CallEnter, call, 0);
@@ -124,18 +121,18 @@ fn aborted_calls_are_counted_each() {
 #[test]
 fn validating_host_accepts_global_order_only_when_enabled() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer(&region);
     write(&mut w, EventKind::CallEnter, 1, 5);
     let known = KnownConfig::new(cfg, cfg.required_len());
 
     let mut strict = ValidatingHost::new(known, 1);
-    assert!(strict.drain_image(region.as_slice()).is_err());
+    assert!(strict.drain_image(&region.snapshot()).is_err());
     assert!(strict.is_stopped());
 
     let mut host = ValidatingHost::new(known, 1);
     host.set_global_order(true);
-    let events = host.drain_image(region.as_slice()).unwrap();
+    let events = host.drain_image(&region.snapshot()).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].descriptor.global_order, 5);
 }

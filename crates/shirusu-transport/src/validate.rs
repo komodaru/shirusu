@@ -8,23 +8,24 @@ use crate::layout::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KnownConfig {
-    pub descriptor_capacity: u64,
-    pub payload_capacity: u64,
+    cfg: RingConfig,
     pub mapping_len: usize,
 }
 impl KnownConfig {
     pub fn new(cfg: RingConfig, mapping_len: usize) -> Self {
-        Self {
-            descriptor_capacity: cfg.descriptor_capacity as u64,
-            payload_capacity: cfg.payload_capacity as u64,
-            mapping_len,
-        }
+        Self { cfg, mapping_len }
+    }
+    pub fn descriptor_capacity(&self) -> u64 {
+        self.cfg.descriptor_capacity_u64()
+    }
+    pub fn payload_capacity(&self) -> u64 {
+        self.cfg.payload_capacity_u64()
+    }
+    pub fn config(&self) -> RingConfig {
+        self.cfg
     }
     fn ring_cfg(&self) -> RingConfig {
-        RingConfig {
-            descriptor_capacity: self.descriptor_capacity as usize,
-            payload_capacity: self.payload_capacity as usize,
-        }
+        self.cfg
     }
 }
 
@@ -128,12 +129,12 @@ pub fn validate_control(
     validate_cursor_pair(
         snap.write_cursor,
         snap.read_cursor,
-        known.descriptor_capacity,
+        known.descriptor_capacity(),
     )?;
     validate_cursor_pair(
         snap.payload_write_position,
         snap.payload_read_position,
-        known.payload_capacity,
+        known.payload_capacity(),
     )?;
     if let Some(p) = prev {
         // 世代が違う像は別 Ring のものなので、Cursor 比較より先に世代で弾く。
@@ -209,10 +210,10 @@ pub fn decode_descriptor(
                 capacity: MAX_DROPPED_ORIGINAL_LEN,
             });
         }
-    } else if d.payload_len as u64 > known.payload_capacity {
+    } else if d.payload_len as u64 > known.payload_capacity() {
         return Err(IntegrityError::PayloadTooLarge {
             len: d.payload_len as u64,
-            capacity: known.payload_capacity,
+            capacity: known.payload_capacity(),
         });
     }
     Ok(d)
@@ -295,12 +296,12 @@ pub fn decode_payload(
     if desc.payload_dropped() || desc.payload_len == 0 {
         return Ok(Vec::new());
     }
-    let cap = known.payload_capacity as usize;
+    let cap = known.payload_capacity() as usize;
     if payload_region.len() < cap || desc.payload_len as usize > cap {
         return Err(IntegrityError::PayloadRangeInvalid);
     }
     let len = desc.payload_len as usize;
-    let start = (desc.payload_position % known.payload_capacity) as usize;
+    let start = (desc.payload_position % known.payload_capacity()) as usize;
     let mut out = vec![0u8; len];
     let first = core::cmp::min(len, cap - start);
     out[..first].copy_from_slice(&payload_region[start..start + first]);
@@ -479,12 +480,12 @@ impl ValidatingReader {
             .read_cursor
             .checked_add(count)
             .ok_or(IntegrityError::PayloadRangeInvalid)?;
-        if count > self.known.descriptor_capacity || end_cursor > snap.write_cursor {
+        if count > self.known.descriptor_capacity() || end_cursor > snap.write_cursor {
             return Err(IntegrityError::CursorRegressed {
                 which: "chunk beyond committed descriptors",
             });
         }
-        if chunk.payload.len() as u64 > self.known.payload_capacity {
+        if chunk.payload.len() as u64 > self.known.payload_capacity() {
             return Err(IntegrityError::PayloadRangeInvalid);
         }
         let payload_end = chunk
@@ -592,7 +593,7 @@ impl ValidatingReader {
         let expected_sequence = if snap.read_cursor == 0 {
             1
         } else {
-            let idx = slot_index(snap.read_cursor - 1, self.known.descriptor_capacity) as usize;
+            let idx = slot_index(snap.read_cursor - 1, self.known.descriptor_capacity()) as usize;
             let off = cfg.descriptors_offset() + idx * 64;
             let desc =
                 decode_descriptor(&image[off..off + 64], &self.known, self.allow_global_order)?;
@@ -646,11 +647,11 @@ impl ValidatingReader {
         // Ring capacity as well as the caller limit, even before the first
         // descriptor has established sequence/payload continuity.
         let count = (snap.write_cursor - cursor)
-            .min(self.known.descriptor_capacity)
+            .min(self.known.descriptor_capacity())
             .min(max as u64) as usize;
         let mut events = Vec::with_capacity(count);
         while cursor < snap.write_cursor && events.len() < max {
-            let idx = slot_index(cursor, self.known.descriptor_capacity) as usize;
+            let idx = slot_index(cursor, self.known.descriptor_capacity()) as usize;
             let off = cfg.descriptors_offset() + idx * 64;
             // The image is already a stable Host-owned snapshot. Keep the
             // defensive fixed-size copy without allocating for every event.
@@ -680,7 +681,7 @@ impl ValidatingReader {
             self.payload_read_position = stored_end;
             // 3. 有効範囲に限って Payload をコピー
             let payload_region =
-                &image[cfg.payload_offset()..cfg.payload_offset() + cfg.payload_capacity];
+                &image[cfg.payload_offset()..cfg.payload_offset() + cfg.payload_capacity()];
             let payload = decode_payload(&desc, payload_region, &self.known)?;
             events.push(crate::ring::ReceivedEvent {
                 descriptor: desc,
@@ -713,11 +714,7 @@ mod proofs {
         let len: u32 = kani::any();
         bytes[0..2].copy_from_slice(&1u16.to_le_bytes());
         bytes[4..8].copy_from_slice(&len.to_le_bytes());
-        let known = KnownConfig {
-            descriptor_capacity: 16,
-            payload_capacity: 1024,
-            mapping_len: usize::MAX,
-        };
+        let known = KnownConfig::new(RingConfig::new(16, 1024), usize::MAX);
         if let Ok(d) = decode_descriptor(&bytes, &known, false) {
             assert!(d.payload_len <= 1024);
         }
@@ -748,11 +745,7 @@ mod proofs {
             region[i] = i as u8;
             i += 1;
         }
-        let known = KnownConfig {
-            descriptor_capacity: 4,
-            payload_capacity: 32,
-            mapping_len: usize::MAX,
-        };
+        let known = KnownConfig::new(RingConfig::new(4, 32), usize::MAX);
         let out = decode_payload(&desc, &region, &known).unwrap();
         if dropped || len == 0 {
             assert!(out.is_empty());
@@ -810,11 +803,7 @@ mod proofs {
         d.payload_len = kani::any();
         d.global_order = kani::any();
         let allow: bool = kani::any();
-        let known = KnownConfig {
-            descriptor_capacity: 4,
-            payload_capacity: 64,
-            mapping_len: usize::MAX,
-        };
+        let known = KnownConfig::new(RingConfig::new(4, 64), usize::MAX);
         if let Ok(ok) = decode_descriptor(&d.to_bytes(), &known, allow) {
             assert!(EventKind::from_u16(ok.kind).is_some());
             assert!(ok.kind != EventKind::Unknown as u16);
@@ -828,37 +817,7 @@ mod proofs {
 mod tests {
     use super::*;
     use crate::layout::RingConfig;
-
-    /// Vec<u8> はポインタの 8 バイト整列を保証しないため、layout の原子操作
-    /// (AtomicU64 参照を作る) を適用する画像は u64 バッファで保持する。
-    /// 整列していないポインタへの原子操作は UB (Miri 検出)。
-    pub struct AlignedImage {
-        words: Vec<u64>,
-        len: usize,
-    }
-    impl AlignedImage {
-        pub fn zeroed(len: usize) -> Self {
-            Self {
-                words: vec![0; len.div_ceil(8)],
-                len,
-            }
-        }
-        pub fn as_slice(&self) -> &[u8] {
-            unsafe { std::slice::from_raw_parts(self.words.as_ptr() as *const u8, self.len) }
-        }
-        pub fn as_mut_ptr(&mut self) -> *mut u8 {
-            self.words.as_mut_ptr() as *mut u8
-        }
-        pub fn as_mut_slice(&mut self) -> &mut [u8] {
-            unsafe { std::slice::from_raw_parts_mut(self.words.as_mut_ptr() as *mut u8, self.len) }
-        }
-    }
-    impl std::ops::Deref for AlignedImage {
-        type Target = [u8];
-        fn deref(&self) -> &[u8] {
-            self.as_slice()
-        }
-    }
+    use crate::shm::{Image as AlignedImage, Word};
 
     fn known() -> KnownConfig {
         KnownConfig::new(
@@ -869,19 +828,9 @@ mod tests {
     fn control_image(write: u64, read: u64) -> AlignedImage {
         let cfg = RingConfig::new(16, 256);
         let mut img = AlignedImage::zeroed(cfg.required_len());
-        init_control(img.as_mut_ptr(), cfg, 3, 9);
-        store(
-            img.as_mut_ptr(),
-            OFF_WRITE_CURSOR,
-            write,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        store(
-            img.as_mut_ptr(),
-            OFF_READ_CURSOR,
-            read,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        img.init(cfg, 3, 9);
+        img.set(Word::WriteCursor, write);
+        img.set(Word::ReadCursor, read);
         img
     }
     #[test]
@@ -900,31 +849,30 @@ mod tests {
         // D57 の fuzz が見つけた穴：前像より Payload 位置が後退した像を
         // validate_control が受理していた。書き手の payload_write_position は
         // 単調にしか進まないため、後退は破壊された像として弾く。
-        use std::sync::atomic::Ordering::Relaxed;
         let mut img1 = control_image(5, 2);
-        store(img1.as_mut_ptr(), OFF_PAYLOAD_WRITE_POSITION, 100, Relaxed);
-        store(img1.as_mut_ptr(), OFF_PAYLOAD_READ_POSITION, 40, Relaxed);
+        img1.set(Word::PayloadWritePosition, 100);
+        img1.set(Word::PayloadReadPosition, 40);
         let s = validate_control(&img1[..CONTROL_SIZE], &known(), None).unwrap();
         // 書き込み位置の後退を弾く。
         let mut img2 = control_image(6, 3);
-        store(img2.as_mut_ptr(), OFF_PAYLOAD_WRITE_POSITION, 99, Relaxed);
-        store(img2.as_mut_ptr(), OFF_PAYLOAD_READ_POSITION, 40, Relaxed);
+        img2.set(Word::PayloadWritePosition, 99);
+        img2.set(Word::PayloadReadPosition, 40);
         assert!(matches!(
             validate_control(&img2[..CONTROL_SIZE], &known(), Some(&s)),
             Err(IntegrityError::CursorRegressed { .. })
         ));
         // 読み位置の後退も弾く。
         let mut img3 = control_image(6, 3);
-        store(img3.as_mut_ptr(), OFF_PAYLOAD_WRITE_POSITION, 100, Relaxed);
-        store(img3.as_mut_ptr(), OFF_PAYLOAD_READ_POSITION, 39, Relaxed);
+        img3.set(Word::PayloadWritePosition, 100);
+        img3.set(Word::PayloadReadPosition, 39);
         assert!(matches!(
             validate_control(&img3[..CONTROL_SIZE], &known(), Some(&s)),
             Err(IntegrityError::CursorRegressed { .. })
         ));
         // 前進は受理する。
         let mut img4 = control_image(6, 3);
-        store(img4.as_mut_ptr(), OFF_PAYLOAD_WRITE_POSITION, 120, Relaxed);
-        store(img4.as_mut_ptr(), OFF_PAYLOAD_READ_POSITION, 40, Relaxed);
+        img4.set(Word::PayloadWritePosition, 120);
+        img4.set(Word::PayloadReadPosition, 40);
         assert!(validate_control(&img4[..CONTROL_SIZE], &known(), Some(&s)).is_ok());
     }
     #[test]
@@ -1046,7 +994,7 @@ mod tests {
         use crate::ring::{SharedRegion, WriterPolicy};
         let cfg = RingConfig::new(8, 256);
         let known = KnownConfig::new(cfg, cfg.required_len());
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: std::sync::Arc<dyn crate::clock::Clock> =
             std::sync::Arc::new(ManualClock::new());
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
@@ -1064,7 +1012,7 @@ mod tests {
         }
         // 2 件目の Descriptor の payload_position だけを +1 ずらす
         let mut image = AlignedImage::zeroed(cfg.required_len());
-        image.as_mut_slice().copy_from_slice(region.as_slice());
+        image.as_mut_slice().copy_from_slice(&region.snapshot());
         let off = cfg.descriptors_offset() + 64;
         let mut d = EventDescriptor::from_bytes(&image[off..off + 64]).unwrap();
         assert_eq!(d.payload_position, 3);
@@ -1084,11 +1032,10 @@ mod tests {
     #[test]
     fn validating_reader_rejects_zero_sequence_slot() {
         use crate::clock::ManualClock;
-        use crate::layout::OFF_WRITE_CURSOR;
         use crate::ring::{SharedRegion, WriterPolicy};
         let cfg = RingConfig::new(8, 256);
         let known = KnownConfig::new(cfg, cfg.required_len());
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: std::sync::Arc<dyn crate::clock::Clock> =
             std::sync::Arc::new(ManualClock::new());
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
@@ -1105,16 +1052,11 @@ mod tests {
         // write_cursor だけを 2 に進め、slot 1 に Sequence 0 の Descriptor を置く
         // （書き手は 1 から振るため、確定済みスロットの 0 は未公開スロットの混入＝矛盾）
         let mut image = AlignedImage::zeroed(cfg.required_len());
-        image.as_mut_slice().copy_from_slice(region.as_slice());
+        image.as_mut_slice().copy_from_slice(&region.snapshot());
         let off = cfg.descriptors_offset() + 64;
         let zero_seq = EventDescriptor::new(EventKind::CallEnter, 0);
         image.as_mut_slice()[off..off + 64].copy_from_slice(&zero_seq.to_bytes());
-        crate::layout::store(
-            image.as_mut_ptr(),
-            OFF_WRITE_CURSOR,
-            2,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        image.set(Word::WriteCursor, 2);
         let mut vr = ValidatingReader::new(known, 1);
         assert!(matches!(
             vr.drain_image(image.as_slice()),
@@ -1132,7 +1074,7 @@ mod tests {
         use crate::ring::{SharedRegion, WriterPolicy};
         let cfg = RingConfig::new(8, 256);
         let known = KnownConfig::new(cfg, cfg.required_len());
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: std::sync::Arc<dyn crate::clock::Clock> =
             std::sync::Arc::new(ManualClock::new());
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
@@ -1160,7 +1102,7 @@ mod tests {
         // 次の格納 Payload は落とした件と同じ位置から始まる
         write(&mut w, crate::descriptor::CaptureState::Captured, b"z");
         let mut vr = ValidatingReader::new(known, 1);
-        let evs = vr.drain_image(region.as_slice()).unwrap();
+        let evs = vr.drain_image(&region.snapshot()).unwrap();
         assert_eq!(evs.len(), 3);
         assert_eq!(evs[0].descriptor.payload_position, 0);
         assert_eq!(evs[1].descriptor.payload_position, 3);

@@ -671,7 +671,7 @@ diff_case!(
 fn burst_capacity_matches_the_documented_size() {
     use shirusu_transport::layout::{RingConfig, CONTROL_SIZE};
     let burst = RingConfig::BURST;
-    assert_eq!(burst.descriptor_capacity, 65536);
-    assert_eq!(burst.payload_capacity, 1 << 20);
+    assert_eq!(burst.descriptor_capacity(), 65536);
+    assert_eq!(burst.payload_capacity(), 1 << 20);
     assert_eq!(burst.required_len(), CONTROL_SIZE + (5 << 20));
 }

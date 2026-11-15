@@ -22,7 +22,7 @@ fn pbt_cases(default: u32) -> u32 {
 }
 fn setup(desc: usize, pay: usize) -> (SharedRegion, RingWriter, RingReader) {
     let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let w = unsafe {
         region.writer(

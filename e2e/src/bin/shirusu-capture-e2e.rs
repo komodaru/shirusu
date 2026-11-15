@@ -631,10 +631,7 @@ mod win {
             // COM activation can burst beyond the production ring before the
             // first drain. This fixture checks transparency/pairing; pressure
             // and loss accounting are tested separately with production sizes.
-            cfg.session.ring_config = RingConfig {
-                descriptor_capacity: 32768,
-                payload_capacity: 4 * 1024 * 1024,
-            };
+            cfg.session.ring_config = RingConfig::new(32768, 4 * 1024 * 1024);
             let cmdline = format!(
                 "\"{}\" --verify-out \"{}\"",
                 target.display(),

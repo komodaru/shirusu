@@ -11,6 +11,7 @@ use shirusu_host::{
     CommittedRangeCollector, DrainWorker,
 };
 use shirusu_trace::proto::{CaptureEnvironment, SessionMetadata};
+use shirusu_transport::Shm;
 use shirusu_transport::{
     clock::TimestampSource, context::HostMonitor, layout::RingConfig, ring::WriteOutcome,
     slot::SlotPool,
@@ -238,10 +239,10 @@ fn main() {
     // for a consumer is measured here. Compare with native-performance losses.
     // SAFETY: Agent owns this registered ring until after worker is dropped;
     // only this thread produces and this worker consumes it.
-    let base = unsafe { agent.thread_region_base(1) }.unwrap();
+    let base = agent.thread_region(1).unwrap();
     // Production path: the collection thread copies and releases committed
     // contents; the Trace worker validates them before conversion.
-    let mut collector = unsafe { CommittedRangeCollector::new(base, cfg) };
+    let mut collector = unsafe { CommittedRangeCollector::new(base, cfg) }.unwrap();
     let mut worker = DrainWorker::for_chunks(cfg, 1);
     for (owned, calls) in [false, true]
         .into_iter()
@@ -366,10 +367,10 @@ fn record_layers(
         capture_state: CaptureState::Captured,
         global_order: 0,
     };
-    let rounds = |name: &str, base: *mut u8, mut produce: Box<dyn FnMut(u64) + '_>| {
+    let rounds = |name: &str, base: Shm, mut produce: Box<dyn FnMut(u64) + '_>| {
         // SAFETY: base is a Ring of `cfg` owned for this function; the
         // producer and this collector run on this thread only.
-        let mut collector = unsafe { CommittedRangeCollector::new(base, cfg) };
+        let mut collector = unsafe { CommittedRangeCollector::new(base, cfg) }.unwrap();
         let mut samples = Vec::new();
         for round in 0..=ROUNDS {
             let start = Instant::now();
@@ -385,21 +386,22 @@ fn record_layers(
         }
         report(name, &mut samples, "event");
     };
-    let region = SharedRegion::new(cfg, 1, 7);
+    let region = SharedRegion::new(cfg, 1, 7).unwrap();
     // SAFETY: the region outlives the writer; this thread is its only writer.
     let mut writer = unsafe {
         RingWriter::new_with_timestamps(
-            region.base(),
+            region.shm().clone(),
             cfg,
             WriterPolicy::default(),
             shirusu_transport::clock::system_clock(),
             timestamps.clone(),
         )
-    };
+    }
+    .unwrap();
     let (enter_schema, leave_schema) = (api.enter_schema_id(), api.leave_schema_id());
     rounds(
         "layer_ring_writer_write",
-        region.base(),
+        region.shm().clone(),
         Box::new(|id| {
             let e = writer.write(input(
                 EventKind::CallEnter,
@@ -418,7 +420,7 @@ fn record_layers(
     );
     agent.thread_begin(2).expect("slot");
     // SAFETY: thread 2's Ring stays registered for this function.
-    let base = unsafe { agent.thread_region_base(2) }.unwrap();
+    let base = agent.thread_region(2).unwrap();
     rounds(
         "layer_agent_record",
         base,
@@ -430,7 +432,7 @@ fn record_layers(
     rt.ensure_thread(3);
     agent.thread_begin(3).expect("slot");
     // SAFETY: thread 3's Ring stays registered for this function.
-    let base = unsafe { agent.thread_region_base(3) }.unwrap();
+    let base = agent.thread_region(3).unwrap();
     rounds(
         "layer_hook_runtime_record",
         base,
@@ -443,7 +445,7 @@ fn record_layers(
     rt.ensure_thread(4);
     agent.thread_begin(4).expect("slot");
     // SAFETY: thread 4's Ring stays registered for this function.
-    let base = unsafe { agent.thread_region_base(4) }.unwrap();
+    let base = agent.thread_region(4).unwrap();
     rounds(
         "layer_hook_runtime_emit",
         base,

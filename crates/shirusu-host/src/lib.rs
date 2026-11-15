@@ -19,13 +19,13 @@ pub const MAX_RING_COUNT: usize = shirusu_hook::bootstrap::MAX_BOOTSTRAP_RINGS;
 use shirusu_transport::descriptor::EventKind;
 use shirusu_transport::layout::{self, LossCounters};
 use shirusu_transport::ring::{DrainBatch, ReceivedEvent, SharedRegion};
+use shirusu_transport::shm::{Control, Shm, ShmError, Word};
 use shirusu_transport::slot::{SlotHandle, SlotPool};
 use shirusu_transport::validate::{CommittedChunk, IntegrityError, KnownConfig, ValidatingReader};
 use shirusu_transport::RingConfig;
 use shirusu_transport_win::{notify_space_if_writer_waiting, RingNotify};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -164,11 +164,8 @@ pub struct TemporaryPayloadKey {
 }
 
 /// 共有 Control の現在の Generation を読む（診断用）。
-///
-/// # Safety
-/// `base` は RingConfig 分の共有領域を指し、読み取りの間も有効であること。
-pub unsafe fn ring_generation(base: *const u8) -> u64 {
-    layout::load(base, layout::OFF_GENERATION, Ordering::Acquire)
+pub fn ring_generation(ctl: Control<'_>) -> u64 {
+    ctl.load(Word::Generation, Ordering::Acquire)
 }
 
 /// 共有 Control が初期化され (Magic が現れ)、Generation が期待値へ
@@ -181,19 +178,15 @@ pub unsafe fn ring_generation(base: *const u8) -> u64 {
 /// (レビュー #4 の production_path_interprocess 仮説)。通知
 /// (data_ready) の残留は「その世代が始まった」証拠にはならないため、
 /// Reader を作る前に Control 自身で遷移を確認するのが正しい順序。
-///
-/// # Safety
-/// `base` は RingConfig 分の共有領域を指し、待機の間も有効であること。
-pub unsafe fn wait_for_ring_generation(
-    base: *const u8,
+pub fn wait_for_ring_generation(
+    ctl: Control<'_>,
     expected_generation: u64,
     timeout: std::time::Duration,
 ) -> Result<(), u64> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        let magic = layout::load(base, layout::OFF_MAGIC, Ordering::Acquire);
-        // SAFETY: 呼び出し側の契約に従う (ring_generation と同じ前提)。
-        let generation = unsafe { ring_generation(base) };
+        let magic = ctl.load(Word::Magic, Ordering::Acquire);
+        let generation = ring_generation(ctl);
         if magic == layout::MAGIC && generation == expected_generation {
             return Ok(());
         }
@@ -230,27 +223,24 @@ pub unsafe fn wait_for_ring_generation(
 /// 取り込む (読み捨てるとしてもコピー自体がデータレースになる) 上に、
 /// 帯域も浪費していた (32 Ring × 2ms 周期で約 20GiB/s)。この関数は
 /// その全体コピーの置き換えである。戻り値は写したバイト数 (観測用)。
-///
-/// # Safety
-/// `base` は `cfg` 分の共有領域を指し、呼び出し中有効であること。
-/// `image` の長さは `cfg.required_len()` 以上であること。
-unsafe fn snapshot_committed_range(
-    base: *const u8,
+/// 領域か像が `cfg` を収めなければ何も写さず 0 を返す。
+fn snapshot_committed_range(
+    shm: &Shm,
     image: &mut [u8],
     cfg: RingConfig,
     from_cursor: u64,
     from_payload_pos: u64,
     include_prev_descriptor: bool,
 ) -> u64 {
-    debug_assert!(image.len() >= cfg.required_len());
-    // 1. 確定境界 (この順序が公開契約と対になる)
-    let write_cursor = layout::load(base, layout::OFF_WRITE_CURSOR, Ordering::Acquire);
-    let payload_end = layout::load(base, layout::OFF_PAYLOAD_WRITE_POSITION, Ordering::Acquire);
-    // 2. Control のスナップショット (語ごとにアトミックに読む)
-    for off in (0..layout::CONTROL_SIZE).step_by(8) {
-        let v = layout::load(base, off, Ordering::Acquire);
-        image[off..off + 8].copy_from_slice(&v.to_le_bytes());
+    if image.len() < cfg.required_len() || shm.check_fits(cfg).is_err() {
+        return 0;
     }
+    let ctl = shm.control();
+    // 1. 確定境界 (この順序が公開契約と対になる)
+    let write_cursor = ctl.load(Word::WriteCursor, Ordering::Acquire);
+    let payload_end = ctl.load(Word::PayloadWritePosition, Ordering::Acquire);
+    // 2. Control のスナップショット (語ごとにアトミックに読む)
+    image[..layout::CONTROL_SIZE].copy_from_slice(&ctl.snapshot());
     let mut copied = layout::CONTROL_SIZE as u64;
     // 像の境界は手順 1 の値で固定する (スナップショット中に進んだ
     // 公開分は含めない。含めると、写していない範囲を検証が読む)。
@@ -265,13 +255,13 @@ unsafe fn snapshot_committed_range(
         from_cursor
     };
     if write_cursor > desc_from {
-        let capacity = cfg.descriptor_capacity as u64;
+        let capacity = cfg.descriptor_capacity_u64();
         let start = ((desc_from % capacity) * 64) as usize;
         let span = (write_cursor - desc_from).saturating_mul(64);
-        // SAFETY: 呼び出し側の契約 (base / image は cfg 分有効) に従う。
+        // SAFETY: 領域と像は cfg を収める (冒頭で確かめた)。
         copied += unsafe {
             copy_logical_range(
-                base,
+                shm.as_ptr(),
                 image,
                 cfg.descriptors_offset(),
                 capacity as usize * 64,
@@ -282,14 +272,14 @@ unsafe fn snapshot_committed_range(
     }
     // 3b. Payload の確定範囲
     if payload_end > from_payload_pos {
-        let start = (from_payload_pos % cfg.payload_capacity as u64) as usize;
+        let start = (from_payload_pos % cfg.payload_capacity_u64()) as usize;
         // SAFETY: 同上。
         copied += unsafe {
             copy_logical_range(
-                base,
+                shm.as_ptr(),
                 image,
                 cfg.payload_offset(),
-                cfg.payload_capacity,
+                cfg.payload_capacity(),
                 start,
                 payload_end - from_payload_pos,
             )
@@ -364,6 +354,8 @@ unsafe fn copy_logical_range(
 /// before validation. Released space only ever held bytes the Host already
 /// owns; an integrity failure still marks the Ring lost and stops it.
 pub struct CommittedRangeCollector {
+    shm: Shm,
+    /// `shm.as_ptr()` の写し (確定範囲の生コピーの起点)。
     base: *mut u8,
     cfg: RingConfig,
     read_cursor: u64,
@@ -374,7 +366,8 @@ pub struct CommittedRangeCollector {
     /// Generation of the incarnation this collector reads.
     generation: u64,
 }
-// SAFETY: same contract as DrainWorker (single reader per Ring, base valid).
+// SAFETY: single reader per Ring; base points into `shm` (Send + Sync),
+// which keeps the mapping alive.
 unsafe impl Send for CommittedRangeCollector {}
 
 /// 1 本の Ring で追跡する未終了呼び出しの上限（レビュー 2026-11-14 P2-3）。
@@ -385,26 +378,35 @@ pub const MAX_OPEN_CALLS: usize = 1 << 16;
 
 /// Writer-maintained loss counters. A change is collected even when no new
 /// descriptor was committed (see [`CommittedRangeCollector::collect`]).
-const LOSS_COUNTER_OFFSETS: [usize; 3] = [
-    layout::OFF_DROPPED_EVENTS,
-    layout::OFF_DROPPED_PAYLOAD_BYTES,
-    layout::OFF_DEGRADED_EVENTS,
+const LOSS_COUNTER_WORDS: [Word; 3] = [
+    Word::DroppedEvents,
+    Word::DroppedPayloadBytes,
+    Word::DegradedEvents,
 ];
 
 impl CommittedRangeCollector {
+    /// Err when the region is shorter than `cfg`.
+    ///
     /// # Safety
-    /// `base` は `cfg` 分の共有領域を指し、この値が破棄されるまで有効であること。
-    /// The Ring must start from read position 0 (a fresh incarnation).
-    pub unsafe fn new(base: *mut u8, cfg: RingConfig) -> Self {
-        Self {
-            base,
+    /// This must be the Ring's only reader (SPSC). The Ring must start from
+    /// read position 0 (a fresh incarnation).
+    pub unsafe fn new(shm: Shm, cfg: RingConfig) -> Result<Self, ShmError> {
+        shm.check_fits(cfg)?;
+        let generation = shm.control().load(Word::Generation, Ordering::Acquire);
+        Ok(Self {
+            base: shm.as_ptr(),
+            shm,
             cfg,
             read_cursor: 0,
             payload_read_position: 0,
             stopped: false,
             reported_loss: [0; 3],
-            generation: layout::load(base, layout::OFF_GENERATION, Ordering::Acquire),
-        }
+            generation,
+        })
+    }
+
+    fn ctl(&self) -> Control<'_> {
+        self.shm.control()
     }
 
     /// Whether the Agent is reinitializing (or has reinitialized) this
@@ -413,8 +415,8 @@ impl CommittedRangeCollector {
     /// still sees is the new incarnation, not a contradiction: it yields
     /// nothing and leaves the Ring to be retired on its generation change.
     fn superseded(&self) -> bool {
-        layout::load(self.base, layout::OFF_MAGIC, Ordering::Acquire) != layout::MAGIC
-            || layout::load(self.base, layout::OFF_GENERATION, Ordering::Acquire) != self.generation
+        self.ctl().load(Word::Magic, Ordering::Acquire) != layout::MAGIC
+            || self.ctl().load(Word::Generation, Ordering::Acquire) != self.generation
     }
 
     /// Whether a structural contradiction stopped collection.
@@ -441,27 +443,22 @@ impl CommittedRangeCollector {
             return None;
         }
         // 1. Commit boundary (pairs with the writer's publication order).
-        let write_cursor = layout::load(self.base, layout::OFF_WRITE_CURSOR, Ordering::Acquire);
-        let loss = LOSS_COUNTER_OFFSETS.map(|off| layout::load(self.base, off, Ordering::Acquire));
+        let write_cursor = self.ctl().load(Word::WriteCursor, Ordering::Acquire);
+        let loss = LOSS_COUNTER_WORDS.map(|w| self.ctl().load(w, Ordering::Acquire));
         if write_cursor == self.read_cursor && loss == self.reported_loss {
             return None;
         }
-        let payload_write = layout::load(
-            self.base,
-            layout::OFF_PAYLOAD_WRITE_POSITION,
-            Ordering::Acquire,
-        );
-        let mut control = vec![0u8; layout::CONTROL_SIZE];
-        for off in (0..layout::CONTROL_SIZE).step_by(8) {
-            let v = layout::load(self.base, off, Ordering::Acquire);
-            control[off..off + 8].copy_from_slice(&v.to_le_bytes());
-        }
+        let payload_write = self
+            .ctl()
+            .load(Word::PayloadWritePosition, Ordering::Acquire);
+        let mut control = self.ctl().snapshot().to_vec();
         control[layout::OFF_WRITE_CURSOR..layout::OFF_WRITE_CURSOR + 8]
             .copy_from_slice(&write_cursor.to_le_bytes());
         control[layout::OFF_PAYLOAD_WRITE_POSITION..layout::OFF_PAYLOAD_WRITE_POSITION + 8]
             .copy_from_slice(&payload_write.to_le_bytes());
-        for (off, value) in LOSS_COUNTER_OFFSETS.iter().zip(loss) {
-            control[*off..*off + 8].copy_from_slice(&value.to_le_bytes());
+        for (w, value) in LOSS_COUNTER_WORDS.iter().zip(loss) {
+            let off = w.offset();
+            control[off..off + 8].copy_from_slice(&value.to_le_bytes());
         }
         // The Control copy must belong to this incarnation (checked after it
         // was taken: a reinitialization zeroes Magic first and publishes the
@@ -477,7 +474,7 @@ impl CommittedRangeCollector {
             payload_position: self.payload_read_position,
             payload: Vec::new(),
         };
-        let capacity = self.cfg.descriptor_capacity as u64;
+        let capacity = self.cfg.descriptor_capacity_u64();
         let count = match write_cursor.checked_sub(self.read_cursor) {
             // Only the loss counters changed: nothing to copy or release.
             Some(0) => return Some(chunk),
@@ -518,7 +515,7 @@ impl CommittedRangeCollector {
                 d.payload_len as u64
             })
         });
-        let payload_capacity = self.cfg.payload_capacity as u64;
+        let payload_capacity = self.cfg.payload_capacity_u64();
         let payload_end = match end {
             Some(end)
                 if end >= self.payload_read_position
@@ -537,7 +534,7 @@ impl CommittedRangeCollector {
         let span = (payload_end - self.payload_read_position) as usize;
         if span > 0 {
             chunk.payload.reserve_exact(span);
-            let region = self.cfg.payload_capacity;
+            let region = self.cfg.payload_capacity();
             let start = (self.payload_read_position % payload_capacity) as usize;
             let first = (region - start).min(span);
             // SAFETY: as above, within the payload region of Host-known size.
@@ -560,20 +557,12 @@ impl CommittedRangeCollector {
         // 4. Release the copied range to the writer.
         self.read_cursor = write_cursor;
         self.payload_read_position = payload_end;
-        layout::store(
-            self.base,
-            layout::OFF_PAYLOAD_READ_POSITION,
-            payload_end,
-            Ordering::Release,
-        );
-        layout::store(
-            self.base,
-            layout::OFF_READ_CURSOR,
-            write_cursor,
-            Ordering::Release,
-        );
-        layout::fetch_add(self.base, layout::OFF_HOST_DRAIN_COUNT, 1);
-        if layout::writer_waiting(self.base) {
+        self.ctl()
+            .store(Word::PayloadReadPosition, payload_end, Ordering::Release);
+        self.ctl()
+            .store(Word::ReadCursor, write_cursor, Ordering::Release);
+        self.ctl().fetch_add(Word::HostDrainCount, 1);
+        if self.ctl().writer_waiting() {
             notify_space();
         }
         Some(chunk)
@@ -590,7 +579,9 @@ impl CommittedRangeCollector {
 /// 無検証の `RingReader` は通常経路では使わない (テスト／信頼済み内部専用
 /// として transport 側に残してある)。
 pub struct DrainWorker {
-    base: *mut u8,
+    /// 回収する共有領域。検証専用 (chunk) の Worker は持たない
+    /// (旧実装は null ポインタを置き、共有メモリの経路を呼ぶと UB だった)。
+    shm: Option<Shm>,
     cfg: RingConfig,
     reader: ValidatingReader,
     /// Host 側のコピー先バッファ。検証はこの像に対してだけ行い、共有メモリを
@@ -622,18 +613,24 @@ pub struct DrainWorker {
     pub integrity_lost: bool,
     degraded_seen: u64,
 }
-// SAFETY: base はコンストラクタの契約により Worker の生存期間中有効であり、
-// Ring ごとに単一 Worker で使う前提 (SPSC の読み手側) のため、所有権の移動は安全。
-unsafe impl Send for DrainWorker {}
 impl DrainWorker {
+    /// 領域が `cfg` を収めなければ Err。`expected_generation` は Control 領域の
+    /// Generation と一致する Host 管理の値であること (違えば検証が止める)。
+    ///
     /// # Safety
-    /// `base` は `cfg` 分の共有領域を指し、この Worker が破棄されるまで有効
-    /// であること。`expected_generation` は Control 領域の Generation と
-    /// 一致する Host 管理の値であること。
-    pub unsafe fn new(base: *mut u8, cfg: RingConfig, expected_generation: u64) -> Self {
+    /// この Ring の読み手 (Cursor を進める側) は同時に 1 つだけであること (SPSC)。
+    pub unsafe fn new(
+        shm: Shm,
+        cfg: RingConfig,
+        expected_generation: u64,
+    ) -> Result<Self, ShmError> {
+        shm.check_fits(cfg)?;
+        Ok(Self::with_region(Some(shm), cfg, expected_generation))
+    }
+    fn with_region(shm: Option<Shm>, cfg: RingConfig, expected_generation: u64) -> Self {
         let known = KnownConfig::new(cfg, cfg.required_len());
         Self {
-            base,
+            shm,
             cfg,
             reader: ValidatingReader::new(known, expected_generation),
             // Allocated on the first shared-memory drain: chunk workers
@@ -664,10 +661,9 @@ impl DrainWorker {
     /// Validation-only worker for [`CommittedRangeCollector`] chunks. It never
     /// touches shared memory: only [`DrainWorker::ingest_chunk`], the
     /// accounting/finalization methods and `is_stopped` may be used on it.
+    /// The shared-memory methods return empty results on it.
     pub fn for_chunks(cfg: RingConfig, expected_generation: u64) -> Self {
-        // SAFETY: a null base is never dereferenced; the shared-memory
-        // methods are not used in chunk mode (see the doc comment).
-        unsafe { Self::new(std::ptr::null_mut(), cfg, expected_generation) }
+        Self::with_region(None, cfg, expected_generation)
     }
     /// Validate a collected chunk and account for its events exactly like
     /// `drain_once` does for a validated image (losses, sequence gaps, open
@@ -717,27 +713,25 @@ impl DrainWorker {
     /// は止まった状態になり、`integrity_lost` が立つ。以後は
     /// `drain_*` は空のバッチを返す。
     pub fn resume_from_shared(&mut self) {
+        let Some(shm) = self.shm.clone() else {
+            return;
+        };
         // 引き継ぎも確定済み範囲だけを写す (P0-1)。継続確認のため、
         // 共有側の読み位置と、その直前の Descriptor も含める
         // (`resume_from_image` が直前 Descriptor の格納終端を読む)。
-        let shared_read = layout::load(self.base, layout::OFF_READ_CURSOR, Ordering::Acquire);
-        let shared_pos = layout::load(
-            self.base,
-            layout::OFF_PAYLOAD_READ_POSITION,
-            Ordering::Acquire,
-        );
+        let shared_read = shm.control().load(Word::ReadCursor, Ordering::Acquire);
+        let shared_pos = shm
+            .control()
+            .load(Word::PayloadReadPosition, Ordering::Acquire);
         self.ensure_image();
-        // SAFETY: base はコンストラクタの契約で有効。image は同じ長さ。
-        let copied = unsafe {
-            snapshot_committed_range(
-                self.base as *const u8,
-                &mut self.image,
-                self.cfg,
-                shared_read,
-                shared_pos,
-                true,
-            )
-        };
+        let copied = snapshot_committed_range(
+            &shm,
+            &mut self.image,
+            self.cfg,
+            shared_read,
+            shared_pos,
+            true,
+        );
         self.total_bytes_copied += copied;
         if let Err(e) = self.reader.resume_from_image(&self.image) {
             self.integrity_lost = true;
@@ -749,7 +743,9 @@ impl DrainWorker {
     fn writer_waiting(&self) -> bool {
         // 空き通知の要否判断にだけ使う助言フラグ。検証対象ではない
         // (書き手は通知が無くても待機上限で必ず前に進む)。
-        layout::writer_waiting(self.base)
+        self.shm
+            .as_ref()
+            .is_some_and(|shm| shm.control().writer_waiting())
     }
     /// 回収対象 Ring の識別情報を設定する（A72）。設定後は回収のたびに
     /// 格納済み Payload の一時キーを `payload_keys` に生成する。
@@ -795,22 +791,22 @@ impl DrainWorker {
         if self.reader.is_stopped() {
             return DrainBatch::default();
         }
+        let Some(shm) = self.shm.clone() else {
+            return DrainBatch::default();
+        };
         // 1. copy: 確定済み範囲だけを Host 側バッファへ写す (P0-1)。
         //    以後はこの像だけを見る。未公開の Descriptor / Payload は
         //    像へ取り込まない (公開境界は Acquire で読んだ write_cursor /
         //    payload_write_position で固定する)。
         self.ensure_image();
-        // SAFETY: base はコンストラクタの契約で有効。image は同じ長さで確保した。
-        let copied = unsafe {
-            snapshot_committed_range(
-                self.base as *const u8,
-                &mut self.image,
-                self.cfg,
-                self.reader.read_cursor(),
-                self.reader.payload_read_position(),
-                false,
-            )
-        };
+        let copied = snapshot_committed_range(
+            &shm,
+            &mut self.image,
+            self.cfg,
+            self.reader.read_cursor(),
+            self.reader.payload_read_position(),
+            false,
+        );
         self.total_bytes_copied += copied;
         // 2. validate + take: 検証済みの範囲だけを取り出す。矛盾したら
         // Ring を止め、完全性喪失として記録する (バッチは返さない)。
@@ -835,20 +831,19 @@ impl DrainWorker {
             integrity_error: None,
         };
         if !batch.events.is_empty() {
-            // 前進は検証済み範囲に限る (layout の原子操作は base の有効性が前提)。
-            layout::store(
-                self.base,
-                layout::OFF_PAYLOAD_READ_POSITION,
+            // 前進は検証済み範囲に限る。
+            let ctl = shm.control();
+            ctl.store(
+                Word::PayloadReadPosition,
                 self.reader.payload_read_position(),
                 Ordering::Release,
             );
-            layout::store(
-                self.base,
-                layout::OFF_READ_CURSOR,
+            ctl.store(
+                Word::ReadCursor,
                 self.reader.read_cursor(),
                 Ordering::Release,
             );
-            layout::fetch_add(self.base, layout::OFF_HOST_DRAIN_COUNT, 1);
+            ctl.fetch_add(Word::HostDrainCount, 1);
         }
         self.process_batch(&batch);
         batch
@@ -1036,26 +1031,25 @@ impl DrainWorker {
 /// 1 個作り、書き手側へは DuplicateHandle 等で同じ OS イベントを渡す前提。
 /// `notify` は `Arc` で共有する：書き手側の待機（`EventClock`）が同じ
 /// `space_available` を待つため。
-pub struct NotifyingDrainWorker<'r> {
+pub struct NotifyingDrainWorker {
     pub worker: DrainWorker,
     pub notify: Arc<RingNotify>,
-    control_base: *const u8,
+    /// 書き手待ちフラグを読む領域 (実体を共有するので借用の寿命は要らない)。
+    region: Shm,
     /// 回収で空きができ、書き手待ち中に実際に SetEvent した回数。
     pub space_notifications: u64,
     /// 通知（SetEvent）に失敗した回数。失敗しても回収自体は行われており、
     /// 書き手は待機上限までの遅延で前に進む（通知は最適化であり正しさの前提ではない）。
     pub space_notify_errors: u64,
-    _region: PhantomData<&'r SharedRegion>,
 }
-impl<'r> NotifyingDrainWorker<'r> {
-    pub fn new(worker: DrainWorker, notify: Arc<RingNotify>, region: &'r SharedRegion) -> Self {
+impl NotifyingDrainWorker {
+    pub fn new(worker: DrainWorker, notify: Arc<RingNotify>, region: &SharedRegion) -> Self {
         Self {
             worker,
             notify,
-            control_base: region.base() as *const u8,
+            region: region.shm().clone(),
             space_notifications: 0,
             space_notify_errors: 0,
-            _region: PhantomData,
         }
     }
     /// Host→Agent の受け渡し（A68）: この Ring の `space_available` イベントを
@@ -1071,22 +1065,21 @@ impl<'r> NotifyingDrainWorker<'r> {
         let Self {
             worker,
             notify,
-            control_base,
+            region,
             space_notifications,
             space_notify_errors,
             ..
         } = self;
         let notified = Cell::new(false);
         let failed = Cell::new(false);
-        let batch = worker.drain_once_with_space_notify(max, || {
-            // SAFETY: control_base は `region`（'r の借用）が生きている間だけ
-            // 有効であり、この worker は region より先に破棄される。
-            match unsafe { notify_space_if_writer_waiting(*control_base, notify.as_ref()) } {
-                Ok(true) => notified.set(true),
-                Ok(false) => {}
-                Err(_) => failed.set(true),
-            }
-        });
+        let batch =
+            worker.drain_once_with_space_notify(max, || {
+                match notify_space_if_writer_waiting(region.control(), notify.as_ref()) {
+                    Ok(true) => notified.set(true),
+                    Ok(false) => {}
+                    Err(_) => failed.set(true),
+                }
+            });
         if notified.get() {
             *space_notifications += 1;
         }
@@ -1099,7 +1092,7 @@ impl<'r> NotifyingDrainWorker<'r> {
         let Self {
             worker,
             notify,
-            control_base,
+            region,
             space_notifications,
             space_notify_errors,
             ..
@@ -1107,8 +1100,7 @@ impl<'r> NotifyingDrainWorker<'r> {
         let notified = Cell::new(false);
         let failed = Cell::new(false);
         let batch = worker.drain_all_with_space_notify(|| {
-            // SAFETY: 上記 drain_once と同じ。
-            match unsafe { notify_space_if_writer_waiting(*control_base, notify.as_ref()) } {
+            match notify_space_if_writer_waiting(region.control(), notify.as_ref()) {
                 Ok(true) => notified.set(true),
                 Ok(false) => {}
                 Err(_) => failed.set(true),
@@ -1198,54 +1190,40 @@ impl ValidatingHost {
     /// 1 回で行う。`drain_image` は渡された像のコピーを検証するだけで共有側
     /// の読み位置は進めないため、実 Mapping を相手にする場合はこちらを使う。
     /// 前進は検証に成功した範囲に限り、失敗時は共有側を一切変更しない。
-    ///
-    /// # Safety
-    /// `base` は `len` バイトの共有領域を指し、呼び出し中有効であること。
-    /// `len` が検証側の要求長に満たない場合は `ImageTooSmall` で失敗する。
-    pub unsafe fn drain_shared(
-        &mut self,
-        base: *mut u8,
-        len: usize,
-    ) -> Result<Vec<ReceivedEvent>, IntegrityError> {
-        let cfg = RingConfig::new(
-            self.known.descriptor_capacity as usize,
-            self.known.payload_capacity as usize,
-        );
-        if len < cfg.required_len() {
+    /// 領域が検証側の要求長に満たない場合は `ImageTooSmall` で失敗する。
+    pub fn drain_shared(&mut self, shm: &Shm) -> Result<Vec<ReceivedEvent>, IntegrityError> {
+        let cfg = self.known.config();
+        if shm.check_fits(cfg).is_err() {
             return Err(IntegrityError::ImageTooSmall);
         }
         // 確定済み範囲だけを像へ写す (レビュー #6 P0-1)。旧実装は
         // Mapping 全体をコピーしていた (DrainWorker と同型の問題で、
         // こちらは e2e の実消費経路である)。
-        let mut image = vec![0u8; len];
-        // SAFETY: 呼び出し側の契約 (base は len バイト有効) に従う。
-        let copied = unsafe {
-            snapshot_committed_range(
-                base as *const u8,
-                &mut image,
-                cfg,
-                self.reader.read_cursor(),
-                self.reader.payload_read_position(),
-                false,
-            )
-        };
+        let mut image = vec![0u8; shm.len()];
+        let copied = snapshot_committed_range(
+            shm,
+            &mut image,
+            cfg,
+            self.reader.read_cursor(),
+            self.reader.payload_read_position(),
+            false,
+        );
         self.total_bytes_copied += copied;
         let events = self.drain_image(&image)?;
         if !events.is_empty() {
-            // 前進は検証済み範囲に限る (base の契約は呼び出し側が保証する)。
-            layout::store(
-                base,
-                layout::OFF_PAYLOAD_READ_POSITION,
+            // 前進は検証済み範囲に限る。
+            let ctl = shm.control();
+            ctl.store(
+                Word::PayloadReadPosition,
                 self.reader.payload_read_position(),
                 Ordering::Release,
             );
-            layout::store(
-                base,
-                layout::OFF_READ_CURSOR,
+            ctl.store(
+                Word::ReadCursor,
                 self.reader.read_cursor(),
                 Ordering::Release,
             );
-            layout::fetch_add(base, layout::OFF_HOST_DRAIN_COUNT, 1);
+            ctl.fetch_add(Word::HostDrainCount, 1);
         }
         Ok(events)
     }
@@ -1276,38 +1254,13 @@ mod tests {
     use super::*;
     use shirusu_transport::clock::ManualClock;
     use shirusu_transport::ring::{EventInput, SharedRegion, WriterPolicy};
+    use shirusu_transport::shm::{Image as AlignedImage, Word};
     use shirusu_transport::{CaptureState, Clock, RingConfig};
     use std::sync::Arc;
 
-    /// Vec<u8> はポインタの 8 バイト整列を保証しないため、layout の原子操作を
-    /// 適用する画像は u64 バッファで保持する (整列なしは UB、Miri 検出)。
-    struct AlignedImage {
-        words: Vec<u64>,
-        len: usize,
-    }
-    impl AlignedImage {
-        fn copy_of(src: &[u8]) -> Self {
-            let mut s = Self {
-                words: vec![0; src.len().div_ceil(8)],
-                len: src.len(),
-            };
-            s.as_mut_slice().copy_from_slice(src);
-            s
-        }
-        fn as_slice(&self) -> &[u8] {
-            unsafe { std::slice::from_raw_parts(self.words.as_ptr() as *const u8, self.len) }
-        }
-        fn as_mut_slice(&mut self) -> &mut [u8] {
-            unsafe { std::slice::from_raw_parts_mut(self.words.as_mut_ptr() as *mut u8, self.len) }
-        }
-        fn as_mut_ptr(&mut self) -> *mut u8 {
-            self.words.as_mut_ptr() as *mut u8
-        }
-    }
-
     fn setup() -> (SharedRegion, shirusu_transport::RingWriter, DrainWorker) {
         let cfg = RingConfig::new(16, 512);
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let w = unsafe {
             region.writer(
@@ -1318,7 +1271,7 @@ mod tests {
                 clock,
             )
         };
-        let worker = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+        let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         (region, w, worker)
     }
     fn ev(kind: EventKind, call: u64, payload: &[u8]) -> EventInput<'_> {
@@ -1341,7 +1294,7 @@ mod tests {
         CommittedRangeCollector,
         DrainWorker,
     ) {
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let w = unsafe {
             region.writer(
@@ -1352,7 +1305,7 @@ mod tests {
                 clock,
             )
         };
-        let collector = unsafe { CommittedRangeCollector::new(region.base(), cfg) };
+        let collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
         (region, w, collector, DrainWorker::for_chunks(cfg, 1))
     }
 
@@ -1432,8 +1385,8 @@ mod tests {
         assert_eq!(degraded, 40);
         assert_eq!(chunked.degraded_seen, 40);
         assert_eq!(
-            layout::load(region.base(), layout::OFF_READ_CURSOR, Ordering::Acquire),
-            layout::load(region.base(), layout::OFF_WRITE_CURSOR, Ordering::Acquire)
+            region.control().load(Word::ReadCursor, Ordering::Acquire),
+            region.control().load(Word::WriteCursor, Ordering::Acquire)
         );
     }
 
@@ -1568,7 +1521,7 @@ mod tests {
         // コピーは確定分だけ。旧実装は 1 回ごとに 1.25MiB を写し、
         // 32 Ring × 2ms 周期では約 20GiB/s になっていた。
         let cfg = RingConfig::PRODUCTION;
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -1579,7 +1532,7 @@ mod tests {
                 clock,
             )
         };
-        let mut host = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+        let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         w.write(ev(EventKind::CallEnter, 1, b"hello"));
         let batch = host.drain_all();
         assert_eq!(batch.events.len(), 1);
@@ -1601,9 +1554,9 @@ mod tests {
         // SAFETY: region はこのテストが保持する。書き手はもう書かない。
         unsafe {
             let desc_off = cfg.descriptors_offset() + 64; // cursor 1 のスロット
-            std::ptr::write_bytes(region.base().add(desc_off), 0xEE, 64 * 15);
+            std::ptr::write_bytes(region.shm().as_ptr().add(desc_off), 0xEE, 64 * 15);
             let pay_off = cfg.payload_offset() + 4; // "real" の直後
-            std::ptr::write_bytes(region.base().add(pay_off), 0xEE, 512 - 4);
+            std::ptr::write_bytes(region.shm().as_ptr().add(pay_off), 0xEE, 512 - 4);
         }
         let batch = host.drain_all();
         assert_eq!(batch.events.len(), 1);
@@ -1617,7 +1570,7 @@ mod tests {
         // ValidatingHost::drain_shared (e2e の実消費経路) も同型に
         // 確定範囲だけを写す (P0-1)。
         let cfg = RingConfig::new(16, 512);
-        let region = SharedRegion::new(cfg, 3, 9);
+        let region = SharedRegion::new(cfg, 3, 9).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -1631,7 +1584,7 @@ mod tests {
         w.write(ev(EventKind::CallEnter, 1, b"xy"));
         let known = KnownConfig::new(cfg, cfg.required_len());
         let mut host = ValidatingHost::new(known, 3);
-        let events = unsafe { host.drain_shared(region.base(), cfg.required_len()) }.unwrap();
+        let events = host.drain_shared(region.shm()).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].payload, b"xy");
         // Control 256 + Descriptor 64 + Payload 2B
@@ -1693,34 +1646,25 @@ mod tests {
         let (region, mut w, mut host) = setup();
         w.write(ev(EventKind::CallEnter, 1, b"a"));
         // 書き手が空き待ち中のときだけ、回収で空けた分を通知する。
-        shirusu_transport::layout::store(
-            region.base(),
-            shirusu_transport::layout::OFF_WRITER_WAITING,
-            1,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        region
+            .control()
+            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
         let notified = Cell::new(false);
         let b = host.drain_once_with_space_notify(16, || notified.set(true));
         assert_eq!(b.events.len(), 1);
         assert!(notified.get());
         // フラグが下りていれば、回収しても通知しない。
         w.write(ev(EventKind::CallEnter, 2, b"b"));
-        shirusu_transport::layout::store(
-            region.base(),
-            shirusu_transport::layout::OFF_WRITER_WAITING,
-            0,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        region
+            .control()
+            .store(Word::WriterWaiting, 0, std::sync::atomic::Ordering::Relaxed);
         let notified = Cell::new(false);
         host.drain_once_with_space_notify(16, || notified.set(true));
         assert!(!notified.get());
         // 空きができなければ、フラグが立っていても通知しない。
-        shirusu_transport::layout::store(
-            region.base(),
-            shirusu_transport::layout::OFF_WRITER_WAITING,
-            1,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        region
+            .control()
+            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
         let notified = Cell::new(false);
         let b = host.drain_once_with_space_notify(16, || notified.set(true));
         assert_eq!(b.events.len(), 0);
@@ -1745,18 +1689,13 @@ mod tests {
     #[test]
     fn validating_host_stops_on_corruption() {
         let cfg = RingConfig::new(8, 256);
-        let region = SharedRegion::new(cfg, 5, 1);
+        let region = SharedRegion::new(cfg, 5, 1).unwrap();
         let known = KnownConfig::new(cfg, cfg.required_len());
         let mut host = ValidatingHost::new(known, 5);
-        let mut image = AlignedImage::copy_of(region.as_slice());
+        let mut image = AlignedImage::copy_of(&region.snapshot());
         assert!(host.drain_image(image.as_slice()).unwrap().is_empty());
         // Cursor を異常値に壊す
-        shirusu_transport::layout::store(
-            image.as_mut_ptr(),
-            shirusu_transport::layout::OFF_WRITE_CURSOR,
-            u64::MAX - 3,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        image.set(Word::WriteCursor, u64::MAX - 3);
         assert!(host.drain_image(image.as_slice()).is_err());
         assert!(host.integrity_lost);
         assert!(host.is_stopped());
@@ -1778,12 +1717,9 @@ mod tests {
             .wait_timeout(std::time::Duration::from_millis(1)));
         // 書き手が空き待ち中なら、回収で空けた分を 1 回通知する。
         w.write(ev(EventKind::CallEnter, 2, b"b"));
-        shirusu_transport::layout::store(
-            region.base(),
-            shirusu_transport::layout::OFF_WRITER_WAITING,
-            1,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        region
+            .control()
+            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
         let b = nw.drain_all();
         assert_eq!(b.events.len(), 1);
         assert_eq!(nw.space_notifications, 1);
@@ -1792,12 +1728,9 @@ mod tests {
             .space_available
             .wait_timeout(std::time::Duration::from_millis(100)));
         // 空きができなければ、フラグが立っていても通知しない。
-        shirusu_transport::layout::store(
-            region.base(),
-            shirusu_transport::layout::OFF_WRITER_WAITING,
-            1,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        region
+            .control()
+            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
         nw.drain_all();
         assert_eq!(nw.space_notifications, 1);
         assert_eq!(nw.space_notify_errors, 0);
@@ -1838,7 +1771,7 @@ mod tests {
     #[test]
     fn sequence_gap_becomes_sequence_gap_loss_event() {
         let cfg = RingConfig::new(4, 256);
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -1849,7 +1782,7 @@ mod tests {
                 clock,
             )
         };
-        let mut host = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+        let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         for i in 0..4u64 {
             w.write(ev(EventKind::CallEnter, i, b"x"));
         }
@@ -1886,7 +1819,7 @@ mod tests {
     #[test]
     fn validating_host_returns_events_on_success() {
         let cfg = RingConfig::new(8, 256);
-        let region = SharedRegion::new(cfg, 3, 1);
+        let region = SharedRegion::new(cfg, 3, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -1900,7 +1833,7 @@ mod tests {
         w.write(ev(EventKind::CallEnter, 1, b"hello"));
         w.write(ev(EventKind::CallLeave, 1, b"world"));
         let mut host = ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 3);
-        let evs = host.drain_image(region.as_slice()).unwrap();
+        let evs = host.drain_image(&region.snapshot()).unwrap();
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[0].payload, b"hello");
         assert_eq!(evs[1].payload, b"world");
@@ -1966,10 +1899,9 @@ mod tests {
     fn validating_host_drain_shared_advances_shared_cursors() {
         // R2: 実 Mapping 向けの copy→検証→前進。検証成功分だけ共有側の
         // read_cursor が進み、破損時は進まない。
-        use shirusu_transport::layout::{load, OFF_READ_CURSOR};
         use std::sync::atomic::Ordering as AOrd;
         let cfg = RingConfig::new(8, 256);
-        let region = SharedRegion::new(cfg, 3, 1);
+        let region = SharedRegion::new(cfg, 3, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -1983,25 +1915,20 @@ mod tests {
         w.write(ev(EventKind::CallEnter, 1, b"hello"));
         w.write(ev(EventKind::CallLeave, 1, b"world"));
         let mut host = ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 3);
-        let len = cfg.required_len();
-        let evs = unsafe { host.drain_shared(region.base(), len) }.unwrap();
+        let _len = cfg.required_len();
+        let evs = host.drain_shared(region.shm()).unwrap();
         assert_eq!(evs.len(), 2);
-        assert_eq!(load(region.base(), OFF_READ_CURSOR, AOrd::Relaxed), 2);
+        assert_eq!(region.control().load(Word::ReadCursor, AOrd::Relaxed), 2);
         // 続きは無いので 2 回目は空で、Cursor も動かない。
-        let evs = unsafe { host.drain_shared(region.base(), len) }.unwrap();
+        let evs = host.drain_shared(region.shm()).unwrap();
         assert!(evs.is_empty());
-        assert_eq!(load(region.base(), OFF_READ_CURSOR, AOrd::Relaxed), 2);
+        assert_eq!(region.control().load(Word::ReadCursor, AOrd::Relaxed), 2);
         // 破損した像では失敗し、Cursor は前進しない。
         w.write(ev(EventKind::CallEnter, 2, b"again"));
-        let mut image = AlignedImage::copy_of(region.as_slice());
-        shirusu_transport::layout::store(
-            image.as_mut_ptr(),
-            shirusu_transport::layout::OFF_WRITE_CURSOR,
-            u64::MAX - 3,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        let mut image = AlignedImage::copy_of(&region.snapshot());
+        image.set(Word::WriteCursor, u64::MAX - 3);
         assert!(host.drain_image(image.as_slice()).is_err());
-        assert_eq!(load(region.base(), OFF_READ_CURSOR, AOrd::Relaxed), 2);
+        assert_eq!(region.control().load(Word::ReadCursor, AOrd::Relaxed), 2);
     }
     #[test]
     fn drain_worker_resume_continues_from_shared_cursors() {
@@ -2011,8 +1938,8 @@ mod tests {
         w.write(ev(EventKind::CallEnter, 1, b"a"));
         w.write(ev(EventKind::CallEnter, 2, b"b"));
         assert_eq!(host.drain_all().events.len(), 2);
-        let cfg = region.config;
-        let mut host2 = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+        let cfg = region.config();
+        let mut host2 = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         host2.resume_from_shared();
         assert!(!host2.integrity_lost);
         assert!(
@@ -2119,7 +2046,7 @@ mod tests {
     #[test]
     fn validating_host_generates_payload_keys_with_identity() {
         let cfg = RingConfig::new(8, 256);
-        let region = SharedRegion::new(cfg, 3, 1);
+        let region = SharedRegion::new(cfg, 3, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -2134,7 +2061,7 @@ mod tests {
         w.write(ev(EventKind::CallLeave, 1, b"world"));
         let mut host = ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 3);
         host.set_identity(RingIdentity::new(ProcessInstanceId(9), RingId(4), 3));
-        let evs = host.drain_image(region.as_slice()).unwrap();
+        let evs = host.drain_image(&region.snapshot()).unwrap();
         assert_eq!(evs.len(), 2);
         assert_eq!(
             host.payload_keys,
@@ -2164,7 +2091,7 @@ mod tests {
         // 停止させ、その世代のイベントは以後一切回収できない。
         // Supervisor は Reader を作る前に遷移を確認しなければならない。
         let cfg = RingConfig::new(16, 512);
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe {
             region.writer(
@@ -2176,7 +2103,7 @@ mod tests {
             )
         };
         w.write(ev(EventKind::CallEnter, 1, b"gen1"));
-        let mut host = unsafe { DrainWorker::new(region.base(), cfg, 2) };
+        let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 2) }.unwrap();
         let batch = host.drain_all();
         assert!(batch.events.is_empty());
         assert!(host.integrity_lost);
@@ -2198,20 +2125,19 @@ mod tests {
         // 修正後の順序 (Supervisor の drain_phase と同じ): 遷移を待って
         // から Worker を作れば、新世代のイベントを正常に回収できる。
         let cfg = RingConfig::new(16, 512);
-        let region = SharedRegion::new(cfg, 1, 1);
-        let base = region.base();
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
+        let base = region.shm().clone();
         // 未遷移の間は待機がタイムアウトし、観測した世代を返す。
         let observed =
-            unsafe { wait_for_ring_generation(base, 2, std::time::Duration::from_millis(50)) };
+            wait_for_ring_generation(base.control(), 2, std::time::Duration::from_millis(50));
         assert_eq!(observed, Err(1));
         // Producer 側の再初期化 (Slot 再利用時の init_control) を模す。
-        let base_addr = base as usize;
+        let other = base.clone();
         let reinit = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            layout::init_control(base_addr as *mut u8, cfg, 2, 1);
+            other.control().init(cfg, 2, 1);
         });
-        let waited =
-            unsafe { wait_for_ring_generation(base, 2, std::time::Duration::from_secs(5)) };
+        let waited = wait_for_ring_generation(base.control(), 2, std::time::Duration::from_secs(5));
         reinit.join().unwrap();
         assert_eq!(waited, Ok(()));
         // 遷移後に作った Worker は新世代のイベントを回収できる。
@@ -2226,7 +2152,7 @@ mod tests {
             )
         };
         w.write(ev(EventKind::CallEnter, 9, b"gen2"));
-        let mut host = unsafe { DrainWorker::new(region.base(), cfg, 2) };
+        let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 2) }.unwrap();
         let batch = host.drain_all();
         assert_eq!(batch.events.len(), 1);
         assert!(!host.integrity_lost);
@@ -2236,13 +2162,9 @@ mod tests {
         // Magic が無い (未初期化) 領域は、Generation 欄が 0 でも
         // 「世代 0 に遷移した」とはみなさない。
         let cfg = RingConfig::new(16, 512);
-        let len = cfg.required_len();
-        let layout_alloc = std::alloc::Layout::from_size_align(len, 64).expect("region layout");
-        let ptr = unsafe { std::alloc::alloc_zeroed(layout_alloc) };
-        assert!(!ptr.is_null());
+        let shm = shirusu_transport::Shm::alloc_zeroed(cfg.required_len()).unwrap();
         let observed =
-            unsafe { wait_for_ring_generation(ptr, 0, std::time::Duration::from_millis(50)) };
+            wait_for_ring_generation(shm.control(), 0, std::time::Duration::from_millis(50));
         assert_eq!(observed, Err(0));
-        unsafe { std::alloc::dealloc(ptr, layout_alloc) };
     }
 }

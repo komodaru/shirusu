@@ -30,7 +30,7 @@ fn main() {
 
     if args.iter().any(|a| a == "--selftest") {
         let cfg = RingConfig::new(256, 64 * 1024);
-        let region = SharedRegion::new(cfg, 1, std::process::id() as u64);
+        let region = SharedRegion::new(cfg, 1, std::process::id() as u64).unwrap();
         let clock: Arc<dyn Clock> = shirusu_transport::clock::system_clock();
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         let mut rd = unsafe { region.reader() };
@@ -102,12 +102,13 @@ fn main() {
             let clock: Arc<dyn Clock> = shirusu_transport::clock::system_clock();
             let mut w = unsafe {
                 shirusu_transport::RingWriter::new(
-                    mapping.as_ptr(),
+                    mapping.shm().clone(),
                     cfg,
                     WriterPolicy::default(),
                     clock,
                 )
-            };
+            }
+            .unwrap();
             for i in 0..count {
                 let p = i.to_le_bytes();
                 loop {
@@ -167,8 +168,7 @@ fn agent_from_mapping(
     let agent = Agent::new(pool.clone(), cfg, Arc::new(HostMonitor::always_alive()));
     let delivery = ExpansionDelivery {
         len,
-        base: None,
-        handle_value: Some(mapping_handle),
+        mapping: shirusu_transport::expansion::DeliveredMapping::Handle(mapping_handle),
         generation: EXPANDED_SLOT_GENERATION,
     };
     let slot_index = agent

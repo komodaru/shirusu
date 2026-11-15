@@ -2,6 +2,7 @@
 //!
 //! - [`descriptor`]: 64B 固定 EventDescriptor と値ごとの取得結果
 //! - [`layout`]: Control 領域のキャッシュライン分離と Cursor 演算
+//! - [`shm`]: 共有メモリ領域の型 (`Shm` / `Control` / `Word`)。生ポインタの安全な関数は置かない
 //! - [`ring`]: SPSC Ring（単一公開点の契約、満杯ポリシー状態機械）
 //! - [`snapshot`]: 大きな Snapshot の Fragment 分割
 //! - [`notify`]: 通知の純粋ロジック（2ms 再確認、閾値越え通知）
@@ -21,6 +22,7 @@ pub mod expansion;
 pub mod layout;
 pub mod notify;
 pub mod ring;
+pub mod shm;
 pub mod slot;
 pub mod snapshot;
 pub mod tsc;
@@ -31,10 +33,13 @@ pub use clock::{
     SystemTimestampSource, TimestampSource,
 };
 pub use descriptor::{CaptureState, EventDescriptor, EventKind};
-pub use expansion::{ExpansionDelivery, ExpansionRequest, EXPANDED_SLOT_GENERATION};
-pub use layout::{LossCounters, RingConfig};
+pub use expansion::{
+    DeliveredMapping, ExpansionDelivery, ExpansionRequest, EXPANDED_SLOT_GENERATION,
+};
+pub use layout::{ConfigError, LossCounters, RingConfig};
 pub use ring::{
     DrainBatch, EventInput, LoaderLockProbe, LoaderLockState, OverflowState, ReceivedEvent,
     RingReader, RingWriter, SharedRegion, WriteOutcome, WriterPolicy,
 };
+pub use shm::{Backing, Control, Shm, ShmError, Word};
 pub use slot::{SlotHandle, SlotPool, SlotState};

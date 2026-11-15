@@ -7,6 +7,7 @@ use shirusu_transport::context::{should_record, CallOrigin, HostMonitor, Publish
 use shirusu_transport::layout::*;
 use shirusu_transport::notify::ReCheckPolicy;
 use shirusu_transport::ring::*;
+use shirusu_transport::shm::{Image as AlignedImage, Word};
 use shirusu_transport::slot::{SlotPool, SlotState};
 use shirusu_transport::validate::{IntegrityError, KnownConfig, ValidatingReader};
 use shirusu_transport::{CaptureState, Clock, EventKind, RingConfig};
@@ -14,35 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Vec<u8> はポインタの 8 バイト整列を保証しないため、layout の原子操作を
-/// 適用する画像は u64 バッファで保持する (整列なしは UB、Miri 検出)。
-struct AlignedImage {
-    words: Vec<u64>,
-    len: usize,
-}
-impl AlignedImage {
-    fn copy_of(src: &[u8]) -> Self {
-        let mut s = Self {
-            words: vec![0; src.len().div_ceil(8)],
-            len: src.len(),
-        };
-        s.as_mut_slice().copy_from_slice(src);
-        s
-    }
-    fn as_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.words.as_ptr() as *const u8, self.len) }
-    }
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.words.as_mut_ptr() as *mut u8, self.len) }
-    }
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.words.as_mut_ptr() as *mut u8
-    }
-}
-
 fn mk(desc_cap: usize, pay_cap: usize, no_wait: bool) -> (SharedRegion, RingWriter, RingReader) {
     let cfg = RingConfig::new(desc_cap, pay_cap);
-    let region = SharedRegion::new(cfg, 1, 7);
+    let region = SharedRegion::new(cfg, 1, 7).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut policy = WriterPolicy::default();
     if no_wait {
@@ -148,11 +123,11 @@ fn c03_payload_written_but_unpublished_is_not_read() {
     let (region, _w, mut rd) = mk(8, 256, true);
     // 書き手が Payload を書いた直後に停止した状況を、公開前の生状態で再現する:
     // Payload 領域へ直接書くが write_cursor は進めない。
-    let base = region.base();
+    let base = region.shm().clone();
     unsafe {
         std::ptr::copy_nonoverlapping(
             b"secret".as_ptr(),
-            base.add(region.config.payload_offset()),
+            base.as_ptr().add(region.config().payload_offset()),
             6,
         );
     }
@@ -165,9 +140,9 @@ fn c04_crash_just_before_publish_recovers_nothing_uncommitted() {
     w.write(ev(EventKind::CallEnter, 1, b"committed"));
     // Descriptor スロットへ直接書くが公開しない = 公開直前クラッシュの再現
     let desc = shirusu_transport::EventDescriptor::new(EventKind::CallEnter, 2);
-    let off = region.config.descriptors_offset() + 64; // slot 1
+    let off = region.config().descriptors_offset() + 64; // slot 1
     unsafe {
-        std::ptr::copy_nonoverlapping(desc.to_bytes().as_ptr(), region.base().add(off), 64);
+        std::ptr::copy_nonoverlapping(desc.to_bytes().as_ptr(), region.shm().as_ptr().add(off), 64);
     }
     let b = rd.drain_all();
     assert_eq!(b.events.len(), 1);
@@ -245,13 +220,12 @@ fn c08_loss_counters_read_during_concurrent_updates_stay_monotonic() {
     let n = env_u64("SHIRUSU_SPEC_TABLE_C08_OPS", 2000);
     let (region, mut w, _rd) = mk(4, 64, true);
     let stop = Arc::new(AtomicBool::new(false));
-    let ptr = region.base() as usize;
+    let shm = region.shm().clone();
     let stop2 = stop.clone();
     let reader = std::thread::spawn(move || {
-        let base = ptr as *const u8;
         let mut prev = LossCounters::default();
         while !stop2.load(Ordering::Relaxed) {
-            let now = LossCounters::read_from(base);
+            let now = shm.control().loss_counters();
             assert!(now.dropped_events >= prev.dropped_events);
             assert!(now.dropped_payload_bytes >= prev.dropped_payload_bytes);
             assert!(now.degraded_events >= prev.degraded_events);
@@ -369,18 +343,18 @@ fn c15_large_snapshot_fragment_join_and_loss_detection() {
 fn c16_thread_and_slot_reuse_no_generation_crosstalk() {
     let cfg = RingConfig::new(8, 256);
     let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), 1);
-    let region1 = SharedRegion::new(cfg, 1, 100);
+    let region1 = SharedRegion::new(cfg, 1, 100).unwrap();
     {
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let mut w = unsafe { region1.writer(WriterPolicy::default(), clock) };
         w.write(ev(EventKind::CallEnter, 1, b"gen1"));
     }
-    let events = vr.drain_image(region1.as_slice()).unwrap();
+    let events = vr.drain_image(&region1.snapshot()).unwrap();
     assert_eq!(events.len(), 1);
     // 同じ Thread ID の別 Generation の像を旧 reader が読むと矛盾として止まる
-    let region2 = SharedRegion::new(cfg, 2, 100);
+    let region2 = SharedRegion::new(cfg, 2, 100).unwrap();
     assert!(matches!(
-        vr.drain_image(region2.as_slice()),
+        vr.drain_image(&region2.snapshot()),
         Err(IntegrityError::GenerationMismatch { .. })
     ));
     assert!(vr.is_stopped());
@@ -425,15 +399,10 @@ fn c18_nested_app_calls_recorded_with_parent() {
 #[test]
 fn c19_corrupted_shared_memory_host_survives() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1);
-    let mut image = AlignedImage::copy_of(region.as_slice());
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    let mut image = AlignedImage::copy_of(&region.snapshot());
     // 異常な Cursor
-    store(
-        image.as_mut_ptr(),
-        OFF_WRITE_CURSOR,
-        u64::MAX,
-        Ordering::Relaxed,
-    );
+    image.set(Word::WriteCursor, u64::MAX);
     let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), 1);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         vr.drain_image(image.as_slice())

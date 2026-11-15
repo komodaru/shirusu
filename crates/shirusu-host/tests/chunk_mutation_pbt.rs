@@ -171,7 +171,7 @@ struct Produced {
 
 fn produce(steps: &[Step]) -> Produced {
     let cfg = RingConfig::new(8, 128);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut writer: RingWriter = unsafe {
         region.writer(
@@ -182,7 +182,7 @@ fn produce(steps: &[Step]) -> Produced {
             clock,
         )
     };
-    let mut collector = unsafe { CommittedRangeCollector::new(region.base(), cfg) };
+    let mut collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
     let mut chunks = Vec::new();
     let mut published = Vec::new();
     let mut call = 0u64;

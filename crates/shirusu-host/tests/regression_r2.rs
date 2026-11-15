@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 fn setup() -> (SharedRegion, shirusu_transport::RingWriter, DrainWorker) {
     let cfg = RingConfig::new(16, 512);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let w = unsafe {
         region.writer(
@@ -28,7 +28,7 @@ fn setup() -> (SharedRegion, shirusu_transport::RingWriter, DrainWorker) {
             clock,
         )
     };
-    let worker = unsafe { DrainWorker::new(region.base(), cfg, 1) };
+    let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     (region, w, worker)
 }
 
@@ -47,14 +47,14 @@ fn ev(call: u64, payload: &[u8]) -> EventInput<'_> {
 
 /// Descriptor スロット `slot` のバイト列を書き換える (共有メモリ破損の注入)。
 fn rewrite_descriptor(region: &SharedRegion, slot: usize, f: impl Fn(&mut EventDescriptor)) {
-    let cfg = region.config;
+    let cfg = region.config();
     let off = cfg.descriptors_offset() + slot * 64;
     let mut bytes = [0u8; 64];
-    bytes.copy_from_slice(&region.as_slice()[off..off + 64]);
+    bytes.copy_from_slice(&region.snapshot()[off..off + 64]);
     let mut d = EventDescriptor::from_bytes(&bytes).unwrap();
     f(&mut d);
     unsafe {
-        std::ptr::copy_nonoverlapping(d.to_bytes().as_ptr(), region.base().add(off), 64);
+        std::ptr::copy_nonoverlapping(d.to_bytes().as_ptr(), region.shm().as_ptr().add(off), 64);
     }
 }
 

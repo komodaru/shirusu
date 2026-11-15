@@ -56,7 +56,7 @@ pub struct LaunchConfig {
 }
 /// Collections smaller than this wait for the writer's notification.
 fn collection_low_water(cfg: shirusu_transport::RingConfig) -> usize {
-    (cfg.descriptor_capacity / 8).max(1)
+    (cfg.descriptor_capacity() / 8).max(1)
 }
 
 impl LaunchConfig {

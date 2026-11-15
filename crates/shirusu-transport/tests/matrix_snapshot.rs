@@ -95,7 +95,7 @@ fn setup(
     shirusu_transport::RingReader,
 ) {
     let cfg = RingConfig::new(64, pcap);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let policy = WriterPolicy {
         max_wait: Duration::ZERO,

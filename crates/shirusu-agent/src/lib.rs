@@ -20,13 +20,13 @@ pub use expansion::{ExpansionManager, ExpansionManagerHandle, ExpansionStats};
 use shirusu_transport::clock::{system_clock, system_timestamp_source, Clock, TimestampSource};
 use shirusu_transport::context::{should_record, CallOrigin, HostMonitor, PublishGuard};
 use shirusu_transport::descriptor::{CaptureState, EventKind};
-use shirusu_transport::expansion::{ExpansionDelivery, EXPANDED_SLOT_GENERATION};
-use shirusu_transport::layout;
+use shirusu_transport::expansion::{DeliveredMapping, ExpansionDelivery, EXPANDED_SLOT_GENERATION};
 use shirusu_transport::notify::NotifySignal;
 use shirusu_transport::ring::{
     EventInput, LoaderLockProbe, LoaderLockState, RingWriter, SharedRegion, WriteOutcome,
     WriterPolicy,
 };
+use shirusu_transport::shm::{Control, Shm, Word};
 use shirusu_transport::slot::{SlotHandle, SlotPool};
 use shirusu_transport::RingConfig;
 use shirusu_transport_win::{EventClock, EventObject, HandleValue, RingNotify, SharedMapping};
@@ -86,7 +86,7 @@ pub struct Agent {
     /// (thread_forget / Slot 再利用)、Slot への紐付けは残る。
     /// フィールドの破棄順に注意: `threads` より後に宣言し、書き手状態が
     /// 先に破棄されてから Mapping の保持を解く。
-    expanded_regions: Arc<Mutex<HashMap<usize, ExpandedRegion>>>,
+    expanded_regions: Arc<Mutex<HashMap<usize, Shm>>>,
     /// 公開済み追加 Slot の Mapping base の追記専用リスト。記録経路
     /// (Slot を持てないスレッドの欠落掲示) はロックを取らずにここを読む。
     /// TerminateThread されたスレッドがロックを握ったまま消えると、そのロックは
@@ -114,29 +114,14 @@ pub struct Agent {
     last_reap_ms: AtomicU64,
 }
 
-/// 追加 Slot (A70) へ紐付けた Mapping。Slot の index ごとに Agent が保持する。
-enum ExpandedRegion {
-    /// プロセス内: Host の Mapping の base を借りる。Mapping 自体は Host の
-    /// ExpansionService が保持する間だけ有効。
-    Borrowed { base: *mut u8 },
-    /// Windows プロセス間: duplicate されたハンドルから作った自分の写像。
-    Owned(SharedMapping),
-}
-// SAFETY: `Borrowed` の base は Host が保持する Mapping の有効なビューで、
-// Agent が登録を終えた後も Host のサービスが生存する間は有効。
-// `Owned` の SharedMapping は Send である。紐付け表は Mutex の内側でのみ
-// 触り、base へのアクセスは SPSC の公開プロトコル経由に限る。
-unsafe impl Send for ExpandedRegion {}
-
-/// 追加 Slot の Mapping base を並べた追記専用の連結リスト。管理スレッドが
+/// 追加 Slot の Mapping を並べた追記専用の連結リスト。管理スレッドが
 /// CAS で先頭へ足し、記録経路は Acquire で辿るだけ (ロックなし)。要素は
-/// Agent の破棄まで外さない。base は `expanded_regions` (Owned) または Host
-/// のサービス (Borrowed) が Agent より長く保持する。
+/// Agent の破棄まで外さない。各要素の [`Shm`] が Mapping の実体を保つ。
 struct PublishedBases {
     head: AtomicPtr<PublishedBase>,
 }
 struct PublishedBase {
-    base: *mut u8,
+    shm: Shm,
     next: *mut PublishedBase,
 }
 impl PublishedBases {
@@ -146,9 +131,9 @@ impl PublishedBases {
         }
     }
     /// 管理パス専用 (Heap 確保を伴う)。
-    fn push(&self, base: *mut u8) {
+    fn push(&self, shm: Shm) {
         let node = Box::into_raw(Box::new(PublishedBase {
-            base,
+            shm,
             next: std::ptr::null_mut(),
         }));
         let mut head = self.head.load(Ordering::Relaxed);
@@ -165,12 +150,12 @@ impl PublishedBases {
         }
     }
     /// ロックも確保もしない走査。
-    fn for_each(&self, mut f: impl FnMut(*mut u8)) {
+    fn for_each(&self, mut f: impl FnMut(&Shm)) {
         let mut cur = self.head.load(Ordering::Acquire);
         while !cur.is_null() {
             // SAFETY: 公開された要素は Agent の破棄まで解放されない。
             let node = unsafe { &*cur };
-            f(node.base);
+            f(&node.shm);
             cur = node.next;
         }
     }
@@ -185,8 +170,10 @@ impl Drop for PublishedBases {
         }
     }
 }
-// SAFETY: base は共有 Mapping のビューで、アクセスは layout の原子操作に限る。
+// SAFETY: 要素は Box で確保した Shm (Send + Sync) で、Agent の破棄まで
+// 解放しない。リンクは原子的に公開する。
 unsafe impl Send for PublishedBases {}
+// SAFETY: 同上。
 unsafe impl Sync for PublishedBases {}
 
 /// 受け渡し口の数。埋まっていれば要求は置けず、そのスレッドは記録されない
@@ -302,49 +289,12 @@ impl Drop for Adoptions {
     }
 }
 
-/// スレッドの Ring の裏付け。初期 Slot は Agent が作るローカル領域、
-/// 追加 Slot は Host から配送された Mapping (A70)。
-enum RegionBacking {
-    /// Agent が確保したローカル領域 (初期 Slot)。
-    Owned(Box<SharedRegion>),
-    /// 追加 Slot の Mapping のビュー。実体は Agent の登録表
-    /// (`expanded_regions`) または Host のサービスが保持する。
-    /// `init_control` は claim 時に済ませてある。
-    Mapped { base: *mut u8 },
-}
-impl RegionBacking {
-    fn base(&self) -> *mut u8 {
-        match self {
-            Self::Owned(r) => r.base(),
-            Self::Mapped { base } => *base,
-        }
-    }
-    /// # Safety
-    /// `base` は config 分の共有領域を指し、この裏付けの存続期間中有効で
-    /// あること (呼び出し側は `begin_thread_state` の契約で保証する)。
-    unsafe fn writer(
-        &self,
-        config: RingConfig,
-        policy: WriterPolicy,
-        clock: Arc<dyn Clock>,
-        timestamps: Arc<dyn TimestampSource>,
-    ) -> RingWriter {
-        // SAFETY: 呼び出し側の契約に従う。
-        unsafe { RingWriter::new_with_timestamps(self.base(), config, policy, clock, timestamps) }
-    }
-}
-// SAFETY: `Mapped` の base が指す共有メモリへのアクセスは、書き手側の
-// SPSC 公開プロトコル (単一書き手) と Host 側の検証付き読取りに限る。
-// `Owned` の SharedRegion と同格のモデルである。
-unsafe impl Send for RegionBacking {}
-unsafe impl Sync for RegionBacking {}
-
 /// スレッド (Ring) ごとの書き手状態。`Arc` で共有し、TLS キャッシュと
 /// 登録表の両方から指す。
 struct ThreadSlotState {
     handle: SlotHandle,
-    // SharedRegion は writer より長生きさせるためここに保持する。
-    region: RegionBacking,
+    /// Ring の領域 (書き手も同じ実体を共有する)。
+    region: Shm,
     /// 書き手は Ring ごとに 1 つだけ。記録する OS スレッドは原子的な
     /// 読み書き更新なしの高速経路で使い、他のスレッド (管理パスや同じ
     /// 論理スレッドを名乗る別スレッド) は排他経路で使う。SPSC の単一
@@ -745,24 +695,24 @@ impl Agent {
         if delivery.len < self.config.required_len() {
             return Err(());
         }
-        let region = match (delivery.base, delivery.handle_value) {
-            (Some(base), _) => ExpandedRegion::Borrowed { base },
-            (None, Some(handle)) => {
+        let region = match delivery.mapping {
+            DeliveredMapping::InProcess(shm) => shm,
+            DeliveredMapping::Handle(handle) => {
                 // Windows プロセス間: duplicate されたハンドルから自分の写像を
-                // 作る。スタブでは Unsupported で失敗する。
+                // 作る。スタブでは Unsupported で失敗する。ビューは Shm が保つ
+                // ので、ハンドルは写像を作った後に閉じてよい。
                 // SAFETY: handle は Host が duplicate して渡した有効な
                 // File Mapping ハンドルであること (呼び出し側の契約)。
                 match unsafe { SharedMapping::from_handle_value(handle, delivery.len) } {
-                    Ok(mapping) => ExpandedRegion::Owned(mapping),
+                    Ok(mapping) => mapping.shm().clone(),
                     Err(_) => return Err(()),
                 }
             }
-            (None, None) => return Err(()),
         };
-        let base = match &region {
-            ExpandedRegion::Borrowed { base } => *base,
-            ExpandedRegion::Owned(mapping) => mapping.as_ptr(),
-        };
+        if region.check_fits(self.config).is_err() {
+            return Err(());
+        }
+        let published = region.clone();
         let index = self.pool.add_slot().ok_or(())?;
         self.expanded_regions.lock().unwrap().insert(index, region);
         if !self.pool.publish_slot(index) {
@@ -771,7 +721,7 @@ impl Agent {
             self.expanded_regions.lock().unwrap().remove(&index);
             return Err(());
         }
-        self.published_bases.push(base);
+        self.published_bases.push(published);
         // 管理パス: 新しい Slot を、待っているスレッドへ回す。
         self.serve_adoptions();
         Ok(index)
@@ -798,7 +748,7 @@ impl Agent {
         // ロックを取らない: このメソッドは Slot を持てない記録スレッドから
         // 呼ばれ、そのスレッドが強制終了されてもロックが残らないようにする。
         self.published_bases
-            .for_each(|base| layout::publish_process_missing_calls(base, total));
+            .for_each(|shm| shm.control().publish_process_missing_calls(total));
     }
     /// 管理パス: Host から配送された Mapping を Slot として登録する公開
     /// 入口（本体は A70 の管理スレッド経路と同じ `register_expanded_mapping`）。
@@ -821,25 +771,26 @@ impl Agent {
         // 領域を作る。Mapping の Control 領域はここで初期化する (生成者は
         // Agent)。紐付けは Slot の index に残るため、再利用時も同じ
         // Mapping を使う。
-        let region = {
-            let expanded = self.expanded_regions.lock().unwrap();
-            match expanded.get(&handle.index) {
-                Some(ExpandedRegion::Borrowed { base }) => {
-                    let base = *base;
-                    layout::init_control(base, self.config, handle.generation, thread_id);
-                    RegionBacking::Mapped { base }
-                }
-                Some(ExpandedRegion::Owned(mapping)) => {
-                    let base = mapping.as_ptr();
-                    layout::init_control(base, self.config, handle.generation, thread_id);
-                    RegionBacking::Mapped { base }
-                }
-                None => RegionBacking::Owned(Box::new(SharedRegion::new(
-                    self.config,
-                    handle.generation,
-                    thread_id,
-                ))),
+        let expanded = self
+            .expanded_regions
+            .lock()
+            .unwrap()
+            .get(&handle.index)
+            .cloned();
+        let region = match expanded {
+            Some(shm) => {
+                shm.control()
+                    .init(self.config, handle.generation, thread_id);
+                shm
             }
+            // 確保に失敗したら Slot を返して記録しない (対象プロセスを止めない)。
+            None => match SharedRegion::new(self.config, handle.generation, thread_id) {
+                Ok(r) => r.shm().clone(),
+                Err(_) => {
+                    let _ = self.pool.cancel_claim(handle);
+                    return None;
+                }
+            },
         };
         // Ring ごとの space_available が結ばれていればその EventClock を、
         // 無ければ既定 Clock を使う (R7)。
@@ -850,15 +801,20 @@ impl Agent {
             .get(&thread_id)
             .map(|c| Arc::clone(c) as Arc<dyn Clock>)
             .unwrap_or_else(|| Arc::clone(&self.default_clock));
-        // SAFETY: region の base は config 分の共有領域を指し、
-        // ThreadSlotState の生存期間中有効である。
-        let mut writer = unsafe {
-            region.writer(
+        // SAFETY: この Slot の書き手はここで作る 1 つだけで、WriterCell が
+        // 以後の単一書き手を保証する (SPSC)。
+        let writer = unsafe {
+            RingWriter::new_with_timestamps(
+                region.clone(),
                 self.config,
                 self.policy.clone(),
                 clock,
                 Arc::clone(&self.timestamps),
             )
+        };
+        let Ok(mut writer) = writer else {
+            let _ = self.pool.cancel_claim(handle);
+            return None;
         };
         writer.set_loader_lock_state(self.loader_lock_state);
         writer.set_loader_lock_probe(self.loader_lock_probe);
@@ -877,13 +833,11 @@ impl Agent {
         self.state_for(thread_id).map(|s| s.handle)
     }
 
-    /// テスト/Host 連携用: スレッドの共有領域ベースポインタを返す。
-    ///
-    /// # Safety
-    /// 返したポインタは ThreadSlotState が保持する領域を指す。thread_end で解放された後は使えない。
-    pub unsafe fn thread_region_base(&self, thread_id: u64) -> Option<*mut u8> {
+    /// テスト/Host 連携用: スレッドの共有領域。実体を共有するので、
+    /// thread_end の後も返した値が生きている間は解放されない。
+    pub fn thread_region(&self, thread_id: u64) -> Option<Shm> {
         let map = self.threads.read().unwrap();
-        map.get(&thread_id).map(|s| s.region.base())
+        map.get(&thread_id).map(|s| s.region.clone())
     }
     pub fn thread_config(&self) -> RingConfig {
         self.config
@@ -1327,7 +1281,7 @@ impl Agent {
         // 排他取得自体が、進行中の記録の完了待ちになる。記録の途中で
         // 強制終了した書き手は待たずに隔離する (レビュー P0)。
         if state.writer.exclusive(|writer| writer.mark_detached()) == Access::OwnerTerminated {
-            abandon_ring(state.region.base());
+            abandon_ring(state.region.control());
         }
         // この Ring への space_available 結線はこの incarnation の
         // ものであるため外す (再利用時は ensure 経路が結び直す)。
@@ -1426,7 +1380,7 @@ impl Agent {
         let mut i = 0;
         while i < pending.len() {
             let state = &pending[i];
-            if !ring_is_drained(state.region.base(), state.writer.is_abandoned()) {
+            if !ring_is_drained(state.region.control(), state.writer.is_abandoned()) {
                 i += 1;
                 continue;
             }
@@ -1475,11 +1429,11 @@ fn reap_clock_ms() -> u64 {
 /// 隔離した Ring (書き手が記録の途中で強制終了) では、Payload の書き込み
 /// 位置だけが Descriptor の公開より先に進んでいることがある。その分は
 /// 公開されないため、公開済み Descriptor を読み終えたことだけで判定する。
-fn ring_is_drained(base: *const u8, abandoned: bool) -> bool {
-    let write_cursor = layout::load(base, layout::OFF_WRITE_CURSOR, Ordering::Acquire);
-    let read_cursor = layout::load(base, layout::OFF_READ_CURSOR, Ordering::Acquire);
-    let write_pos = layout::load(base, layout::OFF_PAYLOAD_WRITE_POSITION, Ordering::Acquire);
-    let read_pos = layout::load(base, layout::OFF_PAYLOAD_READ_POSITION, Ordering::Acquire);
+fn ring_is_drained(ctl: Control<'_>, abandoned: bool) -> bool {
+    let write_cursor = ctl.load(Word::WriteCursor, Ordering::Acquire);
+    let read_cursor = ctl.load(Word::ReadCursor, Ordering::Acquire);
+    let write_pos = ctl.load(Word::PayloadWritePosition, Ordering::Acquire);
+    let read_pos = ctl.load(Word::PayloadReadPosition, Ordering::Acquire);
     read_cursor >= write_cursor && (abandoned || read_pos >= write_pos)
 }
 
@@ -1487,8 +1441,8 @@ fn ring_is_drained(base: *const u8, abandoned: bool) -> bool {
 /// 書きかけのイベントは公開されないため、欠落として 1 件数える。
 /// 書き手は終了済み (二度と実行されない) なので、書き手行の更新が
 /// 競合することはない。
-fn abandon_ring(base: *mut u8) {
-    layout::fetch_add(base, layout::OFF_DROPPED_EVENTS, 1);
+fn abandon_ring(ctl: Control<'_>) {
+    ctl.fetch_add(Word::DroppedEvents, 1);
 }
 
 #[cfg(test)]
@@ -1517,8 +1471,8 @@ mod tests {
         .with_timestamp_source(Arc::new(shirusu_transport_win::QpcTimestampSource::new()));
         let tid = 1;
         a.thread_begin(tid).unwrap();
-        let base = unsafe { a.thread_region_base(tid) }.unwrap();
-        let mut reader = unsafe { RingReader::new(base, cfg) };
+        let base = a.thread_region(tid).unwrap();
+        let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         let state = a.state_for(tid).unwrap();
         let payload = [7u8; 24];
         let report = |name: &str, mut samples: Vec<f64>| {
@@ -1572,7 +1526,7 @@ mod tests {
         });
         // The same captured write on a plain heap region, outside the Agent:
         // separates the Agent's own cost from the Ring writer's.
-        let plain = SharedRegion::new(cfg, 1, 9);
+        let plain = SharedRegion::new(cfg, 1, 9).unwrap();
         let mut plain_writer = unsafe {
             plain.writer_with_timestamps(
                 WriterPolicy::default(),
@@ -1580,7 +1534,7 @@ mod tests {
                 Arc::new(shirusu_transport_win::QpcTimestampSource::new()),
             )
         };
-        let mut plain_reader = unsafe { RingReader::new(plain.base(), cfg) };
+        let mut plain_reader = unsafe { RingReader::new(plain.shm().clone(), cfg) }.unwrap();
         {
             let mut samples = Vec::new();
             for round in 0..=ROUNDS {
@@ -1676,9 +1630,11 @@ mod tests {
             a.record_completion(1, 10, 21, 100, 0, b"completed-args"),
             RecordResult::Written(_)
         ));
-        let base = unsafe { a.thread_region_base(1) }.expect("region");
-        let mut reader =
-            unsafe { shirusu_transport::ring::RingReader::new(base, RingConfig::new(16, 512)) };
+        let base = a.thread_region(1).expect("region");
+        let mut reader = unsafe {
+            shirusu_transport::ring::RingReader::new(base.clone(), RingConfig::new(16, 512))
+        }
+        .unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 3);
         assert_eq!(
@@ -1702,9 +1658,11 @@ mod tests {
             a.record_aborted(1, 10, 21, 100, 0),
             RecordResult::Written(_)
         ));
-        let base = unsafe { a.thread_region_base(1) }.expect("region");
-        let mut reader =
-            unsafe { shirusu_transport::ring::RingReader::new(base, RingConfig::new(16, 512)) };
+        let base = a.thread_region(1).expect("region");
+        let mut reader = unsafe {
+            shirusu_transport::ring::RingReader::new(base.clone(), RingConfig::new(16, 512))
+        }
+        .unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(
@@ -1892,7 +1850,7 @@ mod tests {
             a.record_enter(7, 10, 20, 1, 0, b"first"),
             RecordResult::Written(_)
         ));
-        let base = unsafe { a.thread_region_base(7) }.unwrap();
+        let base = a.thread_region(7).unwrap();
         let (to_waiter, waiter_rx) = std::sync::mpsc::channel::<()>();
         let (to_main, main_rx) = std::sync::mpsc::channel::<RecordResult>();
         let waiter = {
@@ -1910,20 +1868,14 @@ mod tests {
             })
         };
         assert_eq!(main_rx.recv().unwrap(), RecordResult::NoSlot);
-        assert!(
-            unsafe { a.thread_region_base(8) }.is_none(),
-            "nothing built yet"
-        );
+        assert!(a.thread_region(8).is_none(), "nothing built yet");
         // The first thread exits; once the Host drained its Ring, reclaiming
         // the Slot builds the waiting thread's Ring on this (management) path.
         assert!(a.thread_exit(7));
-        let mut reader = unsafe { RingReader::new(base, cfg) };
+        let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         assert_eq!(reader.drain_all().events.len(), 1);
         assert_eq!(a.poll_reclaims(), 1);
-        assert!(
-            unsafe { a.thread_region_base(8) }.is_some(),
-            "built for the waiter"
-        );
+        assert!(a.thread_region(8).is_some(), "built for the waiter");
         to_waiter.send(()).unwrap();
         assert!(matches!(main_rx.recv().unwrap(), RecordResult::Written(_)));
         waiter.join().unwrap();
@@ -1945,14 +1897,12 @@ mod tests {
                 let guard = state.writer.try_owner().expect("owner fast path");
                 // Half way through the next event: payload reserved, its
                 // descriptor never published.
-                let base = state.region.base();
-                let pos = layout::load(base, layout::OFF_PAYLOAD_WRITE_POSITION, Ordering::Relaxed);
-                layout::store(
-                    base,
-                    layout::OFF_PAYLOAD_WRITE_POSITION,
-                    pos + 8,
-                    Ordering::Relaxed,
-                );
+                let base = state.region.clone();
+                let pos = base
+                    .control()
+                    .load(Word::PayloadWritePosition, Ordering::Relaxed);
+                base.control()
+                    .store(Word::PayloadWritePosition, pos + 8, Ordering::Relaxed);
                 std::mem::forget(guard);
                 // Leak the TLS cache's reference as well: a terminated thread
                 // drops nothing.
@@ -1960,7 +1910,7 @@ mod tests {
             })
         };
         victim.join().unwrap();
-        let base = unsafe { a.thread_region_base(7) }.unwrap();
+        let base = a.thread_region(7).unwrap();
         // Another thread keeps capturing meanwhile.
         assert!(matches!(
             a.record_enter(8, 10, 20, 2, 0, b"other"),
@@ -1970,14 +1920,14 @@ mod tests {
         assert!(a.thread_detach(7));
         assert_eq!(a.reap_terminated_threads(), vec![7]);
         assert_eq!(
-            layout::load(base, layout::OFF_DROPPED_EVENTS, Ordering::Acquire),
+            base.control().load(Word::DroppedEvents, Ordering::Acquire),
             1,
             "the cut-off event is counted as lost"
         );
         assert!(a.reap_terminated_threads().is_empty(), "reaped once");
         // Not reusable before the Host drained what was published.
         assert_eq!(a.poll_reclaims(), 0);
-        let mut reader = unsafe { RingReader::new(base, cfg) };
+        let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1, "only published events are read");
         assert_eq!(batch.events[0].descriptor.call_id, 1);
@@ -2008,14 +1958,14 @@ mod tests {
                 a.record_enter(tid, 10, 20, 1000 + i, 0, b"x"),
                 RecordResult::Written(_)
             ));
-            let base = unsafe { a.thread_region_base(tid) }.expect("region");
+            let base = a.thread_region(tid).expect("region");
             assert!(a.thread_exit(tid), "exit of a begun thread");
             // Host がまだ読んでいない間は回収されない
             assert_eq!(a.poll_reclaims(), 0);
             assert_eq!(a.pending_reclaim_count(), 1);
             // Host 側が drain する (実 Host では DrainWorker が共有
             // 読み位置を進める。ここでは RingReader で同じことをする)
-            let mut reader = unsafe { RingReader::new(base, cfg) };
+            let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
             let batch = reader.drain_all();
             assert_eq!(batch.events.len(), 1);
             assert_eq!(batch.events[0].descriptor.call_id, 1000 + i);
@@ -2079,10 +2029,10 @@ mod tests {
         use shirusu_transport::clock::ManualClock;
         let a = agent(2).with_clock(Arc::new(ManualClock::new()));
         assert_eq!(a.thread_config(), RingConfig::new(16, 512));
-        assert!(unsafe { a.thread_region_base(77) }.is_none());
+        assert!(a.thread_region(77).is_none());
         a.thread_begin(77).unwrap();
-        let base = unsafe { a.thread_region_base(77) }.expect("region exists");
-        assert!(!base.is_null());
+        let base = a.thread_region(77).expect("region exists");
+        assert!(base.len() >= a.thread_config().required_len());
         assert!(matches!(
             a.record_enter(77, 1, 1, 1, 0, b"x"),
             RecordResult::Written(_)
@@ -2153,8 +2103,11 @@ mod tests {
             let _ = a.record_captured(tid, EventKind::CallEnter, 7, 8, i, 40 + i, b"args");
         }
         let _ = a.record_enter(tid, 7, 8, 4, 44, b"args");
-        let base = unsafe { a.thread_region_base(tid) }.unwrap();
-        let events = unsafe { RingReader::new(base, cfg) }.drain_all().events;
+        let base = a.thread_region(tid).unwrap();
+        let events = unsafe { RingReader::new(base.clone(), cfg) }
+            .unwrap()
+            .drain_all()
+            .events;
         assert_eq!(events.len(), 4);
         for (i, e) in events.iter().enumerate() {
             let d = &e.descriptor;
@@ -2177,9 +2130,10 @@ mod tests {
             let _inside = PublishGuard::enter();
             assert!(!a.record_captured(tid, EventKind::CallEnter, 1, 1, 2, 0, b""));
         }
-        let base = unsafe { a.thread_region_base(tid) }.unwrap();
+        let base = a.thread_region(tid).unwrap();
         assert_eq!(
-            unsafe { RingReader::new(base, cfg) }
+            unsafe { RingReader::new(base.clone(), cfg) }
+                .unwrap()
                 .drain_all()
                 .events
                 .len(),

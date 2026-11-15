@@ -40,7 +40,7 @@ struct Rig {
 impl Rig {
     fn new(identity: RingIdentity) -> Self {
         let cfg = RingConfig::new(8, 64);
-        let region = SharedRegion::new(cfg, identity.generation, 1);
+        let region = SharedRegion::new(cfg, identity.generation, 1).unwrap();
         let clock = Arc::new(ManualClock::new());
         let wc: Arc<dyn Clock> = clock.clone();
         let writer = unsafe {
@@ -52,7 +52,8 @@ impl Rig {
                 wc,
             )
         };
-        let mut worker = unsafe { DrainWorker::new(region.base(), cfg, identity.generation) };
+        let mut worker =
+            unsafe { DrainWorker::new(region.shm().clone(), cfg, identity.generation) }.unwrap();
         worker.set_identity(identity);
         Self {
             worker,
@@ -234,11 +235,11 @@ proptest! {
                     rig.harvest(&mut model)?;
                     let mut worker = unsafe {
                         DrainWorker::new(
-                            rig.region.base(),
-                            rig.region.config,
+                            rig.region.shm().clone(),
+                            rig.region.config(),
                             rig.identity.generation,
                         )
-                    };
+                    }.unwrap();
                     worker.set_identity(rig.identity);
                     worker.resume_from_shared();
                     rig.worker = worker;

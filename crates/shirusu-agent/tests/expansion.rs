@@ -7,10 +7,12 @@
 
 use shirusu_agent::{Agent, ExpansionManager, RecordResult};
 use shirusu_transport::context::HostMonitor;
+use shirusu_transport::expansion::DeliveredMapping;
 use shirusu_transport::expansion::{ExpansionDelivery, ExpansionRequest, EXPANDED_SLOT_GENERATION};
 use shirusu_transport::ring::WriterPolicy;
 use shirusu_transport::slot::{SlotPool, SLOT_MEMORY_BYTES};
 use shirusu_transport::RingConfig;
+use shirusu_transport::Shm;
 use shirusu_transport_win::SharedMapping;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -60,17 +62,16 @@ impl Rig {
         self.requests.try_recv().ok()
     }
     /// Host 役: 新しい Mapping を作って配送する。作った Mapping は保持する。
-    fn deliver_mapping(&mut self) -> *mut u8 {
+    fn deliver_mapping(&mut self) -> Shm {
         let mapping = SharedMapping::create(self.cfg.required_len()).unwrap();
-        let base = mapping.as_ptr();
+        let base = mapping.shm().clone();
         self.mappings.push(mapping);
         self.deliveries
             .as_ref()
             .unwrap()
             .send(ExpansionDelivery {
                 len: self.cfg.required_len(),
-                base: Some(base),
-                handle_value: None,
+                mapping: DeliveredMapping::InProcess(base.clone()),
                 generation: EXPANDED_SLOT_GENERATION,
             })
             .unwrap();
@@ -110,7 +111,10 @@ fn manager_registers_expansion_and_new_thread_uses_mapping() {
     let h = rig.agent.thread_begin(4).unwrap();
     assert_eq!(h.index, 3);
     assert_eq!(h.generation, 0);
-    assert_eq!(unsafe { rig.agent.thread_region_base(4) }, Some(base));
+    assert!(rig
+        .agent
+        .thread_region(4)
+        .is_some_and(|r| r.same_region(&base)));
     assert!(matches!(rig.record(4, 1), RecordResult::Written(_)));
     // 既存スレッドの記録も続く。
     assert!(matches!(rig.record(1, 2), RecordResult::Written(_)));
@@ -303,8 +307,7 @@ fn delivery_with_handle_value_unsupported_on_stub() {
         .unwrap()
         .send(ExpansionDelivery {
             len: rig.cfg.required_len(),
-            base: None,
-            handle_value: Some(0),
+            mapping: DeliveredMapping::Handle(0),
             generation: EXPANDED_SLOT_GENERATION,
         })
         .unwrap();
@@ -324,15 +327,14 @@ fn generation_mismatch_delivery_rejected() {
     rig.manager.step();
     assert!(rig.take_request().is_some());
     let mapping = SharedMapping::create(rig.cfg.required_len()).unwrap();
-    let base = mapping.as_ptr();
+    let base = mapping.shm().clone();
     rig.mappings.push(mapping);
     rig.deliveries
         .as_ref()
         .unwrap()
         .send(ExpansionDelivery {
             len: rig.cfg.required_len(),
-            base: Some(base),
-            handle_value: None,
+            mapping: DeliveredMapping::InProcess(base.clone()),
             generation: 1,
         })
         .unwrap();

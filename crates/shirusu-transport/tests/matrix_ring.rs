@@ -15,9 +15,9 @@
 
 use shirusu_transport::clock::ManualClock;
 use shirusu_transport::descriptor::{CaptureState, EventKind};
-use shirusu_transport::layout::*;
 use shirusu_transport::notify::NotifySignal;
 use shirusu_transport::ring::*;
+use shirusu_transport::shm::Word;
 use shirusu_transport::Clock;
 use shirusu_transport::RingConfig;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ fn setup(
     policy: WriterPolicy,
 ) -> (SharedRegion, RingWriter, RingReader, Arc<ManualClock>) {
     let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock = Arc::new(ManualClock::new());
     let w = unsafe { region.writer(policy, clock.clone() as Arc<dyn Clock>) };
     let r = unsafe { region.reader() };
@@ -450,12 +450,9 @@ state_case!(
 #[test]
 fn notify_host_waiting_flag_produces_signal() {
     let (region, mut w, _rd, _clk) = setup(4, 256, no_wait());
-    store(
-        region.base(),
-        OFF_HOST_WAITING,
-        1,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    region
+        .control()
+        .store(Word::HostWaiting, 1, std::sync::atomic::Ordering::Relaxed);
     match w.write(input(EventKind::CallEnter, 1, b"a")) {
         WriteOutcome::Published { notify, .. } => assert_eq!(notify, NotifySignal::HostWaiting),
         o => panic!("expected published, got {o:?}"),
@@ -541,12 +538,9 @@ fn notify_threshold_rearms_after_partial_drain_without_an_intermediate_publish()
 #[test]
 fn notify_crossing_takes_precedence_over_host_waiting() {
     let (region, mut w, _rd, _clk) = setup(4, 256, no_wait());
-    store(
-        region.base(),
-        OFF_HOST_WAITING,
-        1,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    region
+        .control()
+        .store(Word::HostWaiting, 1, std::sync::atomic::Ordering::Relaxed);
     w.write(input(EventKind::CallEnter, 1, b"a")); // 25%: HostWaiting 側
     match w.write(input(EventKind::CallEnter, 2, b"b")) {
         WriteOutcome::Published { notify, .. } => {
@@ -685,12 +679,9 @@ fn reader_usage_drops_after_drain() {
 #[test]
 fn host_waiting_flag_is_consumed_once() {
     let (region, mut w, _r, _clock) = setup(64, 4096, no_wait());
-    store(
-        region.base(),
-        OFF_HOST_WAITING,
-        1,
-        std::sync::atomic::Ordering::Release,
-    );
+    region
+        .control()
+        .store(Word::HostWaiting, 1, std::sync::atomic::Ordering::Release);
     let first = w.write(input(EventKind::CallEnter, 1, b"x"));
     assert!(
         matches!(
@@ -703,11 +694,9 @@ fn host_waiting_flag_is_consumed_once() {
         "{first:?}"
     );
     assert_eq!(
-        load(
-            region.base(),
-            OFF_HOST_WAITING,
-            std::sync::atomic::Ordering::Acquire
-        ),
+        region
+            .control()
+            .load(Word::HostWaiting, std::sync::atomic::Ordering::Acquire),
         0,
         "flag consumed"
     );

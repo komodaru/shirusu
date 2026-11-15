@@ -16,10 +16,13 @@ use shirusu_trace::compact::decode_values;
 use shirusu_trace::proto::{loss_kind, CaptureEnvironment, SessionMetadata};
 use shirusu_trace::schema::TypedValue;
 use shirusu_transport::context::HostMonitor;
+use shirusu_transport::expansion::DeliveredMapping;
 use shirusu_transport::layout;
 use shirusu_transport::ring::{SharedRegion, WriterPolicy};
+use shirusu_transport::shm::Word;
 use shirusu_transport::slot::SlotPool;
 use shirusu_transport::RingConfig;
+use shirusu_transport::Shm;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -57,7 +60,7 @@ fn config() -> CaptureSessionConfig {
     }
 }
 
-fn agent_and_region(tid: u64) -> (Arc<Agent>, u64, *mut u8) {
+fn agent_and_region(tid: u64) -> (Arc<Agent>, u64, Shm) {
     let cfg = RingConfig::new(64, 4096);
     let pool = Arc::new(SlotPool::new(2));
     let agent = Arc::new(
@@ -67,7 +70,7 @@ fn agent_and_region(tid: u64) -> (Arc<Agent>, u64, *mut u8) {
         }),
     );
     let handle = agent.thread_begin(tid).expect("slot");
-    let base = unsafe { agent.thread_region_base(tid) }.expect("region");
+    let base = agent.thread_region(tid).expect("region");
     (agent, handle.generation, base)
 }
 
@@ -117,15 +120,9 @@ fn full_capture_in_process_produces_decodable_trace() {
     let path = temp_trace("full");
     let (agent, generation, base) = agent_and_region(11);
     let mut session = CaptureSession::create_file(&path, config()).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(
-                base,
-                RingConfig::new(64, 4096).required_len(),
-                spec(generation),
-            )
-            .unwrap();
-    }
+    session
+        .add_shared_ring(base.clone(), spec(generation))
+        .unwrap();
     session.start().unwrap();
     record_file_io(&agent, 11);
     let stats = session.poll_once().unwrap();
@@ -177,18 +174,12 @@ fn idle_host_waiting_flag_wakes_on_first_publication_only() {
     let path = temp_trace("host-waiting");
     let (agent, generation, base) = agent_and_region(12);
     let mut session = CaptureSession::create_file(&path, config()).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(
-                base,
-                RingConfig::new(64, 4096).required_len(),
-                spec(generation),
-            )
-            .unwrap();
-    }
+    session
+        .add_shared_ring(base.clone(), spec(generation))
+        .unwrap();
     session.start().unwrap();
     assert_eq!(session.poll_once().unwrap().events, 0);
-    let waiting = || layout::load(base, layout::OFF_HOST_WAITING, Ordering::Relaxed);
+    let waiting = || base.control().load(Word::HostWaiting, Ordering::Relaxed);
     // Idle Ring: the flag goes up and nothing is pending, so the Host may sleep.
     assert!(!session.arm_host_waiting());
     assert_eq!(waiting(), 1);
@@ -216,19 +207,17 @@ fn uninitialized_ring_is_pending_not_an_error() {
     let path = temp_trace("pending");
     let cfg = RingConfig::new(64, 4096);
     // Agent が初期化していない（Magic が無い）領域
-    let region = SharedRegion::new(cfg, 0, 0);
+    let region = SharedRegion::new(cfg, 0, 0).unwrap();
     // SharedRegion::new は Control を初期化してしまうので、Magic を消して
     // 「まだ Agent が claim していない」状態を作る。
     unsafe {
-        let p = region.base().add(layout::OFF_MAGIC) as *mut u64;
+        let p = region.shm().as_ptr().add(layout::OFF_MAGIC) as *mut u64;
         p.write_unaligned(0);
     }
     let mut session = CaptureSession::create_file(&path, config()).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(region.base(), cfg.required_len(), spec(0))
-            .unwrap();
-    }
+    session
+        .add_shared_ring(region.shm().clone(), spec(0))
+        .unwrap();
     session.start().unwrap();
     let stats = session.poll_once().unwrap();
     assert_eq!(stats.events, 0);
@@ -247,21 +236,15 @@ fn corrupted_ring_stops_and_marks_integrity_lost() {
     let path = temp_trace("corrupt");
     let (agent, generation, base) = agent_and_region(11);
     let mut session = CaptureSession::create_file(&path, config()).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(
-                base,
-                RingConfig::new(64, 4096).required_len(),
-                spec(generation),
-            )
-            .unwrap();
-    }
+    session
+        .add_shared_ring(base.clone(), spec(generation))
+        .unwrap();
     session.start().unwrap();
     record_file_io(&agent, 11);
     assert_eq!(session.poll_once().unwrap().events, 6);
     // 共有メモリの破損を注入： write cursor をあり得ない値にする
     unsafe {
-        let p = base.add(layout::OFF_WRITE_CURSOR) as *mut u64;
+        let p = base.as_ptr().add(layout::OFF_WRITE_CURSOR) as *mut u64;
         p.write_unaligned(u64::MAX - 3);
     }
     let stats = session.poll_once().unwrap();
@@ -293,25 +276,21 @@ fn corruption_found_after_release_stops_ring_and_loses_integrity() {
     let path = temp_trace("deferred-corrupt");
     let (agent, generation, base) = agent_and_region(12);
     let mut session = CaptureSession::create_file(&path, config()).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(
-                base,
-                RingConfig::new(64, 4096).required_len(),
-                spec(generation),
-            )
-            .unwrap();
-    }
+    session
+        .add_shared_ring(base.clone(), spec(generation))
+        .unwrap();
     session.start().unwrap();
     record_file_io(&agent, 12);
     assert_eq!(session.poll_once().unwrap().events, 6);
     // Six more committed events; corrupt the first one in shared memory.
     record_file_io(&agent, 12);
-    let read = layout::load(base, layout::OFF_READ_CURSOR, Ordering::Acquire);
+    let read = base.control().load(Word::ReadCursor, Ordering::Acquire);
     assert_eq!(read, 6, "first batch released");
     let cfg = RingConfig::new(64, 4096);
     unsafe {
-        let desc = base.add(cfg.descriptors_offset() + (read as usize % 64) * 64);
+        let desc = base
+            .as_ptr()
+            .add(cfg.descriptors_offset() + (read as usize % 64) * 64);
         desc.cast::<u16>().write_unaligned(0xffff); // invalid kind
     }
     // The collector copies and releases without validating.
@@ -344,15 +323,9 @@ fn unterminated_call_becomes_loss_record() {
     let path = temp_trace("unterminated");
     let (agent, generation, base) = agent_and_region(11);
     let mut session = CaptureSession::create_file(&path, config()).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(
-                base,
-                RingConfig::new(64, 4096).required_len(),
-                spec(generation),
-            )
-            .unwrap();
-    }
+    session
+        .add_shared_ring(base.clone(), spec(generation))
+        .unwrap();
     session.start().unwrap();
     // Enter だけ記録して対象が死んだ状況（Leave が来ない）
     let cf = api_by_id(API_CREATE_FILE_W).unwrap();
@@ -390,7 +363,7 @@ fn state_machine_rejects_illegal_operations() {
         Err(SessionError::InvalidTransition { .. })
     ));
     // 開始後の Ring 追加は不可
-    let region = SharedRegion::new(RingConfig::new(64, 4096), 1, 0);
+    let region = SharedRegion::new(RingConfig::new(64, 4096), 1, 0).unwrap();
     assert!(matches!(
         session.add_local_ring(region, spec(1)),
         Err(SessionError::InvalidTransition { .. })
@@ -456,7 +429,7 @@ proptest! {
                     prop_assert_eq!(r.is_ok(), started);
                 }
                 Op::AddRing => {
-                    let region = SharedRegion::new(cfg, 1, 0);
+                    let region = SharedRegion::new(cfg, 1, 0).unwrap();
                     let r = session.add_local_ring(region, spec(1));
                     prop_assert_eq!(r.is_ok(), !started);
                 }
@@ -613,8 +586,8 @@ fn session_follows_ring_reincarnation_after_slot_reuse() {
     let cfg = RingConfig::new(64, 4096);
     // Host が所有する領域を Agent の追加 Slot へ配送する (実経路の
     // Bootstrap Mapping と同じ形)。base は incarnation をまたいで不変。
-    let region = SharedRegion::new(cfg, 0, 0);
-    let base = region.base();
+    let region = SharedRegion::new(cfg, 0, 0).unwrap();
+    let base = region.shm().clone();
     let pool = Arc::new(SlotPool::new(0));
     let agent = Arc::new(
         Agent::new(pool, cfg, Arc::new(HostMonitor::always_alive())).with_policy(WriterPolicy {
@@ -624,18 +597,13 @@ fn session_follows_ring_reincarnation_after_slot_reuse() {
     );
     let delivery = shirusu_transport::expansion::ExpansionDelivery {
         len: cfg.required_len(),
-        base: Some(base),
-        handle_value: None,
+        mapping: DeliveredMapping::InProcess(base.clone()),
         generation: shirusu_transport::EXPANDED_SLOT_GENERATION,
     };
     assert_eq!(agent.register_slot_mapping(delivery), Some(0));
 
     let mut session = CaptureSession::create_file(&path, config()).unwrap();
-    unsafe {
-        session
-            .add_borrowed_ring(base, cfg.required_len(), spec(0))
-            .unwrap();
-    }
+    session.add_shared_ring(base.clone(), spec(0)).unwrap();
     session.start().unwrap();
     // incarnation 1: TID 11 が世代 0 で記録する
     let h1 = agent.thread_begin(11).expect("slot");
@@ -724,15 +692,9 @@ fn field_capture_quality_reaches_finalization_without_event_loss() {
         let path = temp_trace("field-quality");
         let (agent, generation, base) = agent_and_region(11);
         let mut session = CaptureSession::create_file(&path, config()).unwrap();
-        unsafe {
-            session
-                .add_borrowed_ring(
-                    base,
-                    RingConfig::new(64, 4096).required_len(),
-                    spec(generation),
-                )
-                .unwrap();
-        }
+        session
+            .add_shared_ring(base.clone(), spec(generation))
+            .unwrap();
         session.start().unwrap();
         let api = api_by_id(API_CLOSE_HANDLE).unwrap();
         let enter = capture::encode_enter(api, &capture::close_handle_enter(42)).unwrap();

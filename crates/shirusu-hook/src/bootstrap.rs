@@ -408,8 +408,8 @@ impl AgentBootstrap {
         let mut b = Self {
             api_catalog_fingerprint: shirusu_api_catalog::fingerprint::catalog_fingerprint(),
             session_id,
-            descriptor_capacity: config.descriptor_capacity as u64,
-            payload_capacity: config.payload_capacity as u64,
+            descriptor_capacity: config.descriptor_capacity_u64(),
+            payload_capacity: config.payload_capacity_u64(),
             ring_count: rings.len().min(MAX_BOOTSTRAP_RINGS) as u32,
             ..Self::default()
         };

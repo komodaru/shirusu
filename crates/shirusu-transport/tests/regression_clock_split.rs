@@ -63,7 +63,7 @@ fn stamps_do_not_come_from_wait_clock() {
     // 大きな値を設定しても、刻印はその値にならない (旧実装では刻印が
     // Clock 由来で、この表明が失敗した)。
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 100);
+    let region = SharedRegion::new(cfg, 1, 100).unwrap();
     let clock = Arc::new(ManualClock::new());
     clock.set(777_000_000);
     let mut w = unsafe { region.writer(WriterPolicy::default(), clock as Arc<dyn Clock>) };
@@ -81,7 +81,7 @@ fn stamps_do_not_come_from_wait_clock() {
 #[test]
 fn writer_stamps_track_timestamp_source_not_clock_swaps() {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 100);
+    let region = SharedRegion::new(cfg, 1, 100).unwrap();
     let ts = Arc::new(ManualTimestampSource::new(424_242, 10_000_000));
     let clock = Arc::new(ManualClock::new());
     clock.set(111);

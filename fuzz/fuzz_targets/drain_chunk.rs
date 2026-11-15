@@ -24,7 +24,7 @@ fuzz_target!(|data: &[u8]| {
     let n = (n as usize % 64).min(rest.len());
     let (writes, edits) = rest.split_at(n);
     let cfg = RingConfig::new(8, 128);
-    let region = SharedRegion::new(cfg, 1, 1);
+    let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     let mut writer = unsafe {
         region.writer(
@@ -35,7 +35,7 @@ fuzz_target!(|data: &[u8]| {
             clock,
         )
     };
-    let mut collector = unsafe { CommittedRangeCollector::new(region.base(), cfg) };
+    let mut collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
     let mut chunks = Vec::new();
     for (i, w) in writes.iter().enumerate() {
         let body = vec![i as u8; (w & 0x3f) as usize];

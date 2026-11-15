@@ -190,7 +190,7 @@ mod tests {
 
     fn setup(pcap: usize) -> (SharedRegion, RingWriter, RingReader) {
         let cfg = RingConfig::new(64, pcap);
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn crate::clock::Clock> = Arc::new(ManualClock::new());
         let policy = WriterPolicy {
             max_wait: std::time::Duration::ZERO,

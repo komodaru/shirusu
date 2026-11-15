@@ -354,9 +354,16 @@ mod tests {
     #[test]
     fn owner_and_remote_users_never_overlap() {
         let cfg = RingConfig::new(64, 4096);
-        let region = SharedRegion::new(cfg, 1, 1);
-        let writer =
-            unsafe { RingWriter::new(region.base(), cfg, WriterPolicy::default(), system_clock()) };
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
+        let writer = unsafe {
+            RingWriter::new(
+                region.shm().clone(),
+                cfg,
+                WriterPolicy::default(),
+                system_clock(),
+            )
+        }
+        .unwrap();
         let cell = Arc::new(WriterCell::new(writer));
         let inside = Arc::new(AtomicBool::new(false));
         let enter = |inside: &AtomicBool| {
@@ -393,9 +400,16 @@ mod tests {
 
     fn cell() -> Arc<WriterCell> {
         let cfg = RingConfig::new(64, 4096);
-        let region = Box::leak(Box::new(SharedRegion::new(cfg, 1, 1)));
-        let writer =
-            unsafe { RingWriter::new(region.base(), cfg, WriterPolicy::default(), system_clock()) };
+        let region = Box::leak(Box::new(SharedRegion::new(cfg, 1, 1).unwrap()));
+        let writer = unsafe {
+            RingWriter::new(
+                region.shm().clone(),
+                cfg,
+                WriterPolicy::default(),
+                system_clock(),
+            )
+        }
+        .unwrap();
         Arc::new(WriterCell::new(writer))
     }
 

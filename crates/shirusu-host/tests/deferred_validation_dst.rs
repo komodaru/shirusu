@@ -17,8 +17,8 @@
 use proptest::prelude::*;
 use shirusu_host::{CommittedRangeCollector, DrainWorker, IntegrityLevel};
 use shirusu_transport::clock::ManualClock;
-use shirusu_transport::layout;
 use shirusu_transport::ring::{EventInput, RingWriter, SharedRegion, WriteOutcome, WriterPolicy};
+use shirusu_transport::shm::Word;
 use shirusu_transport::validate::CommittedChunk;
 use shirusu_transport::{CaptureState, Clock, EventKind, RingConfig};
 use std::collections::VecDeque;
@@ -90,7 +90,7 @@ struct Sim {
 impl Sim {
     fn new() -> Self {
         let cfg = RingConfig::new(8, 128);
-        let region = SharedRegion::new(cfg, 1, 1);
+        let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
         let writer = unsafe {
             region.writer(
@@ -101,7 +101,7 @@ impl Sim {
                 clock,
             )
         };
-        let collector = unsafe { CommittedRangeCollector::new(region.base(), cfg) };
+        let collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
         Self {
             cfg,
             worker: DrainWorker::for_chunks(cfg, 1),
@@ -120,11 +120,9 @@ impl Sim {
     }
 
     fn shared_read_cursor(&self) -> u64 {
-        layout::load(
-            self.region.base(),
-            layout::OFF_READ_CURSOR,
-            Ordering::Acquire,
-        )
+        self.region
+            .control()
+            .load(Word::ReadCursor, Ordering::Acquire)
     }
 
     fn apply(&mut self, op: &Op) {
@@ -176,15 +174,15 @@ impl Sim {
                 if self.corrupted_at.is_some() {
                     return;
                 }
-                let base = self.region.base();
+                let base = self.region.shm().clone();
                 let read = self.shared_read_cursor();
-                let write = layout::load(base, layout::OFF_WRITE_CURSOR, Ordering::Acquire);
+                let write = base.control().load(Word::WriteCursor, Ordering::Acquire);
                 if read == write {
                     return; // nothing committed and uncopied
                 }
-                let slot = (read % self.cfg.descriptor_capacity as u64) as usize;
+                let slot = (read % self.cfg.descriptor_capacity_u64()) as usize;
                 // SAFETY: inside the descriptor region of this Ring.
-                let desc = unsafe { base.add(self.cfg.descriptors_offset() + slot * 64) };
+                let desc = unsafe { base.as_ptr().add(self.cfg.descriptors_offset() + slot * 64) };
                 unsafe {
                     match kind {
                         Corruption::Kind => desc.cast::<u16>().write_unaligned(0xffff),
@@ -281,7 +279,7 @@ fn trailing_drops_without_new_events_are_reported() {
     assert!(before > 0, "drops are reported");
     // Only a counter moves now, as for an event cut off by a writer that was
     // terminated mid-record (review P0).
-    layout::fetch_add(sim.region.base(), layout::OFF_DROPPED_EVENTS, 1);
+    sim.region.control().fetch_add(Word::DroppedEvents, 1);
     sim.finish();
     assert_eq!(sim.worker.loss_events.len(), before + 1);
     let report = sim.worker.integrity_report(0, false);

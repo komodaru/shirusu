@@ -84,7 +84,6 @@ fn subprocess_smoke(count: u64) -> ScenarioReport {
 /// 「x86 Agent + x64 Host」のプロセス間実テストになる (GHA の windows-x86 ジョブ)。
 #[cfg(windows)]
 fn cross_arch() -> ScenarioReport {
-    use shirusu_transport::layout::init_control;
     use shirusu_transport::RingConfig;
     use shirusu_transport_win::{spawn_inheriting, wait_process, ProcessNotify, SharedMapping};
     use std::time::Duration;
@@ -110,7 +109,7 @@ fn cross_arch() -> ScenarioReport {
             }
         }
     };
-    init_control(mapping.as_ptr(), cfg, 1, 4242);
+    mapping.shm().control().init(cfg, 1, 4242);
     let notify = match ProcessNotify::new() {
         Ok(n) => n,
         Err(e) => {
@@ -150,7 +149,8 @@ fn cross_arch() -> ScenarioReport {
         }
     };
     // data_ready を 2ms 再確認付きで待ちながら回収する。producer 終了後にも残りを回収する。
-    let mut rd = unsafe { shirusu_transport::ring::RingReader::new(mapping.as_ptr(), cfg) };
+    let mut rd =
+        unsafe { shirusu_transport::ring::RingReader::new(mapping.shm().clone(), cfg) }.unwrap();
     let mut got: Vec<u64> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let mut exit_code = wait_process(proc, Duration::from_millis(10));
@@ -265,7 +265,7 @@ fn production_path() -> ScenarioReport {
         Ok(p) => p,
         Err(e) => return fail(format!("spawn: {e}")),
     };
-    let base = mapping.as_ptr();
+    let base = mapping.shm().clone();
 
     // 回収ヘルパ: 期待 Generation への遷移を Control 自身で確認してから
     // Worker を作り、2ms 再確認付きで目標件数まで回収する。
@@ -281,10 +281,11 @@ fn production_path() -> ScenarioReport {
                        count: u64,
                        notify: &ProcessNotify|
      -> Result<(Vec<u64>, usize, bool), String> {
-        // SAFETY: base は mapping の生存期間中は有効で、cfg 分の領域を指す。
-        match unsafe {
-            shirusu_host::wait_for_ring_generation(base, generation, Duration::from_secs(30))
-        } {
+        match shirusu_host::wait_for_ring_generation(
+            base.control(),
+            generation,
+            Duration::from_secs(30),
+        ) {
             Ok(()) => {}
             Err(observed) => {
                 return Err(format!(
@@ -295,8 +296,8 @@ fn production_path() -> ScenarioReport {
         if !notify.data_ready.wait_timeout(Duration::from_secs(30)) {
             return Err("data_ready was never signaled".to_string());
         }
-        // SAFETY: base は mapping の生存期間中は有効で、cfg 分の領域を指す。
-        let mut worker = unsafe { DrainWorker::new(base, cfg, generation) };
+        // SAFETY: この Ring を読むのはこの Worker だけ (単一 Reader)。
+        let mut worker = unsafe { DrainWorker::new(base.clone(), cfg, generation) }.unwrap();
         worker.set_identity(RingIdentity::new(
             ProcessInstanceId(1),
             RingId(0),
@@ -320,8 +321,7 @@ fn production_path() -> ScenarioReport {
             // タイムアウトの切り分け材料: 検証で Ring が止まっていたのか
             // (停止理由)、単にイベントが来なかったのかを区別できるよう、
             // Worker の停止状態と共有 Control の現在世代を残す。
-            // SAFETY: base は mapping の生存期間中は有効。
-            let shared_generation = unsafe { shirusu_host::ring_generation(base) };
+            let shared_generation = shirusu_host::ring_generation(base.control());
             return Err(format!(
                 "drain timed out at generation {generation}: got {}/{count} \
                  integrity_lost={} stopped={} shared_generation={shared_generation} \
@@ -466,12 +466,12 @@ fn memory_order_stress() -> ScenarioReport {
         Ok(p) => p,
         Err(e) => return fail(format!("spawn: {e}")),
     };
-    let base = mapping.as_ptr();
+    let base = mapping.shm().clone();
 
     // 回収ヘルパ (D77 と同じ流儀): 期待 Generation への遷移を Control
     // 自身で確認してから Worker を作る。data_ready の通知だけを根拠に
     // Worker を作ってはいけない (レビュー #4 の仮説)。
-    match unsafe { shirusu_host::wait_for_ring_generation(base, 0, Duration::from_secs(30)) } {
+    match shirusu_host::wait_for_ring_generation(base.control(), 0, Duration::from_secs(30)) {
         Ok(()) => {}
         Err(observed) => {
             return fail(format!(
@@ -483,8 +483,8 @@ fn memory_order_stress() -> ScenarioReport {
         let _ = wait_process(proc, Duration::from_secs(5));
         return fail("data_ready was never signaled".to_string());
     }
-    // SAFETY: base は mapping の生存期間中は有効で、cfg 分の領域を指す。
-    let mut worker = unsafe { DrainWorker::new(base, cfg, 0) };
+    // SAFETY: この Ring を読むのはこの Worker だけ (単一 Reader)。
+    let mut worker = unsafe { DrainWorker::new(base.clone(), cfg, 0) }.unwrap();
     worker.set_identity(RingIdentity::new(ProcessInstanceId(1), RingId(0), 0));
     let mut got: Vec<u64> = Vec::new();
     let mut sequence_gaps = 0u64;
@@ -504,8 +504,7 @@ fn memory_order_stress() -> ScenarioReport {
     );
     if !reached {
         let _ = wait_process(proc, Duration::from_secs(5));
-        // SAFETY: base は mapping の生存期間中は有効。
-        let shared_generation = unsafe { shirusu_host::ring_generation(base) };
+        let shared_generation = shirusu_host::ring_generation(base.control());
         return fail(format!(
             "drain timed out: got {}/{} integrity_lost={} stopped={} shared_generation={} last_loss={:?}",
             got.len(),

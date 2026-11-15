@@ -1992,10 +1992,9 @@ mod tests {
         let tid = 4141;
         rt.ensure_thread(tid);
         // SAFETY: this test retains the Agent and is the only producer/reader.
-        let base = unsafe { agent.thread_region_base(tid) }.unwrap();
-        shirusu_transport::layout::store(
-            base,
-            shirusu_transport::layout::OFF_HOST_WAITING,
+        let base = agent.thread_region(tid).unwrap();
+        base.control().store(
+            shirusu_transport::shm::Word::HostWaiting,
             1,
             Ordering::Relaxed,
         );
@@ -2018,7 +2017,7 @@ mod tests {
             .unwrap()
             .data_ready
             .wait_timeout(Duration::ZERO));
-        let mut reader = unsafe { RingReader::new(base, agent.thread_config()) };
+        let mut reader = unsafe { RingReader::new(base, agent.thread_config()) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
         assert!(batch.events[0].descriptor.payload_dropped());
@@ -2048,8 +2047,8 @@ mod tests {
         rt.record_leave(tid, create, outer, b"leave-args");
 
         // Ring を読み戻してイベントの対応を確認する
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert!(batch.integrity_error.is_none());
         assert_eq!(batch.events.len(), 3);
@@ -2097,8 +2096,8 @@ mod tests {
         assert!(rt.take_pending_overlapped(0x8000).is_none());
         let r = rt.record_completion(tid, read, call_id, b"completed-args");
         assert!(matches!(r, RecordResult::Written(_)));
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
         assert_eq!(
@@ -2129,8 +2128,8 @@ mod tests {
             // 完了させずに drop（元の呼び出しが例外で中断したのと同じ）。
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(
@@ -2158,8 +2157,8 @@ mod tests {
         }
         pop_call(call_id);
         rt.record_leave(tid, create, call_id, b"leave-args");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(
@@ -2186,8 +2185,8 @@ mod tests {
         }));
         assert!(caught.is_err(), "the panic must propagate unchanged");
         assert_eq!(current_parent_call(), 0);
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(
@@ -2275,8 +2274,8 @@ mod tests {
         pop_call(call_id);
         assert_eq!(current_parent_call(), 0);
         // Ring に enter/leave の 2 イベントが残る。
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(batch.events[0].descriptor.api_id, callback::CALLBACK_API_ID);
@@ -2314,8 +2313,8 @@ mod tests {
         assert!(matches!(r, RecordResult::Written(_)));
         pop_call(call_id);
 
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(batch.events[0].descriptor.api_id, com::COM_METHOD_API_ID);
@@ -2360,8 +2359,8 @@ mod tests {
             let _guard = ComCallGuard::new(&rt, tid, call_id);
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(
@@ -2734,34 +2733,35 @@ mod tests {
                 scope.spawn(|| {
                     let mut readers: std::collections::HashMap<u64, (RingReader, u64)> =
                         std::collections::HashMap::new();
-                    let drain =
-                        |readers: &mut std::collections::HashMap<u64, (RingReader, u64)>| {
-                            for w in 0..WORKERS {
-                                let tid = 7000 + w;
-                                let (reader, last) = match readers.entry(tid) {
-                                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                                    std::collections::hash_map::Entry::Vacant(e) => {
-                                        // SAFETY: the Agent outlives this scope
-                                        // and keeps a registered thread's region.
-                                        let Some(base) = (unsafe { agent.thread_region_base(tid) })
-                                        else {
-                                            continue;
-                                        };
-                                        e.insert((unsafe { RingReader::new(base, cfg) }, 0))
-                                    }
-                                };
-                                let batch = reader.drain_all();
-                                assert!(
-                                    batch.integrity_error.is_none(),
-                                    "{:?}",
-                                    batch.integrity_error
-                                );
-                                for e in &batch.events {
-                                    assert!(e.descriptor.sequence > *last || *last == 0);
-                                    *last = e.descriptor.sequence;
+                    let drain = |readers: &mut std::collections::HashMap<
+                        u64,
+                        (RingReader, u64),
+                    >| {
+                        for w in 0..WORKERS {
+                            let tid = 7000 + w;
+                            let (reader, last) = match readers.entry(tid) {
+                                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                                std::collections::hash_map::Entry::Vacant(e) => {
+                                    // SAFETY: the Agent outlives this scope
+                                    // and keeps a registered thread's region.
+                                    let Some(base) = agent.thread_region(tid) else {
+                                        continue;
+                                    };
+                                    e.insert((unsafe { RingReader::new(base, cfg) }.unwrap(), 0))
                                 }
+                            };
+                            let batch = reader.drain_all();
+                            assert!(
+                                batch.integrity_error.is_none(),
+                                "{:?}",
+                                batch.integrity_error
+                            );
+                            for e in &batch.events {
+                                assert!(e.descriptor.sequence > *last || *last == 0);
+                                *last = e.descriptor.sequence;
                             }
-                        };
+                        }
+                    };
                     while !cycle_done.load(Ordering::Relaxed) {
                         drain(&mut readers);
                         std::thread::yield_now();
@@ -2955,9 +2955,9 @@ mod tests {
         let (first_agent, first) = runtime();
         let (second_agent, second) = runtime();
         first.ensure_thread(772);
-        assert!(unsafe { first_agent.thread_region_base(772) }.is_some());
+        assert!(first_agent.thread_region(772).is_some());
         second.ensure_thread(772);
-        assert!(unsafe { second_agent.thread_region_base(772) }.is_some());
+        assert!(second_agent.thread_region(772).is_some());
         assert_ne!(first.runtime_id, second.runtime_id);
     }
 
@@ -2976,13 +2976,14 @@ mod tests {
         let create = api_by_id(API_CREATE_FILE_W).unwrap();
         let call_id = rt.alloc_call_id();
         rt.record_enter(tid, create, call_id, b"enter-args");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
+        let base = agent.thread_region(tid).expect("region");
         // Native TLS notices are drained by another still-live thread.
         std::thread::scope(|scope| scope.spawn(|| rt.thread_exit(tid)).join().unwrap());
         // drain されるまでは回収待ちのまま
         assert_eq!(agent.pending_reclaim_count(), 1);
         let mut reader =
-            unsafe { shirusu_transport::ring::RingReader::new(base, RingConfig::new(64, 4096)) };
+            unsafe { shirusu_transport::ring::RingReader::new(base, RingConfig::new(64, 4096)) }
+                .unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
         // 次の ensure が (空きが無いため) 回収を進めてから取得する
@@ -3153,8 +3154,8 @@ mod tests {
         assert!(!ReentrancyGuard::is_active());
 
         // Ring には外側の enter/leave だけが残る（入れ子の素通しは記録しない）
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert!(batch.integrity_error.is_none());
         assert_eq!(batch.events.len(), 2);
@@ -3354,8 +3355,8 @@ mod tests {
         rt.ensure_thread(tid);
         let call_id = rt.alloc_call_id();
         rt.record_com_aborted(tid, call_id);
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
         assert_eq!(
@@ -3383,8 +3384,8 @@ mod tests {
             // 完了させずに drop（元の呼び出しが例外で中断したのと同じ）。
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
         assert_eq!(
@@ -3420,8 +3421,8 @@ mod tests {
             );
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
         assert_eq!(
@@ -3449,8 +3450,8 @@ mod tests {
             guard.complete();
         }
         pop_call(call_id);
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 0);
     }
@@ -3475,8 +3476,8 @@ mod tests {
             rt.record_winrt_activation_leave(tid, call_id, b"winrt-leave"),
             RecordResult::Written(_)
         ));
-        let base = unsafe { agent.thread_region_base(tid) }.expect("region");
-        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) };
+        let base = agent.thread_region(tid).expect("region");
+        let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
         assert_eq!(

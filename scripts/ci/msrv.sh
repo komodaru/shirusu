@@ -13,6 +13,7 @@
 #
 # ピン契約 (レビュー第5回 #2 でテストコードまで拡張):
 # - generator ≤ 0.8.11 (0.8.12 は rust-version 1.95 を宣言)
+# - trybuild ≤ 1.0.119 (1.0.120 は rust-version 1.88 を要求する。dev-dependency)
 # - proptest ≤ 1.11.x (1.12.0 は rust-version 1.88 を要求する。
 #   proptest は dev-dependency のため、lib だけの check では検出できない。
 #   テストコードも MSRV でコンパイルできることを保証するため、この

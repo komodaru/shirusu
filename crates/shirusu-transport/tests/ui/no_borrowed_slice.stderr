@@ -1,0 +1,5 @@
+error[E0599]: no method named `as_slice` found for reference `&Shm` in the current scope
+ --> tests/ui/no_borrowed_slice.rs:7:38
+  |
+7 |     let _bytes: &[u8] = region.shm().as_slice();
+  |                                      ^^^^^^^^ method not found in `&Shm`

@@ -10,6 +10,7 @@ description = "shirusu Agent-Host transport: SPSC ring, descriptor/control layou
 shirusu-crc32c = { path = "../shirusu-crc32c" }
 
 [dev-dependencies]
+trybuild = "1"
 proptest = "1"
 
 [lints]

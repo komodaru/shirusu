@@ -1,0 +1,10 @@
+error[E0616]: field `args` of struct `PlannedCall` is private
+ --> tests/ui/planned_call_is_read_only.rs:6:16
+  |
+6 |     program[0].args.clear();
+  |                ^^^^ private field
+  |
+help: a method `args` also exists, call it with parentheses
+  |
+6 |     program[0].args().clear();
+  |                    ++

@@ -1,0 +1,5 @@
+error[E0451]: field `calls` of struct `PlannedProgram` is private
+ --> tests/ui/planned_program_literal.rs:5:37
+  |
+5 |     let _program = PlannedProgram { calls: Vec::new() };
+  |                                     ^^^^^ private field

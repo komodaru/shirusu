@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/control_by_offset.rs:8:35
+  |
+8 |     let _ = region.control().load(4096usize, Ordering::Acquire);
+  |                              ---- ^^^^^^^^^ expected `Word`, found `usize`
+  |                              |
+  |                              arguments to this method are incorrect
+  |
+note: method defined here
+ --> src/shm.rs
+  |
+  |     pub fn load(self, w: Word, order: Ordering) -> u64 {
+  |            ^^^^

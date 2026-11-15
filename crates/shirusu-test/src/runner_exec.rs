@@ -322,22 +322,65 @@ pub struct Step {
     pub expect: Option<Expect>,
 }
 
-/// 計画済みの 1 呼び出し（引数は表の並びに整列済み）。
+/// 検証済みの呼び出し列。作れるのは [`plan_steps`] だけで、実行
+/// ([`execute_planned`]) はこれしか受け取らない。中身は読めるが書き換え
+/// られないので、計画時の検証を飛ばした呼び出しは実行に届かない
+/// (レビュー P1-3)。
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlannedCall {
-    pub dll: &'static str,
-    pub function: &'static str,
-    pub args: Vec<PlannedArg>,
-    pub store: Option<String>,
-    pub expect: Option<Expect>,
+pub struct PlannedProgram {
+    calls: Vec<PlannedCall>,
+}
+impl std::ops::Deref for PlannedProgram {
+    type Target = [PlannedCall];
+    fn deref(&self) -> &[PlannedCall] {
+        &self.calls
+    }
 }
 
-/// 計画済みの 1 引数。
+/// 計画済みの 1 呼び出し（引数は表の並びに整列済み）。読み取り専用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedCall {
+    dll: &'static str,
+    function: &'static str,
+    args: Vec<PlannedArg>,
+    store: Option<String>,
+    expect: Option<Expect>,
+}
+impl PlannedCall {
+    pub fn dll(&self) -> &'static str {
+        self.dll
+    }
+    pub fn function(&self) -> &'static str {
+        self.function
+    }
+    pub fn args(&self) -> &[PlannedArg] {
+        &self.args
+    }
+    pub fn store(&self) -> Option<&str> {
+        self.store.as_deref()
+    }
+    pub fn expect(&self) -> Option<&Expect> {
+        self.expect.as_ref()
+    }
+}
+
+/// 計画済みの 1 引数。読み取り専用。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlannedArg {
-    pub name: String,
-    pub kind: ParamKind,
-    pub value: ArgValue,
+    name: String,
+    kind: ParamKind,
+    value: ArgValue,
+}
+impl PlannedArg {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn kind(&self) -> ParamKind {
+        self.kind
+    }
+    pub fn value(&self) -> &ArgValue {
+        &self.value
+    }
 }
 
 /// バッファ引数のサイズ上限。異常な確保を計画時に弾く。
@@ -357,7 +400,7 @@ fn valid_name(name: &str) -> bool {
 /// `store` の重複・期待値の対象をすべてここで検証する。計画が通れば
 /// 実行時に仕様の誤りで止まることはない（DLL/関数の不在と実行時の
 /// 失敗だけが残る）。
-pub fn plan_steps(steps: &[Step]) -> Result<Vec<PlannedCall>, String> {
+pub fn plan_steps(steps: &[Step]) -> Result<PlannedProgram, String> {
     let mut planned = Vec::with_capacity(steps.len());
     let mut stored: Vec<String> = Vec::new();
     for (i, step) in steps.iter().enumerate() {
@@ -435,7 +478,7 @@ pub fn plan_steps(steps: &[Step]) -> Result<Vec<PlannedCall>, String> {
             expect: step.expect.clone(),
         });
     }
-    Ok(planned)
+    Ok(PlannedProgram { calls: planned })
 }
 
 // Managed buffers live only for this call. The runner has no async completion
@@ -711,7 +754,7 @@ pub struct RunReportData {
 }
 
 /// 計画だけを行い、実行しない dry-run の報告を作る。
-pub fn dry_run_report(spec_name: &str, planned: &[PlannedCall]) -> RunReportData {
+pub fn dry_run_report(spec_name: &str, planned: &PlannedProgram) -> RunReportData {
     RunReportData {
         spec_name: spec_name.to_string(),
         executed: false,
@@ -849,7 +892,7 @@ pub fn report_to_text(report: &RunReportData) -> String {
 }
 
 /// 計画を人間向けの 1 行ごとの表示にする（dry-run の詳細）。
-pub fn plan_to_text(spec_name: &str, planned: &[PlannedCall]) -> String {
+pub fn plan_to_text(spec_name: &str, planned: &PlannedProgram) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "probe {:?}: 全 {} 件・dry-run（実行しない）\n",
@@ -1097,7 +1140,7 @@ struct LiveArg {
 /// 止まり、残りのステップは `executed: false`・`error` 付きで報告する
 /// （後続は先行の `store` に依存することが多いため）。
 #[cfg(windows)]
-pub fn execute_planned(spec_name: &str, planned: &[PlannedCall]) -> RunReportData {
+pub fn execute_planned(spec_name: &str, planned: &PlannedProgram) -> RunReportData {
     let mut outcomes = Vec::with_capacity(planned.len());
     let mut stored: HashMap<String, u64> = HashMap::new();
     let mut modules: HashMap<&'static str, usize> = HashMap::new();
@@ -1386,7 +1429,7 @@ fn materialize(
 /// Windows 以外での実行。生成 exe は Windows 向けにだけビルドされるが、
 /// 関数としては全体を返す（呼び出し側が先に誤りを返すのが本筋）。
 #[cfg(not(windows))]
-pub fn execute_planned(spec_name: &str, planned: &[PlannedCall]) -> RunReportData {
+pub fn execute_planned(spec_name: &str, planned: &PlannedProgram) -> RunReportData {
     RunReportData {
         spec_name: spec_name.to_string(),
         executed: false,
@@ -1697,7 +1740,8 @@ mod tests {
             fill: vec![],
         };
         assert!(plan_steps(&steps).unwrap_err().contains("asynchronous"));
-        let mut calls = plan_steps(&file_flow()).unwrap();
+        // 計画済みの列は書き換えられない。写しを壊して検査器を直接試す。
+        let mut calls = plan_steps(&file_flow()).unwrap().to_vec();
         calls[1].args[2].value = ArgValue::Ref("hFile".into());
         assert!(check_io_storage(
             calls[1].function,

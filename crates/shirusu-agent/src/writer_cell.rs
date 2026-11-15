@@ -324,6 +324,21 @@ pub(crate) struct OwnerGuard<'a> {
     _not_send: PhantomData<*const ()>,
 }
 
+// Compile-time check (review: OwnerGuard must not move to another thread).
+// The guard is crate-private, so an external trybuild case cannot name it;
+// this is the same check in the crate: if OwnerGuard were Send, both impls
+// below would apply and the path to `CHECK` would be ambiguous (E0283), so
+// the crate would stop compiling.
+const _: () = {
+    trait AmbiguousIfSend<A> {
+        const CHECK: () = ();
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    struct IfSend;
+    impl<T: ?Sized + Send> AmbiguousIfSend<IfSend> for T {}
+    <OwnerGuard<'static> as AmbiguousIfSend<_>>::CHECK
+};
+
 impl Deref for OwnerGuard<'_> {
     type Target = RingWriter;
     #[inline(always)]

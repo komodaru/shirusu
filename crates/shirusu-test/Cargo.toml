@@ -11,6 +11,9 @@ shirusu-analysis = { path = "../shirusu-analysis" }
 shirusu-compare = { path = "../shirusu-compare" }
 shirusu-trace = { path = "../shirusu-trace" }
 
+[dev-dependencies]
+trybuild = "1"
+
 [[bin]]
 name = "shirusu-test"
 path = "src/bin/shirusu-test.rs"

@@ -122,6 +122,7 @@ macro_rules! wnd_proc_wrapper {
             wparam: usize,
             lparam: isize,
         ) -> isize {
+            // SAFETY: the thunk forwards the arguments Windows passed to this window procedure.
             unsafe { wnd_proc_dispatch($slot, hwnd, msg, wparam, lparam) }
         }
     };
@@ -242,6 +243,7 @@ unsafe fn call_original_proc(
         None => {
             // SAFETY: user32 が無ければハンドルは存在し得ず、関数アドレス。
             let orig: WndProcFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: the window procedure receives the arguments Windows passed to this thunk.
             unsafe { orig(hwnd, msg, wparam, lparam) }
         }
     }
@@ -360,6 +362,7 @@ pub(super) unsafe fn detour_register_class_ex(hook_index: usize, wc: *const c_vo
         CallbackPrepare::Passthrough { original } => {
             // SAFETY: ランタイムの別表から引いた元の関数。
             let orig: RegisterClassExFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: `wc` is the caller's WNDCLASSEX pointer, passed through unchanged.
             return unsafe { orig(wc) };
         }
         CallbackPrepare::Unavailable => return 0,
@@ -394,10 +397,12 @@ pub(super) unsafe fn detour_register_class_ex(hook_index: usize, wc: *const c_vo
 }
 
 pub(super) unsafe extern "system-unwind" fn detour_register_class_ex_w(wc: *const c_void) -> u16 {
+    // SAFETY: forwards the caller's own WNDCLASSEXW pointer.
     unsafe { detour_register_class_ex(CALLBACK_HOOK_REGISTER_CLASS_EX_W, wc) }
 }
 
 pub(super) unsafe extern "system-unwind" fn detour_register_class_ex_a(wc: *const c_void) -> u16 {
+    // SAFETY: forwards the caller's own WNDCLASSEXA pointer.
     unsafe { detour_register_class_ex(CALLBACK_HOOK_REGISTER_CLASS_EX_A, wc) }
 }
 
@@ -426,6 +431,7 @@ pub(super) unsafe fn detour_set_window_long_ptr(
         CallbackPrepare::Passthrough { original } => {
             // SAFETY: ランタイムの別表から引いた元の関数。
             let orig: SetWindowLongPtrFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: forwards the caller's own arguments to the original SetWindowLongPtr.
             let prev = unsafe { orig(hwnd, n_index, new_long) };
             let last_error = crate::last_error::get();
             let prev = resolve_window_long(n_index, prev);
@@ -494,12 +500,14 @@ pub(super) unsafe fn detour_get_long_ptr(
         CallbackPrepare::Passthrough { original } => (original, None),
         CallbackPrepare::Unavailable => return 0,
     };
+    // SAFETY: `original` is the saved Get*LongPtr entry, which has this signature.
     let original: GetLongPtrFn = unsafe { std::mem::transmute(original) };
     let mut state = state;
     if let Some((_, _, guard, le)) = state.as_mut() {
         le.restore_before_original();
         guard.suspend();
     }
+    // SAFETY: forwards the caller's own arguments to the original.
     let (value, mut state) = crate::seh::invoke(0, |_| unsafe { original(hwnd, field) }, state);
     // LastError must be captured before table lookups or synchronization.
     let saved_error = crate::last_error::get();
@@ -518,24 +526,28 @@ pub(super) unsafe extern "system-unwind" fn detour_get_window_long_ptr_w(
     hwnd: *mut c_void,
     field: i32,
 ) -> usize {
+    // SAFETY: forwards the caller's own arguments.
     unsafe { detour_get_long_ptr(CALLBACK_HOOK_GET_WINDOW_LONG_PTR_W, hwnd, field, -4) }
 }
 pub(super) unsafe extern "system-unwind" fn detour_get_window_long_ptr_a(
     hwnd: *mut c_void,
     field: i32,
 ) -> usize {
+    // SAFETY: forwards the caller's own arguments.
     unsafe { detour_get_long_ptr(CALLBACK_HOOK_GET_WINDOW_LONG_PTR_A, hwnd, field, -4) }
 }
 pub(super) unsafe extern "system-unwind" fn detour_get_class_long_ptr_w(
     hwnd: *mut c_void,
     field: i32,
 ) -> usize {
+    // SAFETY: forwards the caller's own arguments.
     unsafe { detour_get_long_ptr(CALLBACK_HOOK_GET_CLASS_LONG_PTR_W, hwnd, field, -24) }
 }
 pub(super) unsafe extern "system-unwind" fn detour_get_class_long_ptr_a(
     hwnd: *mut c_void,
     field: i32,
 ) -> usize {
+    // SAFETY: forwards the caller's own arguments.
     unsafe { detour_get_long_ptr(CALLBACK_HOOK_GET_CLASS_LONG_PTR_A, hwnd, field, -24) }
 }
 
@@ -544,6 +556,7 @@ pub(super) unsafe extern "system-unwind" fn detour_set_window_long_ptr_w(
     n_index: i32,
     new_long: usize,
 ) -> usize {
+    // SAFETY: forwards the caller's own arguments.
     unsafe {
         detour_set_window_long_ptr(CALLBACK_HOOK_SET_WINDOW_LONG_PTR_W, hwnd, n_index, new_long)
     }
@@ -554,6 +567,7 @@ pub(super) unsafe extern "system-unwind" fn detour_set_window_long_ptr_a(
     n_index: i32,
     new_long: usize,
 ) -> usize {
+    // SAFETY: forwards the caller's own arguments.
     unsafe {
         detour_set_window_long_ptr(CALLBACK_HOOK_SET_WINDOW_LONG_PTR_A, hwnd, n_index, new_long)
     }

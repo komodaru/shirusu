@@ -28,6 +28,7 @@ fn spsc_concurrent_writer_reader_100k() {
     let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
     let r2 = region.clone();
     let reader_thread = std::thread::spawn(move || {
+        // SAFETY: the only reader of this region (SPSC).
         let mut rd = unsafe { r2.reader() };
         // 正常公開されたイベントだけを集める（劣化イベントは欠落として別に現れる）
         let mut got: Vec<ReceivedEvent> = Vec::new();
@@ -47,6 +48,7 @@ fn spsc_concurrent_writer_reader_100k() {
     });
     // 実時計で上限付き待機させ、満杯でも reader の回収を待って正常公開できるようにする
     let clock: Arc<dyn Clock> = shirusu_transport::clock::system_clock();
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -93,6 +95,7 @@ fn soak_10m_ops_throughput_and_integrity() {
     let cfg = RingConfig::new(8192, 65536);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -102,6 +105,7 @@ fn soak_10m_ops_throughput_and_integrity() {
             clock,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let started = std::time::Instant::now();
     let mut done = 0u64;
@@ -144,6 +148,7 @@ fn host_pause_then_resume_recovers_via_recheck_drain() {
     let cfg = RingConfig::new(256, 16384);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -153,6 +158,7 @@ fn host_pause_then_resume_recovers_via_recheck_drain() {
             clock,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     for i in 0..100u64 {
         w.write(input(b"pause-test", i));
@@ -193,6 +199,7 @@ fn generation_rollover_isolation() {
     for gen in 1..=8u64 {
         let region = SharedRegion::new(cfg, gen, 55).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         w.write(input(b"gen-data", gen));
         let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), gen);

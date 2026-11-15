@@ -45,6 +45,7 @@ fn agent_multi_thread_to_validating_host_all_events_accounted() {
     for tid in 1..=threads {
         let handle = agent.thread_begin(tid).expect("slot for thread");
         let base = agent.thread_region(tid).expect("region base");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut worker = unsafe { DrainWorker::new(base.clone(), cfg, handle.generation) }.unwrap();
         worker.set_identity(RingIdentity::new(
             ProcessInstanceId(1),
@@ -102,6 +103,7 @@ fn independent_host_drains_32_rings_while_producers_write() {
     for tid in 1..=threads {
         let handle = agent.thread_begin(tid).expect("slot for thread");
         let base = agent.thread_region(tid).expect("region base");
+        // SAFETY: the only reader of this Ring (SPSC).
         let worker = unsafe { DrainWorker::new(base.clone(), cfg, handle.generation) }.unwrap();
         workers.push(worker);
     }

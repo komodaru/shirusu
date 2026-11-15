@@ -722,7 +722,7 @@ fn read_bootstrap_result(
             std::mem::size_of::<AgentBootstrap>(),
         )
     };
-    win::read_process_memory(process, remote, bytes.as_mut_ptr(), bytes.len()).ok()?;
+    win::read_process_memory(process, remote, bytes).ok()?;
     let (hooked, missing) = buf.hook_outcome();
     let unrestored = buf.unrestored_count();
     let com_factories = buf.com_factory_count();
@@ -767,7 +767,7 @@ fn read_bootstrap_result(
                 )
             };
             let address = remote + std::mem::size_of::<AgentBootstrap>();
-            win::read_process_memory(process, address, bytes.as_mut_ptr(), bytes.len()).ok()?;
+            win::read_process_memory(process, address, bytes).ok()?;
             AgentBootstrap::hook_evidence(&records)
         })
         .unwrap_or_default();
@@ -801,7 +801,7 @@ fn read_catalog_report(
             std::mem::size_of::<AgentBootstrap>(),
         )
     };
-    win::read_process_memory(process, remote, bytes.as_mut_ptr(), bytes.len()).ok()?;
+    win::read_process_memory(process, remote, bytes).ok()?;
     Some((
         buf.result_api_catalog_fingerprint,
         buf.result_capture_api_count as usize,
@@ -1076,19 +1076,16 @@ fn inject_and_init(
                 std::mem::size_of::<AgentBootstrap>(),
             )
         };
-        win::write_process_memory(process, remote, bytes.as_ptr(), bytes.len())?;
+        win::write_process_memory(process, remote, bytes)?;
         if !policy_bytes.is_empty() {
-            win::write_process_memory(
-                process,
-                remote + policy_offset,
-                policy_bytes.as_ptr(),
-                policy_bytes.len(),
-            )?;
+            win::write_process_memory(process, remote + policy_offset, &policy_bytes)?;
         }
         Ok(())
     })();
     if let Err(e) = write_result {
-        win::remote_free(process, remote);
+        // SAFETY: `remote` came from remote_alloc and the Agent has not been
+        // told about it yet (no remote call was made).
+        unsafe { win::remote_free(process, remote) };
         return Err(e);
     }
     // From here the Agent owns the handles: it closes them when it rejects
@@ -1108,7 +1105,9 @@ fn inject_and_init(
         (None, None)
     };
     if !matches!(status, Err(win::WinError::RemoteCallPending { .. })) {
-        win::remote_free(process, remote);
+        // SAFETY: the remote call finished (it did not time out) and the
+        // results were read back above, so nothing uses `remote` any more.
+        unsafe { win::remote_free(process, remote) };
     }
     let status = status?;
     if status == shirusu_hook::bootstrap::INIT_CATALOG_MISMATCH {

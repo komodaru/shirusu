@@ -57,8 +57,8 @@ pub fn invariant_tsc_available() -> bool {
         use core::arch::x86::__cpuid;
         #[cfg(target_arch = "x86_64")]
         use core::arch::x86_64::__cpuid;
-        // SAFETY: CPUID exists on every supported x86/x86_64 target.
         #[allow(unused_unsafe)] // `__cpuid` became safe after the 1.87 MSRV.
+        // SAFETY: CPUID exists on every supported x86/x86_64 target.
         let max_extended = unsafe { __cpuid(0x8000_0000) }.eax;
         if max_extended < 0x8000_0007 {
             return false;

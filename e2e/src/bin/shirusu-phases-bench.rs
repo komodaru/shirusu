@@ -165,14 +165,17 @@ fn main() {
         #[cfg(target_arch = "x86_64")]
         use core::arch::x86_64::_rdtsc;
         measure("floor_raw_tsc", || {
+            // SAFETY: RDTSC is available on every x86 CPU this crate supports.
             black_box(unsafe { _rdtsc() });
         });
         let mut buffer = vec![[0u64; 4]; 1 << 16];
         let mut at = 0usize;
         measure("floor_call_two_tsc_two_records", || {
+            // SAFETY: RDTSC is available on every x86 CPU this crate supports.
             let enter = unsafe { _rdtsc() };
             buffer[at] = [1, black_box(0x1234), black_box(64), enter];
             at = (at + 1) & 0xffff;
+            // SAFETY: RDTSC is available on every x86 CPU this crate supports.
             let leave = unsafe { _rdtsc() };
             buffer[at] = [2, black_box(0x5678), 0, leave];
             at = (at + 1) & 0xffff;
@@ -226,6 +229,7 @@ fn main() {
             fn GetCurrentThreadId() -> u32;
         }
         measure("thread_id_windows_api_unhooked", || {
+            // SAFETY: GetCurrentThreadId has no preconditions.
             black_box(unsafe { GetCurrentThreadId() });
         });
         measure("thread_id_direct_teb", || {
@@ -242,6 +246,7 @@ fn main() {
     let base = agent.thread_region(1).unwrap();
     // Production path: the collection thread copies and releases committed
     // contents; the Trace worker validates them before conversion.
+    // SAFETY: the only reader of this fresh Ring (SPSC), starting at read position 0.
     let mut collector = unsafe { CommittedRangeCollector::new(base, cfg) }.unwrap();
     let mut worker = DrainWorker::for_chunks(cfg, 1);
     for (owned, calls) in [false, true]

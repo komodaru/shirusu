@@ -396,6 +396,7 @@ fn main() {
         }
     }
     let t0 = Instant::now();
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut worker = unsafe { DrainWorker::new(region.shm().clone(), cfg2, 1) }.unwrap();
     let drained = worker.drain_all();
     assert!(

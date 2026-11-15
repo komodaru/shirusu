@@ -118,8 +118,10 @@ mod win {
             .encode_utf16()
             .chain([0])
             .collect();
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut si: StartupInfoW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<StartupInfoW>() as u32;
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut pi: ProcessInformation = unsafe { std::mem::zeroed() };
         // SAFETY: si/pi は有効なローカルを指し、cmdline は書き換え可能。
         let ok = unsafe {
@@ -137,9 +139,11 @@ mod win {
             )
         };
         if ok == 0 {
+            // SAFETY: GetLastError has no preconditions.
             println!("TARGET_FAIL spawn error={}", unsafe { GetLastError() });
             return 8;
         }
+        // SAFETY: `pi` holds the handles CreateProcessW returned; they are waited on and closed once.
         unsafe {
             WaitForSingleObject(pi.process, 0xFFFF_FFFF);
             let mut code = 0u32;
@@ -170,12 +174,14 @@ mod win {
                 let proc =
                     unsafe { GetProcAddress(handle, c"shirusu_agent_ready".as_ptr().cast()) };
                 if !proc.is_null() {
+                    // SAFETY: the export takes no arguments and returns u32 (see the comment above).
                     let ready: extern "system" fn() -> u32 = unsafe { std::mem::transmute(proc) };
                     if ready() != 0 {
                         return;
                     }
                 }
             }
+            // SAFETY: Sleep has no preconditions.
             unsafe { Sleep(10) };
         }
         println!("TARGET_CHILD_WAIT timed out waiting for the Agent");
@@ -353,6 +359,7 @@ mod win {
             )
         };
         if is_invalid_handle(h) {
+            // SAFETY: GetLastError has no preconditions.
             return Err(format!("create error={}", unsafe { GetLastError() }));
         }
         close(h);
@@ -507,6 +514,7 @@ mod win {
         // SAFETY: 解決したアドレスを宣言した型の関数ポインタへ写す。
         // 名前と DLL が一致するため、型は対象 API のものと一致する。
         let create_file_w: CreateFileWFn = match resolve("kernel32.dll", "CreateFileW") {
+            // SAFETY: `p` is the export of this name from this DLL, so it has the declared signature.
             Some(p) => unsafe { std::mem::transmute::<*mut c_void, CreateFileWFn>(p) },
             None => {
                 println!("TARGET_FAIL getprocaddress CreateFileW");
@@ -514,6 +522,7 @@ mod win {
             }
         };
         let write_file: WriteFileFn = match resolve("kernel32.dll", "WriteFile") {
+            // SAFETY: `p` is the export of this name from this DLL, so it has the declared signature.
             Some(p) => unsafe { std::mem::transmute::<*mut c_void, WriteFileFn>(p) },
             None => {
                 println!("TARGET_FAIL getprocaddress WriteFile");
@@ -521,6 +530,7 @@ mod win {
             }
         };
         let read_file: ReadFileFn = match resolve("kernel32.dll", "ReadFile") {
+            // SAFETY: `p` is the export of this name from this DLL, so it has the declared signature.
             Some(p) => unsafe { std::mem::transmute::<*mut c_void, ReadFileFn>(p) },
             None => {
                 println!("TARGET_FAIL getprocaddress ReadFile");
@@ -528,6 +538,7 @@ mod win {
             }
         };
         let set_file_pointer: SetFilePointerFn = match resolve("kernel32.dll", "SetFilePointer") {
+            // SAFETY: `p` is the export of this name from this DLL, so it has the declared signature.
             Some(p) => unsafe { std::mem::transmute::<*mut c_void, SetFilePointerFn>(p) },
             None => {
                 println!("TARGET_FAIL getprocaddress SetFilePointer");
@@ -535,6 +546,7 @@ mod win {
             }
         };
         let close_handle: CloseHandleFn = match resolve("kernel32.dll", "CloseHandle") {
+            // SAFETY: `p` is the export of this name from this DLL, so it has the declared signature.
             Some(p) => unsafe { std::mem::transmute::<*mut c_void, CloseHandleFn>(p) },
             None => {
                 println!("TARGET_FAIL getprocaddress CloseHandle");
@@ -542,6 +554,7 @@ mod win {
             }
         };
         let reg_create: RegCreateKeyExWFn = match resolve("advapi32.dll", "RegCreateKeyExW") {
+            // SAFETY: `p` is the export of this name from this DLL, so it has the declared signature.
             Some(p) => unsafe { std::mem::transmute::<*mut c_void, RegCreateKeyExWFn>(p) },
             None => {
                 println!("TARGET_FAIL getprocaddress RegCreateKeyExW");
@@ -549,6 +562,7 @@ mod win {
             }
         };
         let reg_close: RegCloseKeyFn = match resolve("advapi32.dll", "RegCloseKey") {
+            // SAFETY: `p` is the export of this name from this DLL, so it has the declared signature.
             Some(p) => unsafe { std::mem::transmute::<*mut c_void, RegCloseKeyFn>(p) },
             None => {
                 println!("TARGET_FAIL getprocaddress RegCloseKey");
@@ -729,21 +743,25 @@ mod win {
     fn write_and_read_back(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
         let h = create_file_w(path, 2 /* CREATE_ALWAYS */);
         if is_invalid_handle(h) {
+            // SAFETY: GetLastError has no preconditions.
             return Err(format!("create error={}", unsafe { GetLastError() }));
         }
         if !write_all(h, data) {
+            // SAFETY: GetLastError has no preconditions.
             let e = unsafe { GetLastError() };
             close(h);
             return Err(format!("write error={e}"));
         }
         // SAFETY: h は有効、dist/high は仕様どおり（high は NULL 可）。
         if unsafe { SetFilePointer(h, 0, std::ptr::null_mut(), 0) } == u32::MAX {
+            // SAFETY: GetLastError has no preconditions.
             let e = unsafe { GetLastError() };
             close(h);
             return Err(format!("seek error={e}"));
         }
         let mut buf = vec![0u8; data.len()];
         if !read_exact(h, &mut buf) {
+            // SAFETY: GetLastError has no preconditions.
             let e = unsafe { GetLastError() };
             close(h);
             return Err(format!("read error={e}"));
@@ -924,10 +942,13 @@ mod win {
             )
         };
         if is_invalid_handle(thread) {
+            // SAFETY: GetLastError has no preconditions.
             return Err(format!("CreateThread error={}", unsafe { GetLastError() }));
         }
+        // SAFETY: `thread` was created above and is open.
         let waited = unsafe { WaitForSingleObject(thread, 10_000) };
         let mut code = 0u32;
+        // SAFETY: `thread` is open and `code` is a writable local.
         let ok = unsafe { GetExitCodeThread(thread, &mut code) } != 0;
         close(thread);
         let _ = std::fs::remove_file(&thread_path);
@@ -980,6 +1001,7 @@ mod win {
         let path = probe_path("lasterror", pid);
         let _ = std::fs::remove_file(&path);
         let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain([0]).collect();
+        // SAFETY: `wide` is a NUL-terminated path; SetLastError/GetLastError have no preconditions.
         let (h, created_error) = unsafe {
             SetLastError(0x1234);
             let h = CreateFileW(
@@ -998,11 +1020,13 @@ mod win {
         }
         let mut byte = 0u8;
         let mut read = 0u32;
+        // SAFETY: `h` is the file opened above and `byte`/`read` are writable locals.
         let (read_ok, read_error) = unsafe {
             SetLastError(0x5678);
             let ok = ReadFile(h, &mut byte, 0, &mut read, std::ptr::null_mut());
             (ok, GetLastError())
         };
+        // SAFETY: `h` was opened above and is closed once here.
         let (close_ok, close_error) = unsafe {
             SetLastError(0x9ABC);
             let ok = CloseHandle(h);
@@ -1027,6 +1051,7 @@ mod win {
             close(h);
             return Err("open of missing file unexpectedly succeeded".into());
         }
+        // SAFETY: GetLastError has no preconditions.
         let err = unsafe { GetLastError() };
         if err != 2 {
             return Err(format!("expected ERROR_FILE_NOT_FOUND(2), got {err}"));

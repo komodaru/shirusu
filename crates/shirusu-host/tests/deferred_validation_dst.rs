@@ -92,6 +92,7 @@ impl Sim {
         let cfg = RingConfig::new(8, 128);
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let writer = unsafe {
             region.writer(
                 WriterPolicy {
@@ -101,6 +102,7 @@ impl Sim {
                 clock,
             )
         };
+        // SAFETY: the only reader of this fresh Ring (SPSC), starting at read position 0.
         let collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
         Self {
             cfg,
@@ -183,6 +185,7 @@ impl Sim {
                 let slot = (read % self.cfg.descriptor_capacity_u64()) as usize;
                 // SAFETY: inside the descriptor region of this Ring.
                 let desc = unsafe { base.as_ptr().add(self.cfg.descriptors_offset() + slot * 64) };
+                // SAFETY: `desc` is a 64-byte descriptor slot of this Ring; the offsets 0, 4 and 8 are its kind, payload length and sequence fields.
                 unsafe {
                     match kind {
                         Corruption::Kind => desc.cast::<u16>().write_unaligned(0xffff),

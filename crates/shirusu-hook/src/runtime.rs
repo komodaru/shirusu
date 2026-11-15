@@ -135,10 +135,12 @@ pub(crate) fn native_tls_available() -> bool {
         }
         let vector: *const *const u8;
         #[cfg(target_arch = "x86_64")]
+        // SAFETY: reads the TEB's ThreadLocalStoragePointer (gs:[0x58] on x64); the TEB is always mapped for the current thread.
         unsafe {
             core::arch::asm!("mov {}, gs:[0x58]", out(reg) vector, options(nostack, preserves_flags, readonly))
         };
         #[cfg(target_arch = "x86")]
+        // SAFETY: reads the TEB's ThreadLocalStoragePointer (fs:[0x2c] on x86); the TEB is always mapped for the current thread.
         unsafe {
             core::arch::asm!("mov {}, fs:[0x2c]", out(reg) vector, options(nostack, preserves_flags, readonly))
         };
@@ -147,7 +149,9 @@ pub(crate) fn native_tls_available() -> bool {
         }
         // Windows sizes the vector for the loaded modules before filling its
         // per-module blocks. A block may not have been allocated yet either.
+        // SAFETY: _tls_index is the CRT's static TLS index, initialised by the loader before any code of this module runs.
         let index = unsafe { std::ptr::read_volatile(std::ptr::addr_of!(_tls_index)) } as usize;
+        // SAFETY: the vector is non-null (checked above) and the loader sizes it for every module's TLS index.
         !unsafe { std::ptr::read_volatile(vector.add(index)) }.is_null()
     }
     #[cfg(not(windows))]
@@ -2017,6 +2021,7 @@ mod tests {
             .unwrap()
             .data_ready
             .wait_timeout(Duration::ZERO));
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, agent.thread_config()) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
@@ -2048,6 +2053,7 @@ mod tests {
 
         // Ring を読み戻してイベントの対応を確認する
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert!(batch.integrity_error.is_none());
@@ -2097,6 +2103,7 @@ mod tests {
         let r = rt.record_completion(tid, read, call_id, b"completed-args");
         assert!(matches!(r, RecordResult::Written(_)));
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
@@ -2129,6 +2136,7 @@ mod tests {
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
@@ -2158,6 +2166,7 @@ mod tests {
         pop_call(call_id);
         rt.record_leave(tid, create, call_id, b"leave-args");
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
@@ -2186,6 +2195,7 @@ mod tests {
         assert!(caught.is_err(), "the panic must propagate unchanged");
         assert_eq!(current_parent_call(), 0);
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
@@ -2275,6 +2285,7 @@ mod tests {
         assert_eq!(current_parent_call(), 0);
         // Ring に enter/leave の 2 イベントが残る。
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
@@ -2314,6 +2325,7 @@ mod tests {
         pop_call(call_id);
 
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
@@ -2360,6 +2372,7 @@ mod tests {
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);
@@ -2747,6 +2760,7 @@ mod tests {
                                     let Some(base) = agent.thread_region(tid) else {
                                         continue;
                                     };
+                                    // SAFETY: the only reader of this Ring (SPSC).
                                     e.insert((unsafe { RingReader::new(base, cfg) }.unwrap(), 0))
                                 }
                             };
@@ -2982,6 +2996,7 @@ mod tests {
         // drain されるまでは回収待ちのまま
         assert_eq!(agent.pending_reclaim_count(), 1);
         let mut reader =
+            // SAFETY: the only reader of this Ring (SPSC).
             unsafe { shirusu_transport::ring::RingReader::new(base, RingConfig::new(64, 4096)) }
                 .unwrap();
         let batch = reader.drain_all();
@@ -3054,6 +3069,7 @@ mod tests {
         let (_agent, rt) = runtime();
         assert!(native_tls_available());
         let saved: usize;
+        // SAFETY: saves the TEB's TLS vector pointer and clears it; the restore below runs before anything else needs it.
         unsafe {
             #[cfg(target_arch = "x86_64")]
             core::arch::asm!("mov {}, gs:[0x58]", "mov qword ptr gs:[0x58], 0", out(reg) saved, options(nostack, preserves_flags));
@@ -3064,6 +3080,7 @@ mod tests {
         let entered = ReentrancyGuard::try_enter().is_some();
         let active = ReentrancyGuard::is_active();
         ReentrancyGuard::mark_thread_exiting();
+        // SAFETY: restores the TEB's TLS vector pointer saved above.
         unsafe {
             #[cfg(target_arch = "x86_64")]
             core::arch::asm!("mov gs:[0x58], {}", in(reg) saved, options(nostack, preserves_flags));
@@ -3155,6 +3172,7 @@ mod tests {
 
         // Ring には外側の enter/leave だけが残る（入れ子の素通しは記録しない）
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert!(batch.integrity_error.is_none());
@@ -3336,6 +3354,7 @@ mod tests {
         {
             use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
             let name: Vec<u16> = "kernelbase.dll".encode_utf16().chain([0]).collect();
+            // SAFETY: the name is a NUL-terminated UTF-16 string that outlives the call.
             let kernelbase = unsafe { GetModuleHandleW(name.as_ptr()) } as usize;
             assert_ne!(kernelbase, 0);
             assert!(rt.should_suppress_caller(kernelbase + 0x1000));
@@ -3356,6 +3375,7 @@ mod tests {
         let call_id = rt.alloc_call_id();
         rt.record_com_aborted(tid, call_id);
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
@@ -3385,6 +3405,7 @@ mod tests {
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
@@ -3422,6 +3443,7 @@ mod tests {
         }
         assert_eq!(current_parent_call(), 0, "aborted call pops the stack");
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1);
@@ -3451,6 +3473,7 @@ mod tests {
         }
         pop_call(call_id);
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 0);
@@ -3477,6 +3500,7 @@ mod tests {
             RecordResult::Written(_)
         ));
         let base = agent.thread_region(tid).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base, RingConfig::new(64, 4096)) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 2);

@@ -56,9 +56,11 @@ fn deleting_fiber_does_not_end_thread_capture() {
         seen.fetch_add(1, Ordering::SeqCst);
     }));
     let observed = exits.clone();
+    // SAFETY: the thread converts itself to a fiber and switches only between fibers it created.
     std::thread::spawn(move || unsafe {
         unsafe extern "system" fn fiber(parent: *mut std::ffi::c_void) {
             shirusu_hook::fls::arm_current_thread(77);
+            // SAFETY: `parent` is the converted thread's fiber, passed as this fiber's parameter.
             unsafe {
                 SwitchToFiber(parent);
             }

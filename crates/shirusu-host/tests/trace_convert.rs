@@ -313,6 +313,7 @@ fn agent_to_host_to_trace_end_to_end() {
     for tid in 1..=2u64 {
         let handle = agent.thread_begin(tid).expect("slot");
         let base = agent.thread_region(tid).expect("base");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut worker = unsafe { DrainWorker::new(base.clone(), cfg, handle.generation) }.unwrap();
         worker.set_identity(RingIdentity::new(
             ProcessInstanceId(1),

@@ -24,6 +24,7 @@ fn rig() -> Rig {
     let cfg = RingConfig::new(4, 64);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let writer = unsafe {
         region.writer(
             WriterPolicy {
@@ -33,7 +34,9 @@ fn rig() -> Rig {
             clock,
         )
     };
+    // SAFETY: the only reader of this fresh Ring (SPSC), starting at read position 0.
     let collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
+    // SAFETY: the only reader of this Ring (SPSC).
     let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     Rig {
         cfg,
@@ -67,6 +70,7 @@ impl Rig {
         let mut d = EventDescriptor::from_bytes(&self.region.snapshot()[off..off + 64]).unwrap();
         f(&mut d);
         let bytes = d.to_bytes();
+        // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.region.shm().as_ptr().add(off), 64)
         };
@@ -214,6 +218,7 @@ fn resume_counts_the_copied_range_and_continues() {
     r.write(10);
     r.write(4);
     assert_eq!(r.worker.drain_once(1).events.len(), 1);
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut resumed = unsafe { DrainWorker::new(r.region.shm().clone(), r.cfg, 1) }.unwrap();
     resumed.resume_from_shared();
     assert!(!resumed.is_stopped());

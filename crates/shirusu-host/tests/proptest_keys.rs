@@ -43,6 +43,7 @@ impl Rig {
         let region = SharedRegion::new(cfg, identity.generation, 1).unwrap();
         let clock = Arc::new(ManualClock::new());
         let wc: Arc<dyn Clock> = clock.clone();
+        // SAFETY: the only writer of this region (SPSC).
         let writer = unsafe {
             region.writer(
                 WriterPolicy {
@@ -53,6 +54,7 @@ impl Rig {
             )
         };
         let mut worker =
+            // SAFETY: the only reader of this Ring (SPSC).
             unsafe { DrainWorker::new(region.shm().clone(), cfg, identity.generation) }.unwrap();
         worker.set_identity(identity);
         Self {
@@ -233,6 +235,7 @@ proptest! {
                     // 同じ Ring の回収を続ける（identity は同じ）。新しい Worker
                     // は共有側の読み位置から検証状態を引き継ぐ (resume)。
                     rig.harvest(&mut model)?;
+                    // SAFETY: the only reader of this Ring (SPSC).
                     let mut worker = unsafe {
                         DrainWorker::new(
                             rig.region.shm().clone(),

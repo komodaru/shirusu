@@ -927,6 +927,7 @@ mod tests {
         let mut b = AgentBootstrap::new(1, cfg, &[(1, 2)]);
         b.com_options = 1;
         assert!(b.validate().is_ok());
+        // SAFETY: `b` is a live, exclusively borrowed Bootstrap.
         unsafe { AgentBootstrap::write_com_factory_count(&mut b, 2) };
         assert_eq!(b.com_factory_count(), 2);
     }
@@ -941,6 +942,7 @@ mod tests {
         assert_eq!(b.winrt_activation_count(), 0);
         assert!(b.validate().is_ok());
         let mut b = AgentBootstrap::new(1, cfg, &[(1, 2)]);
+        // SAFETY: `b` is a live, exclusively borrowed Bootstrap.
         unsafe { AgentBootstrap::write_winrt_activation_count(&mut b, 2) };
         assert_eq!(b.winrt_activation_count(), 2);
     }
@@ -955,6 +957,7 @@ mod tests {
         assert_eq!(b.callback_hook_count(), 0);
         assert!(b.validate().is_ok());
         let mut b = AgentBootstrap::new(1, cfg, &[(1, 2)]);
+        // SAFETY: `b` is a live, exclusively borrowed Bootstrap.
         unsafe { AgentBootstrap::write_callback_hook_count(&mut b, 4) };
         assert_eq!(b.callback_hook_count(), 4);
     }
@@ -964,6 +967,7 @@ mod tests {
         // DLL 側の書き戻しと Host 側の読み戻し (レビュー第5回 #8)。
         let mut b = AgentBootstrap::default();
         assert_eq!(b.unrestored_count(), 0);
+        // SAFETY: `b` is a live, exclusively borrowed Bootstrap.
         unsafe { AgentBootstrap::write_install_failure(&mut b, 2) };
         assert_eq!(b.unrestored_count(), 2);
     }
@@ -973,8 +977,10 @@ mod tests {
         // DLL 側の書き戻しと Host 側の読み戻し (レビュー #4 の #8)。
         let mut b = AgentBootstrap::default();
         assert_eq!(b.hook_outcome(), (0, 0));
+        // SAFETY: `b` is a live, exclusively borrowed Bootstrap.
         unsafe { AgentBootstrap::write_hook_outcome(&mut b, 0, 4) };
         assert_eq!(b.hook_outcome(), (0, 4));
+        // SAFETY: `b` is a live, exclusively borrowed Bootstrap.
         unsafe { AgentBootstrap::write_hook_outcome(&mut b, 3, 1) };
         assert_eq!(b.hook_outcome(), (3, 1));
     }

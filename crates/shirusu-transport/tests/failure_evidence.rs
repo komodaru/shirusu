@@ -115,6 +115,7 @@ fn evidence_dir_honors_env_override() {
         evidence_dir(),
         std::path::PathBuf::from("/tmp/shirusu-evidence-x")
     );
+    // SAFETY: same as above: no concurrent test reads this variable.
     unsafe { std::env::remove_var("SHIRUSU_FAILURE_EVIDENCE_DIR") };
 }
 

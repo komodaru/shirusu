@@ -334,6 +334,7 @@ mod win {
             );
         }
         #[cfg(target_arch = "x86")]
+        // SAFETY: same as the x64 variant above: the slot is this thread's own TEB TLS slot.
         unsafe {
             core::arch::asm!(
                 "mov {v}, dword ptr fs:[{o}]",
@@ -399,6 +400,7 @@ mod win {
         use windows_sys::Win32::System::Memory::{
             VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_IMAGE,
         };
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut mbi: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         // SAFETY: mbi は MEMORY_BASIC_INFORMATION 分の領域。
         let n = unsafe {
@@ -874,6 +876,7 @@ mod tests {
 
         fn module(name: &str) -> usize {
             let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            // SAFETY: `wide` is a NUL-terminated UTF-16 module name.
             unsafe { GetModuleHandleW(wide.as_ptr()) as usize }
         }
 
@@ -894,6 +897,7 @@ mod tests {
             } else {
                 32
             };
+            // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
             let memory = unsafe {
                 VirtualAlloc(
                     std::ptr::null(),
@@ -909,13 +913,16 @@ mod tests {
                 bitness,
                 offset,
             );
+            // SAFETY: `memory` is this test's own committed page and `code` fits in it.
             unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), memory as *mut u8, code.len()) };
             let stub: extern "system" fn(usize, usize) -> usize =
+                // SAFETY: `memory` holds `code`, a stub with this signature.
                 unsafe { std::mem::transmute(memory) };
             let caller = std::hint::black_box(stub)(1, 2);
             assert_eq!(take_entry_caller(), 0, "the first read consumes the slot");
             // Arguments and the return value pass through unchanged, and the
             // reported address is a return site in this test binary.
+            // SAFETY: a null name returns the executable's own module handle.
             let exe = unsafe { GetModuleHandleW(std::ptr::null()) } as usize;
             assert_ne!(caller, 0);
             assert!(
@@ -928,6 +935,7 @@ mod tests {
             );
             // Calls that do not pass through a stub report no caller.
             assert_eq!(report_entry_caller(3, 4), 0);
+            // SAFETY: the page was allocated by this test and the stub is no longer running.
             unsafe { VirtualFree(memory as *mut _, 0, MEM_RELEASE) };
         }
 
@@ -951,6 +959,7 @@ mod tests {
                     );
                 }
             }
+            // SAFETY: a null name returns the executable's own module handle.
             let exe = unsafe { GetModuleHandleW(std::ptr::null()) } as usize;
             assert_eq!(
                 classify_caller_after_prepare(exe + 0x1000),

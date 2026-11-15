@@ -150,6 +150,7 @@ fn cross_arch() -> ScenarioReport {
     };
     // data_ready を 2ms 再確認付きで待ちながら回収する。producer 終了後にも残りを回収する。
     let mut rd =
+        // SAFETY: the only reader of this Ring (SPSC).
         unsafe { shirusu_transport::ring::RingReader::new(mapping.shm().clone(), cfg) }.unwrap();
     let mut got: Vec<u64> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(60);

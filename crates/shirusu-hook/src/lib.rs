@@ -70,17 +70,21 @@ pub(crate) mod heap_watch {
             let _ = HITS.try_with(|h| h.set(h.get() + 1));
         }
     }
+    // SAFETY: every method forwards to System with the caller's arguments, so System's guarantees carry over.
     unsafe impl GlobalAlloc for Allocator {
         unsafe fn alloc(&self, l: Layout) -> *mut u8 {
             hit();
+            // SAFETY: forwarded from GlobalAlloc::alloc's contract.
             unsafe { System.alloc(l) }
         }
         unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
             hit();
+            // SAFETY: forwarded from GlobalAlloc::dealloc's contract (System allocated `p`).
             unsafe { System.dealloc(p, l) }
         }
         unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
             hit();
+            // SAFETY: forwarded from GlobalAlloc::realloc's contract (System allocated `p`).
             unsafe { System.realloc(p, l, n) }
         }
     }

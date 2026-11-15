@@ -101,7 +101,9 @@ fn setup(
         max_wait: Duration::ZERO,
         ..Default::default()
     };
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe { region.writer(policy, clock) };
+    // SAFETY: the only reader of this region (SPSC).
     let r = unsafe { region.reader() };
     (region, w, r)
 }

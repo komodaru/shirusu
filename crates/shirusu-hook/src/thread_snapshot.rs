@@ -17,6 +17,7 @@ impl ThreadSnapshot {
     pub(crate) fn new() -> Result<Self, ()> {
         const LIMIT: usize = 16 * 1024 * 1024;
         let mut required = 0u32;
+        // SAFETY: a null buffer of length 0 only asks for the size, written to `required`.
         unsafe {
             NtQuerySystemInformation(
                 SystemProcessInformation,
@@ -46,6 +47,7 @@ impl ThreadSnapshot {
     ) -> Result<bool, ()> {
         let capacity = self.words.len() * 8;
         let mut written = 0u32;
+        // SAFETY: `self.words` has room for `capacity` bytes and `written` is a writable local.
         let status = unsafe {
             NtQuerySystemInformation(
                 SystemProcessInformation,
@@ -75,6 +77,7 @@ fn only_known_threads(bytes: &[u8], pid: u32, current: u32, stopped: &[u32]) -> 
         }
         // This copies plain integer/pointer fields; pointers in native records
         // (including ImageName) are never dereferenced.
+        // SAFETY: `remaining` holds at least `header_size` bytes (checked above); read_unaligned copies plain fields.
         let process = unsafe {
             remaining
                 .as_ptr()
@@ -99,6 +102,7 @@ fn only_known_threads(bytes: &[u8], pid: u32, current: u32, stopped: &[u32]) -> 
             }
             let mut saw_current = false;
             for chunk in remaining[header_size..end].chunks_exact(thread_size) {
+                // SAFETY: each chunk is exactly one SYSTEM_THREAD_INFORMATION in size; read_unaligned copies plain fields.
                 let thread = unsafe {
                     chunk
                         .as_ptr()
@@ -132,9 +136,11 @@ mod tests {
         let header_size = std::mem::size_of::<SYSTEM_PROCESS_INFORMATION>();
         let thread_size = std::mem::size_of::<SYSTEM_THREAD_INFORMATION>();
         let mut bytes = vec![0u8; header_size + ids.len() * thread_size];
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut process: SYSTEM_PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         process.UniqueProcessId = pid as usize as _;
         process.NumberOfThreads = ids.len() as u32;
+        // SAFETY: `bytes` starts with room for one SYSTEM_PROCESS_INFORMATION.
         unsafe {
             bytes
                 .as_mut_ptr()
@@ -142,9 +148,11 @@ mod tests {
                 .write_unaligned(process)
         };
         for (index, id) in ids.iter().enumerate() {
+            // SAFETY: a plain C struct; all-zero bytes are a valid value.
             let mut thread: SYSTEM_THREAD_INFORMATION = unsafe { std::mem::zeroed() };
             thread.ClientId.UniqueProcess = pid as usize as _;
             thread.ClientId.UniqueThread = *id as usize as _;
+            // SAFETY: `bytes` has room for `ids.len()` thread records after the header.
             unsafe {
                 bytes
                     .as_mut_ptr()

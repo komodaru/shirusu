@@ -57,6 +57,7 @@ fn writer_degraded_event_above_capacity_passes_validating_reader() {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
     let big = vec![7u8; 512];
     w.write(EventInput {

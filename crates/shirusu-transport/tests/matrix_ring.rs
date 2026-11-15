@@ -31,7 +31,9 @@ fn setup(
     let cfg = RingConfig::new(desc, pay);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe { region.writer(policy, clock.clone() as Arc<dyn Clock>) };
+    // SAFETY: the only reader of this region (SPSC).
     let r = unsafe { region.reader() };
     (region, w, r, clock)
 }

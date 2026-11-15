@@ -32,7 +32,9 @@ fn main() {
         let cfg = RingConfig::new(256, 64 * 1024);
         let region = SharedRegion::new(cfg, 1, std::process::id() as u64).unwrap();
         let clock: Arc<dyn Clock> = shirusu_transport::clock::system_clock();
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
+        // SAFETY: the only reader of this region (SPSC).
         let mut rd = unsafe { region.reader() };
         for i in 0..count {
             let p = i.to_le_bytes();
@@ -104,6 +106,7 @@ fn main() {
             )
             .expect("map view");
             let clock: Arc<dyn Clock> = shirusu_transport::clock::system_clock();
+            // SAFETY: the only writer of this region (SPSC).
             let mut w = unsafe {
                 shirusu_transport::RingWriter::new(
                     mapping.shm().clone(),
@@ -215,8 +218,10 @@ fn agent_stress(args: &[String]) {
     // SAFETY: いずれも Host (supervisor) が継承可能にして渡した、この
     // プロセスで有効なイベントハンドル (継承した値は子の所有)。
     let data_ready = ProcessNotify {
+        // SAFETY: the supervisor passed an inheritable event handle that this process now owns, used once.
         data_ready: EventObject::from_owned(unsafe { inherited(parse("--data-ready")) }, true),
     };
+    // SAFETY: the supervisor passed an inheritable event handle that this process now owns, used once.
     let phase_done = EventObject::from_owned(unsafe { inherited(parse("--phase-done")) }, true);
 
     let handle = agent.thread_begin(1).expect("thread_begin");
@@ -289,9 +294,12 @@ fn agent_path(args: &[String]) {
     // SAFETY: いずれも Host (supervisor) が継承可能にして渡した、この
     // プロセスで有効なイベントハンドル (継承した値は子の所有)。
     let data_ready = ProcessNotify {
+        // SAFETY: the supervisor passed an inheritable event handle that this process now owns, used once.
         data_ready: EventObject::from_owned(unsafe { inherited(parse("--data-ready")) }, true),
     };
+    // SAFETY: the supervisor passed an inheritable event handle that this process now owns, used once.
     let phase_done = EventObject::from_owned(unsafe { inherited(parse("--phase-done")) }, true);
+    // SAFETY: the supervisor passed an inheritable event handle that this process now owns, used once.
     let reclaim_ok = EventObject::from_owned(unsafe { inherited(parse("--reclaim-ok")) }, true);
 
     let record_range = |agent: &Agent, thread_id: u64, from: u64, count: u64| {

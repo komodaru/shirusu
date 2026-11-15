@@ -31,6 +31,7 @@ fn agent_stamps_come_from_timestamp_source_not_wait_clock() {
     a.record_enter(1, 1, 1, 2, 0, b"y");
 
     let base = a.thread_region(1).expect("region base");
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut rd = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
     let b = rd.drain_all();
     assert_eq!(b.integrity_error, None);

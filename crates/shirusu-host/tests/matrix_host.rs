@@ -116,6 +116,7 @@ fn setup(desc: usize, pay: usize) -> (SharedRegion, shirusu_transport::RingWrite
     let cfg = RingConfig::new(desc, pay);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe {
         region.writer(
             WriterPolicy {
@@ -125,6 +126,7 @@ fn setup(desc: usize, pay: usize) -> (SharedRegion, shirusu_transport::RingWrite
             clock,
         )
     };
+    // SAFETY: the only reader of this Ring (SPSC).
     let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     (region, w, worker)
 }
@@ -319,6 +321,7 @@ fn validating_host_keys_accumulate_across_drains() {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 3, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer(
             WriterPolicy {

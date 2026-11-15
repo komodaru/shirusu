@@ -83,6 +83,7 @@ fn a_thread_without_a_slot_adopts_a_ring_built_for_it() {
         RecordResult::Written(_)
     ));
     // 受け取った Ring は 2 本目の Mapping で、スレッド 8 の記録だけが入る。
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut reader = unsafe { RingReader::new(second.clone(), cfg()) }.unwrap();
     let batch = reader.drain_all();
     assert!(batch.integrity_error.is_none());

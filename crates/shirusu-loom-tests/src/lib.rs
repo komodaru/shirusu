@@ -38,6 +38,7 @@ impl MiniRing {
     fn publish(&self, value: u64) {
         let wc = self.write_cursor.load(Ordering::Relaxed);
         let idx = (wc as usize) % CAP;
+        // SAFETY: the single writer owns cell `idx` until it publishes it with the Release store below.
         self.cells[idx].with_mut(|p| unsafe { *p = value });
         self.write_cursor.store(wc + 1, Ordering::Release);
     }
@@ -48,6 +49,7 @@ impl MiniRing {
         let mut out = Vec::new();
         for c in rc..wc {
             let idx = (c as usize) % CAP;
+            // SAFETY: cell `idx` is below the Acquire-loaded write cursor, so the writer published it and no longer writes it.
             let v = self.cells[idx].with(|p| unsafe { *p });
             out.push(v);
         }

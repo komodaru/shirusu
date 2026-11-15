@@ -42,7 +42,9 @@ fn rig(cfg: RingConfig, wait: bool) -> Rig {
         },
         ..Default::default()
     };
+    // SAFETY: the only writer of this region (SPSC).
     let writer = unsafe { region.writer_with_timestamps(policy, clock, ts) };
+    // SAFETY: the only reader of this region (SPSC).
     let reader = unsafe { region.reader() };
     Rig {
         cfg,
@@ -140,6 +142,7 @@ proptest! {
         let cfg = RingConfig::new(desc, pay);
         let mut r = rig(cfg, false);
         if global {
+            // SAFETY: the only reader of this region (SPSC).
             r.reader = unsafe { r.region.reader() }.with_global_order(true);
         }
         let mut vr = ValidatingReader::new(r.known(), 1);
@@ -448,6 +451,7 @@ fn global_order_needs_the_session_setting_on_both_readers() {
         batch.integrity_error,
         Some(IntegrityError::GlobalOrderNotAllowed)
     );
+    // SAFETY: the only reader of this region (SPSC).
     let mut allowing = unsafe { r.region.reader() }.with_global_order(true);
     let batch = allowing.drain(9);
     assert_eq!(batch.integrity_error, None);
@@ -462,6 +466,7 @@ fn tamper(r: &Rig, cursor: u64, f: impl FnOnce(&mut EventDescriptor)) {
     let mut d = EventDescriptor::from_bytes(&r.region.snapshot()[off..off + 64]).unwrap();
     f(&mut d);
     let bytes = d.to_bytes();
+    // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), r.region.shm().as_ptr().add(off), 64) };
 }
 

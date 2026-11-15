@@ -381,6 +381,7 @@ mod tests {
     fn owner_and_remote_users_never_overlap() {
         let cfg = RingConfig::new(64, 4096);
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
+        // SAFETY: the only writer of this region (SPSC).
         let writer = unsafe {
             RingWriter::new(
                 region.shm().clone(),
@@ -427,6 +428,7 @@ mod tests {
     fn cell() -> Arc<WriterCell> {
         let cfg = RingConfig::new(64, 4096);
         let region = Box::leak(Box::new(SharedRegion::new(cfg, 1, 1).unwrap()));
+        // SAFETY: the only writer of this region (SPSC).
         let writer = unsafe {
             RingWriter::new(
                 region.shm().clone(),

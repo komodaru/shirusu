@@ -413,6 +413,7 @@ pub unsafe fn intercept_object(
         Some((_, true)) => return ComInterceptOutcome::IUnknownAlreadyIntercepted,
         _ => {}
     }
+    // SAFETY: forwarded from this function's contract: `ptr` is a live COM interface we hold a reference to.
     match unsafe { crate::shared_com::install(rt, ptr) } {
         Ok(installed) => {
             rt.with_com_tracker(|t| {
@@ -560,6 +561,7 @@ pub(super) fn diagnostic_confirm_identity(rt: &HookRuntime, ptr: usize, original
     }
     rt.with_com_tracker(|t| t.note_identity_confirmed(ptr as u64, unk as u64));
     // 参照カウントを元へ戻す（QI で +1 された分）。
+    // SAFETY: `release` is the IUnknown::Release slot of this vtable and `unk` holds the reference QueryInterface added.
     unsafe {
         std::mem::transmute::<usize, ReleaseFn>(release)(unk);
     };

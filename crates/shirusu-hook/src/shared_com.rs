@@ -67,6 +67,7 @@ unsafe extern "system" fn dll_notification(
     if reason != 2 || data.is_null() {
         return;
     }
+    // SAFETY: the loader passes a valid notification record for the duration of the callback (`data` is non-null).
     let base = unsafe { (*data).base as usize };
     if base == 0 {
         return;
@@ -100,6 +101,7 @@ pub fn initialize() -> bool {
     // Published wrappers and the loader callback must never outlive this DLL.
     // Pin only our own module, never a COM server or its dependencies.
     let mut own_module = std::ptr::null_mut();
+    // SAFETY: FROM_ADDRESS + PIN only looks up and pins this module; `own_module` is a writable local.
     if unsafe {
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -111,17 +113,21 @@ pub fn initialize() -> bool {
         return false;
     }
     let name: Vec<u16> = "ntdll.dll".encode_utf16().chain([0]).collect();
+    // SAFETY: the name is a NUL-terminated UTF-16 string that outlives the call.
     let ntdll = unsafe { GetModuleHandleW(name.as_ptr()) };
     if ntdll.is_null() {
         return false;
     }
     let Some(register) =
+        // SAFETY: `ntdll` is loaded for the whole process and the name is a NUL-terminated C string.
         (unsafe { GetProcAddress(ntdll, c"LdrRegisterDllNotification".as_ptr().cast()) })
     else {
         return false;
     };
+    // SAFETY: LdrRegisterDllNotification has the RegisterNotification signature.
     let register: RegisterNotification = unsafe { std::mem::transmute(register) };
     let mut cookie = std::ptr::null_mut();
+    // SAFETY: `dll_notification` matches the callback ABI, this module is pinned so it never unloads, and `cookie` is a writable local.
     let status = unsafe { register(0, dll_notification, std::ptr::null_mut(), &mut cookie) };
     if status >= 0 && !cookie.is_null() {
         OBSERVER.store(cookie as usize, Ordering::Release);
@@ -137,6 +143,7 @@ fn slot(index: usize) -> &'static Slot {
     let ptr = SLOTS[index].load(Ordering::Acquire);
     // Only a successfully published wrapper is callable. Publication follows
     // initialization, and its Slot is retained for the process lifetime.
+    // SAFETY: `ptr` was published after its Slot was initialised, and published Slots are never freed.
     unsafe { &*ptr }
 }
 
@@ -152,6 +159,7 @@ unsafe extern "system-unwind" fn query<const N: usize>(
         &[iid as usize, out as usize],
         saved.originals[0],
         Some(&saved.owner),
+        // SAFETY: `original` is the IUnknown::QueryInterface slot saved from this vtable, with the Qi signature; the arguments are the caller's.
         |original| unsafe { std::mem::transmute::<usize, Qi>(original)(this, iid, out) },
     )
 }
@@ -166,6 +174,7 @@ unsafe extern "system-unwind" fn reference<const N: usize, const METHOD: usize>(
         &[],
         saved.originals[METHOD],
         Some(&saved.owner),
+        // SAFETY: `original` is the AddRef/Release slot saved from this vtable, with the Ref signature.
         |original| unsafe { std::mem::transmute::<usize, Ref>(original)(this) as i32 },
     ) as u32
 }
@@ -189,7 +198,9 @@ fn wrapper(index: usize, method: usize) -> usize {
 }
 
 fn query_region(address: usize) -> Option<MEMORY_BASIC_INFORMATION> {
+    // SAFETY: a plain C struct; all-zero bytes are a valid value.
     let mut region = unsafe { std::mem::zeroed() };
+    // SAFETY: VirtualQuery only reads page metadata; `region` has the size passed.
     (unsafe {
         VirtualQuery(
             address as *const c_void,
@@ -261,6 +272,7 @@ unsafe fn exchange(saved: &Slot, index: usize, method: usize, installing: bool) 
     } else {
         (detour, saved.originals[method])
     };
+    // SAFETY: `address` is an aligned vtable slot inside a committed image page that was just made writable, and every writer of it uses atomics.
     let pointer = unsafe { AtomicUsize::from_ptr(address as *mut usize) };
     let exchanged = pointer
         .compare_exchange(expected, desired, Ordering::AcqRel, Ordering::Acquire)
@@ -302,6 +314,7 @@ fn make_writable(address: usize, old: &mut u32) -> bool {
     if injected_failure(&FAIL_WRITABLE) {
         return false;
     }
+    // SAFETY: changing a page's protection does not create references; `old` is a writable location.
     unsafe {
         VirtualProtect(
             address as *const c_void,
@@ -317,6 +330,7 @@ fn restore_page(address: usize, protection: u32) -> bool {
         return false;
     }
     let mut ignored = 0;
+    // SAFETY: changing a page's protection does not create references; `ignored` is a writable local.
     unsafe {
         VirtualProtect(
             address as *const c_void,
@@ -443,12 +457,14 @@ pub unsafe fn install(rt: &Arc<HookRuntime>, object: usize) -> Result<Installati
     MODULE_EPOCHS[index].store(epoch, Ordering::Release);
     SLOTS[index].store(pointer, Ordering::Release);
     let saved = registry[index].as_ref().unwrap();
+    // SAFETY: `saved` was validated by read_table and the caller holds a live COM reference to the object.
     let success = (0..3).all(|method| unsafe { exchange(saved, index, method, true) });
     if !success {
         for method in (0..3).rev() {
             if saved.patched[method].load(Ordering::Acquire)
                 || saved.protection[method].load(Ordering::Acquire) != 0
             {
+                // SAFETY: same Slot and reference as the install attempt above.
                 unsafe {
                     exchange(saved, index, method, false);
                 }
@@ -482,6 +498,7 @@ pub fn restore_all() -> usize {
             continue;
         }
         let mut module = std::ptr::null_mut();
+        // SAFETY: FROM_ADDRESS only looks up the module (taking a reference released below); `module` is a writable local.
         let held = unsafe {
             GetModuleHandleExW(
                 GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
@@ -508,6 +525,7 @@ pub fn restore_all() -> usize {
                 if saved.patched[method].load(Ordering::Acquire)
                     || saved.protection[method].load(Ordering::Acquire) != 0
                 {
+                    // SAFETY: the module reference taken above keeps the vtable mapped.
                     unsafe {
                         exchange(saved, index, method, false);
                     }
@@ -515,6 +533,7 @@ pub fn restore_all() -> usize {
             }
         }
         if held {
+            // SAFETY: releases the module reference taken above, once.
             unsafe {
                 FreeLibrary(module);
             }
@@ -537,6 +556,7 @@ mod tests {
         rt: &std::sync::Arc<crate::runtime::HookRuntime>,
         object: usize,
     ) -> Result<bool, &'static str> {
+        // SAFETY: forwarded from this function's own contract.
         unsafe { super::install(rt, object) }.map(|installation| installation.newly_installed)
     }
 
@@ -556,6 +576,7 @@ mod tests {
     }
     struct SharedTable(UnsafeCell<Vtable>);
     // Native vtable slots are accessed through AtomicUsize after initialization.
+    // SAFETY: the table is only read and written through AtomicUsize after initialisation.
     unsafe impl Sync for SharedTable {}
     // A dedicated image section lets the test make only this fixture read-only.
     #[link_section = ".shcom"]
@@ -583,11 +604,14 @@ mod tests {
     static ENTERED_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
     static RELEASE_ORIGINAL: AtomicBool = AtomicBool::new(false);
     unsafe extern "system-unwind" fn native_add(this: *mut c_void) -> u32 {
+        // SAFETY: the fixture passes `this` = a live Object.
         let object = unsafe { &*this.cast::<Object>() };
         object
             .incoming_error
+            // SAFETY: GetLastError has no preconditions.
             .store(unsafe { GetLastError() }, Ordering::Relaxed);
         if RAISE_ORIGINAL.load(Ordering::Acquire) {
+            // SAFETY: the test's SEH helper raises an exception that the caller's catch frame handles.
             unsafe {
                 shirusu_test_raise_seh();
             }
@@ -599,14 +623,17 @@ mod tests {
                 std::thread::yield_now();
             }
         }
+        // SAFETY: SetLastError has no preconditions.
         unsafe {
             SetLastError(0x4444);
         }
         count
     }
     unsafe extern "system-unwind" fn native_release(this: *mut c_void) -> u32 {
+        // SAFETY: the fixture passes `this` = a live Object.
         let object = unsafe { &*this.cast::<Object>() };
         let count = object.refs.fetch_sub(1, Ordering::SeqCst).wrapping_sub(1);
+        // SAFETY: SetLastError has no preconditions.
         unsafe {
             SetLastError(0x5555);
         }
@@ -617,13 +644,16 @@ mod tests {
         iid: *const Guid,
         out: *mut *mut c_void,
     ) -> i32 {
+        // SAFETY: callers pass a valid IID pointer.
         if unsafe { *iid } != IID_IUNKNOWN {
+            // SAFETY: callers pass a writable `out` pointer.
             unsafe {
                 *out = std::ptr::null_mut();
                 SetLastError(0x6666);
             }
             return 0x80004002u32 as i32;
         }
+        // SAFETY: `this` is a live Object (caller's contract).
         unsafe {
             native_add(this);
             *out = this;
@@ -635,6 +665,7 @@ mod tests {
         0xfeedbeef
     }
     unsafe extern "system-unwind" fn third_party_add(this: *mut c_void) -> u32 {
+        // SAFETY: `this` is a live Object (caller's contract).
         unsafe { native_add(this) }
     }
     fn runtime() -> Arc<HookRuntime> {
@@ -660,10 +691,12 @@ mod tests {
         object
     }
     fn method(object: &Object, index: usize) -> usize {
+        // SAFETY: the fixture vtable has 4 aligned slots and `index` is below 4; slots are only accessed atomically.
         unsafe { AtomicUsize::from_ptr((object.table as *mut usize).add(index)) }
             .load(Ordering::Acquire)
     }
     unsafe fn call_ref(object: &Object, index: usize) -> u32 {
+        // SAFETY: `index` names an AddRef/Release slot (Ref signature) of the live object's vtable.
         unsafe {
             std::mem::transmute::<usize, Ref>(method(object, index))(
                 object as *const Object as *mut c_void,
@@ -693,6 +726,7 @@ mod tests {
         let mut observed_unload = false;
         for name in ["winmm.dll", "msacm32.dll", "dinput8.dll", "version.dll"] {
             let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            // SAFETY: the name is a NUL-terminated UTF-16 string that outlives the call.
             if !unsafe {
                 windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(wide.as_ptr())
             }
@@ -701,6 +735,7 @@ mod tests {
                 continue;
             }
             let module =
+                // SAFETY: `wide` is a NUL-terminated UTF-16 path.
                 unsafe { windows_sys::Win32::System::LibraryLoader::LoadLibraryW(wide.as_ptr()) };
             if module.is_null() {
                 continue;
@@ -711,6 +746,7 @@ mod tests {
                 .checked_add(1)
                 .unwrap();
             MODULE_EPOCHS[index].store(epoch, Ordering::Release);
+            // SAFETY: `module` was loaded above and is freed once.
             assert_ne!(unsafe { FreeLibrary(module) }, 0);
             observed_unload = MODULE_EPOCHS[index].load(Ordering::Acquire) & 1 != 0;
             MODULES[index].store(0, Ordering::Release);
@@ -725,6 +761,7 @@ mod tests {
         let table = TABLE.0.get() as usize;
         let mut initial_protection = 0;
         assert_ne!(
+            // SAFETY: `table` is the fixture's static table and `initial_protection` a writable local.
             unsafe {
                 VirtualProtect(
                     table as *const c_void,
@@ -751,6 +788,7 @@ mod tests {
             incoming_error: AtomicU32::new(0),
         };
         assert_eq!(
+            // SAFETY: the object is live; install only reads it and rejects the heap vtable.
             unsafe { install(&rt, &heap_object as *const Object as usize) },
             Err("vtable-not-image-data")
         );
@@ -763,7 +801,9 @@ mod tests {
             let iterations = Arc::clone(&iterations);
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Acquire) {
+                    // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
                     assert_eq!(unsafe { call_ref(&object, 1) }, 2);
+                    // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
                     assert_eq!(unsafe { call_ref(&object, 2) }, 1);
                     iterations.fetch_add(1, Ordering::Release);
                 }
@@ -778,12 +818,14 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(
+            // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
             unsafe { crate::engine::intercept_object(&rt, ptr, IID_IUNKNOWN) },
             crate::engine::ComInterceptOutcome::IUnknownIntercepted
         );
         assert!(rt.with_com_tracker(|t| t.lookup(ptr as u64).unwrap().iunknown_intercepted));
         stop.store(true, Ordering::Release);
         reader.join().unwrap();
+        // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
         assert_eq!(unsafe { install(&rt, ptr) }, Ok(false));
         assert_eq!(object.table, table, "object identity/vptr must not change");
         assert_eq!(
@@ -793,34 +835,45 @@ mod tests {
         );
         assert_eq!(query_region(table).unwrap().Protect, PAGE_READONLY);
 
+        // SAFETY: slot 1 holds a Ref-compatible pointer (the installed wrapper).
         let cached_add: Ref = unsafe { std::mem::transmute(method(&object, 1)) };
+        // SAFETY: SetLastError has no preconditions.
         unsafe {
             SetLastError(0x1234abcd);
         }
+        // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
         let count = unsafe { cached_add(ptr as *mut c_void) };
+        // SAFETY: GetLastError has no preconditions.
         let error = unsafe { GetLastError() };
         assert_eq!(count, 2);
         assert_eq!(error, 0x4444);
         assert_eq!(object.incoming_error.load(Ordering::Relaxed), 0x1234abcd);
+        // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&object, 2) }, 1);
 
+        // SAFETY: slot 0 holds a Qi-compatible pointer (the installed wrapper).
         let query: Qi = unsafe { std::mem::transmute(method(&object, 0)) };
         let mut queried = std::ptr::null_mut();
         assert_eq!(
+            // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
             unsafe { query(ptr as *mut c_void, &IID_IUNKNOWN, &mut queried) },
             0
         );
+        // SAFETY: GetLastError has no preconditions.
         let error = unsafe { GetLastError() };
         assert_eq!(queried as usize, ptr);
         assert_eq!(error, 0x7777);
         assert!(rt.with_com_tracker(|t| t.lookup(ptr as u64).unwrap().identity_confirmed));
+        // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&object, 2) }, 1);
 
         unsafe extern "C-unwind" fn invoke_add(context: *mut c_void) -> u64 {
+            // SAFETY: the SEH helper passes the live fixture object as `context`.
             unsafe { call_ref(&*context.cast::<Object>(), 1) as u64 }
         }
         let references = Arc::strong_count(&rt);
         RAISE_ORIGINAL.store(true, Ordering::Release);
+        // SAFETY: `invoke_add` matches the helper's callback ABI and `ptr` stays alive.
         let exception = unsafe { shirusu_test_catch_seh(invoke_add, ptr as *mut c_void) };
         RAISE_ORIGINAL.store(false, Ordering::Release);
         assert_eq!(exception, 0xe0424242);
@@ -840,12 +893,15 @@ mod tests {
             refs: AtomicU32::new(1),
             incoming_error: AtomicU32::new(0),
         };
+        // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&other, 1) }, 2);
         assert!(rt.with_com_tracker(|t| t.lookup(&other as *const Object as u64).is_none()));
+        // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&other, 2) }, 1);
 
         // Reference counts are ULONG, not HRESULT or pointer-sized returns.
         object.refs.store(0x80000000, Ordering::SeqCst);
+        // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&object, 1) }, 0x80000001);
         assert_eq!(
             rt.with_com_tracker(|t| t.lookup(ptr as u64).unwrap().refcount),
@@ -856,6 +912,7 @@ mod tests {
             .agent()
             .thread_region(tid)
             .expect("recorded main-thread Ring");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe {
             shirusu_transport::ring::RingReader::new(base, RingConfig::new(8192, 1024 * 1024))
         }
@@ -883,6 +940,7 @@ mod tests {
         let barrier = Arc::new(std::sync::Barrier::new(5));
         let mut threads = Vec::new();
         for _ in 0..4 {
+            // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
             unsafe {
                 call_ref(&object, 1);
             } // transfer one owned COM reference
@@ -891,15 +949,20 @@ mod tests {
             threads.push(std::thread::spawn(move || {
                 barrier.wait();
                 for _ in 0..2000 {
+                    // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
                     let count = unsafe { call_ref(&object, 1) };
+                    // SAFETY: GetLastError has no preconditions.
                     let error = unsafe { GetLastError() };
                     assert!(count > 1);
                     assert_eq!(error, 0x4444);
+                    // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
                     let count = unsafe { call_ref(&object, 2) };
+                    // SAFETY: GetLastError has no preconditions.
                     let error = unsafe { GetLastError() };
                     assert!(count > 0);
                     assert_eq!(error, 0x5555);
                 }
+                // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
                 unsafe {
                     call_ref(&object, 2);
                 }
@@ -933,11 +996,14 @@ mod tests {
             assert_eq!(method(&object, i), *expected);
         }
         assert_eq!(
+            // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
             unsafe { cached_add(ptr as *mut c_void) },
             2,
             "late cached wrapper must call the original"
         );
+        // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&object, 2) }, 1);
+        // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
         assert_eq!(unsafe { install(&rt, ptr) }, Err("session-closing"));
 
         let rt = runtime();
@@ -947,6 +1013,7 @@ mod tests {
         for _ in 0..(LIMIT + 8) {
             FAIL_WRITABLE.store(1, Ordering::Relaxed);
             assert_eq!(
+                // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
                 unsafe { install(&rt, ptr) },
                 Err("iunknown-installation-incomplete")
             );
@@ -963,6 +1030,7 @@ mod tests {
         // Fail the original protection restore and its immediate rollback.
         FAIL_RESTORE.store(2, Ordering::Relaxed);
         assert_eq!(
+            // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
             unsafe { install(&rt, ptr) },
             Err("iunknown-installation-incomplete")
         );
@@ -986,12 +1054,14 @@ mod tests {
         let rt = runtime();
         let object = self::object(&rt);
         let ptr = Arc::as_ptr(&object) as usize;
+        // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
         assert_eq!(unsafe { install(&rt, ptr) }, Ok(true));
         assert_eq!(method(&object, 1), cached_add as usize);
         assert_eq!(REGISTRY.lock().unwrap().iter().flatten().count(), used);
         let address = table + std::mem::size_of::<usize>();
         let mut old = 0;
         assert!(make_writable(address, &mut old));
+        // SAFETY: the fixture table is an aligned usize array in a page made writable above.
         unsafe { AtomicUsize::from_ptr(address as *mut usize) }
             .store(third_party_add as Ref as usize, Ordering::Release);
         assert!(restore_page(address, old));
@@ -999,10 +1069,13 @@ mod tests {
         assert_eq!(restore_all(), 0);
         assert_eq!(method(&object, 1), third_party_add as Ref as usize);
         assert!(make_writable(address, &mut old));
+        // SAFETY: the fixture table is an aligned usize array in a page made writable above.
         unsafe { AtomicUsize::from_ptr(address as *mut usize) }
             .store(original[1], Ordering::Release);
         assert!(restore_page(address, old));
+        // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
         assert_eq!(unsafe { cached_add(ptr as *mut c_void) }, 2);
+        // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&object, 2) }, 1);
         // Model an unload followed by a new image at the same address. The
         // observer's generation invalidates ownership even when VirtualQuery
@@ -1011,6 +1084,7 @@ mod tests {
         let rt = runtime();
         let object = self::object(&rt);
         assert_eq!(
+            // SAFETY: `ptr` points to the live fixture object, whose first word is its vtable.
             unsafe { install(&rt, Arc::as_ptr(&object) as usize) },
             Ok(true)
         );
@@ -1035,6 +1109,7 @@ mod tests {
             base: query_region(table).unwrap().AllocationBase,
             size: 0,
         };
+        // SAFETY: `notification` is a valid record for the duration of the call.
         unsafe {
             dll_notification(2, &notification, std::ptr::null_mut());
         }
@@ -1047,6 +1122,7 @@ mod tests {
         // The notification above was a model injection; restore the actual test
         // table directly before leaving the child process.
         for (i, original) in original[..3].iter().enumerate() {
+            // SAFETY: the fixture table is an aligned usize array in a page made writable above.
             unsafe { AtomicUsize::from_ptr((table as *mut usize).add(i)) }
                 .store(*original, Ordering::Release);
         }

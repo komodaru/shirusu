@@ -20,7 +20,9 @@ fn setup(desc_cap: usize, pay_cap: usize) -> (SharedRegion, RingWriter, RingRead
     let cfg = RingConfig::new(desc_cap, pay_cap);
     let region = SharedRegion::new(cfg, 1, 100).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe { region.writer(WriterPolicy::default(), clock) };
+    // SAFETY: the only reader of this region (SPSC).
     let r = unsafe { region.reader() };
     (region, w, r)
 }
@@ -45,10 +47,12 @@ fn tamper(region: &SharedRegion, cursor: u64, f: impl Fn(&mut EventDescriptor)) 
     let off = cfg.descriptors_offset() + slot * 64;
     let base = region.shm().clone();
     let mut bytes = [0u8; 64];
+    // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.
     unsafe { std::ptr::copy_nonoverlapping(base.as_ptr().add(off), bytes.as_mut_ptr(), 64) };
     let mut d = EventDescriptor::from_bytes(&bytes).expect("descriptor bytes");
     f(&mut d);
     let out = d.to_bytes();
+    // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.
     unsafe { std::ptr::copy_nonoverlapping(out.as_ptr(), base.as_ptr().add(off), 64) };
 }
 

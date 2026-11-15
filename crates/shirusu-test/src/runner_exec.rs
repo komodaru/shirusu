@@ -716,11 +716,14 @@ fn execution_environment() -> RunEnvironment {
         version_source: None,
     };
     let name: Vec<u16> = "ntdll.dll".encode_utf16().chain([0]).collect();
+    // SAFETY: the name is a NUL-terminated UTF-16 string that outlives the call.
     let module = unsafe { GetModuleHandleW(name.as_ptr()) };
     if module != 0 {
+        // SAFETY: `module` is loaded ntdll and the name is a NUL-terminated C string.
         let address = unsafe { GetProcAddress(module, c"RtlGetVersion".as_ptr().cast()) };
         if address != 0 {
             let query: unsafe extern "system" fn(*mut OsVersion) -> i32 =
+                // SAFETY: RtlGetVersion has this signature.
                 unsafe { std::mem::transmute(address) };
             let mut version = OsVersion {
                 size: std::mem::size_of::<OsVersion>() as u32,
@@ -730,6 +733,7 @@ fn execution_environment() -> RunEnvironment {
                 platform: 0,
                 service_pack: [0; 128],
             };
+            // SAFETY: `version` is a writable OsVersion with its size field set.
             if unsafe { query(&mut version) } == 0 {
                 env.windows_version = Some(format!(
                     "{}.{}.{}",
@@ -986,6 +990,11 @@ extern "system" {
 /// Invoke only the supported signatures, preserving pointer widths, DWORD,
 /// BOOL and void returns. None means an unsupported signature; Some(None)
 /// is a successful void call, with no invented return value.
+///
+/// # Safety
+/// `addr` is the address of the function named `function` (its DLL export or
+/// a stub with the same signature), and `args` are valid arguments for it
+/// (pointers to live buffers of the sizes the API expects).
 #[cfg(any(windows, test))]
 unsafe fn call_raw(addr: usize, function: &str, args: &[usize]) -> Option<Option<u64>> {
     match (function, args) {
@@ -998,7 +1007,9 @@ unsafe fn call_raw(addr: usize, function: &str, args: &[usize]) -> Option<Option
                 u32,
                 u32,
                 *mut std::ffi::c_void,
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
             ) -> *mut std::ffi::c_void = unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe {
                 f(
                     *a0 as *const u16,
@@ -1019,7 +1030,9 @@ unsafe fn call_raw(addr: usize, function: &str, args: &[usize]) -> Option<Option
                 u32,
                 *mut u32,
                 *mut std::ffi::c_void,
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
             ) -> i32 = unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe {
                 f(
                     *a0 as *mut std::ffi::c_void,
@@ -1038,7 +1051,9 @@ unsafe fn call_raw(addr: usize, function: &str, args: &[usize]) -> Option<Option
                 u32,
                 *mut u32,
                 *mut std::ffi::c_void,
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
             ) -> i32 = unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe {
                 f(
                     *a0 as *mut std::ffi::c_void,
@@ -1052,48 +1067,64 @@ unsafe fn call_raw(addr: usize, function: &str, args: &[usize]) -> Option<Option
         }
         ("CloseHandle", [a0]) => {
             let f: unsafe extern "system" fn(*mut std::ffi::c_void) -> i32 =
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
                 unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe { f(*a0 as *mut std::ffi::c_void) };
             Some(Some(value as u32 as u64))
         }
         ("GetFileSize", [a0, a1]) => {
             let f: unsafe extern "system" fn(*mut std::ffi::c_void, *mut u32) -> u32 =
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
                 unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe { f(*a0 as *mut std::ffi::c_void, *a1 as *mut u32) };
             Some(Some(value as u64))
         }
         ("DeleteFileW", [a0]) => {
             let f: unsafe extern "system" fn(*const u16) -> i32 =
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
                 unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe { f(*a0 as *const u16) };
             Some(Some(value as u32 as u64))
         }
         ("CreateDirectoryW", [a0, a1]) => {
             let f: unsafe extern "system" fn(*const u16, *mut std::ffi::c_void) -> i32 =
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
                 unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe { f(*a0 as *const u16, *a1 as *mut std::ffi::c_void) };
             Some(Some(value as u32 as u64))
         }
         ("RemoveDirectoryW", [a0]) => {
             let f: unsafe extern "system" fn(*const u16) -> i32 =
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
                 unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe { f(*a0 as *const u16) };
             Some(Some(value as u32 as u64))
         }
         ("Sleep", [a0]) => {
+            // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
             let f: unsafe extern "system" fn(u32) -> () = unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             unsafe { f(*a0 as u32) };
             Some(None)
         }
         ("FlushFileBuffers", [a0]) => {
             let f: unsafe extern "system" fn(*mut std::ffi::c_void) -> i32 =
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
                 unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe { f(*a0 as *mut std::ffi::c_void) };
             Some(Some(value as u32 as u64))
         }
         ("MoveFileW", [a0, a1]) => {
             let f: unsafe extern "system" fn(*const u16, *const u16) -> i32 =
+                // SAFETY: `addr` is the export named `function`, whose signature is this one (call_raw's contract).
                 unsafe { std::mem::transmute(addr) };
+            // SAFETY: the arguments are valid for this API (call_raw's contract).
             let value = unsafe { f(*a0 as *const u16, *a1 as *const u16) };
             Some(Some(value as u32 as u64))
         }
@@ -1200,6 +1231,7 @@ fn execute_one(
         Ok(h) => h,
         Err(e) => return fail(e),
     };
+    // SAFETY: `module` is a loaded module and `name` is NUL-terminated.
     let addr = unsafe {
         let mut name = call.function.as_bytes().to_vec();
         name.push(0);
@@ -1234,9 +1266,11 @@ fn execute_one(
     if let Err(error) = check_io_storage(call.function, &call.args, Some(&values)) {
         return fail(error);
     }
+    // SAFETY: `addr` is the export named `call.function`, and check_io_storage validated the arguments against its signature.
     let Some(returned) = (unsafe { call_raw(addr, call.function, &values) }) else {
         return fail(format!("unsupported call signature: {}", call.function));
     };
+    // SAFETY: GetLastError has no preconditions.
     let last_error = unsafe { GetLastError() };
     let mut outputs = Vec::new();
     let mut outputs_truncated = Vec::new();
@@ -1323,6 +1357,7 @@ fn load_module(
         return Ok(h);
     }
     let wide: Vec<u16> = dll.encode_utf16().chain([0]).collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 module name.
     let h = unsafe { LoadLibraryW(wide.as_ptr()) };
     if h == 0 {
         return Err(format!("LoadLibraryW failed for {dll}"));
@@ -1485,6 +1520,7 @@ mod tests {
         unsafe extern "system" fn close(_: *mut std::ffi::c_void) -> i32 {
             -1
         }
+        // SAFETY: the stubs have exactly the signatures call_raw assumes for these names.
         unsafe {
             assert_eq!(
                 call_raw(sleep as *const () as usize, "Sleep", &[0]),
@@ -1630,6 +1666,7 @@ mod tests {
         ];
         for (function, addr, arity, ret, narrow) in cases {
             let args: Vec<usize> = (0..arity).map(wide).collect();
+            // SAFETY: `addr` is a local stub with the signature call_raw assumes for `function`.
             let got = unsafe { call_raw(addr, function, &args) };
             assert_eq!(got, Some(ret), "{function} return");
             let expected: Vec<u64> = args
@@ -1647,6 +1684,7 @@ mod tests {
             // 引数の数が合わなければ呼ばない。
             let short: Vec<usize> = args[..arity - 1].to_vec();
             assert_eq!(
+                // SAFETY: call_raw rejects the wrong arity before calling.
                 unsafe { call_raw(addr, function, &short) },
                 None,
                 "{function} short"

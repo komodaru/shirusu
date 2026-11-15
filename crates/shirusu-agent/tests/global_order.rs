@@ -41,6 +41,7 @@ fn enter(a: &Agent, thread_id: u64, call_id: u64) {
 
 fn drain_orders(a: &Agent, thread_id: u64, allow: bool) -> Vec<u64> {
     let base = a.thread_region(thread_id).expect("region base");
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut reader = unsafe { RingReader::new(base.clone(), RingConfig::new(64, 4096)) }
         .unwrap()
         .with_global_order(allow);
@@ -132,6 +133,7 @@ fn reader_rejects_stamped_descriptors_when_disabled() {
     let a = agent(true);
     enter(&a, 1, 1);
     let base = a.thread_region(1).expect("region base");
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut reader = unsafe { RingReader::new(base.clone(), RingConfig::new(64, 4096)) }.unwrap();
     let batch = reader.drain_all();
     assert!(batch.integrity_error.is_some());

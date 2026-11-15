@@ -173,6 +173,7 @@ fn produce(steps: &[Step]) -> Produced {
     let cfg = RingConfig::new(8, 128);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut writer: RingWriter = unsafe {
         region.writer(
             WriterPolicy {
@@ -182,6 +183,7 @@ fn produce(steps: &[Step]) -> Produced {
             clock,
         )
     };
+    // SAFETY: the only reader of this fresh Ring (SPSC), starting at read position 0.
     let mut collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
     let mut chunks = Vec::new();
     let mut published = Vec::new();

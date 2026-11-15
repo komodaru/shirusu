@@ -921,6 +921,7 @@ mod tests {
         let cfg = RingConfig::new(16, 512);
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut ring = unsafe {
             region.writer(
                 WriterPolicy {
@@ -931,6 +932,7 @@ mod tests {
             )
         };
         let mut collector =
+            // SAFETY: the only reader of this fresh Ring (SPSC), starting at read position 0.
             unsafe { crate::CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
         let mut validator = DrainWorker::for_chunks(cfg, 1);
         validator.loss_events.extend(

@@ -30,7 +30,9 @@ fn setup(
     let cfg = RingConfig::new(desc, pay);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe { region.writer(policy, clock.clone() as Arc<dyn Clock>) };
+    // SAFETY: the only reader of this region (SPSC).
     let r = unsafe { region.reader() };
     (region, w, r, clock)
 }
@@ -230,7 +232,9 @@ fn cursors_near_u64_max_publish_and_drain() {
         .control()
         .store(Word::ReadCursor, u64::MAX - 2, Ordering::Relaxed);
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(no_wait(), clock) };
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     assert!(matches!(
         w.write(input(EventKind::CallEnter, 1, b"aa")),
@@ -263,7 +267,9 @@ fn payload_position_near_u64_max() {
         .control()
         .store(Word::PayloadReadPosition, u64::MAX - 3, Ordering::Relaxed);
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(no_wait(), clock) };
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let out = w.write(input(EventKind::CallEnter, 1, b"xyz"));
     assert!(matches!(out, WriteOutcome::Published { .. }));
@@ -594,6 +600,7 @@ impl Clock for DrainClock {
 fn drain_clock_setup(drain_on_sleep: u64) -> (SharedRegion, RingWriter, Arc<DrainClock>) {
     let cfg = RingConfig::new(2, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    // SAFETY: the only reader of this region (SPSC).
     let reader = unsafe { region.reader() };
     let clock = Arc::new(DrainClock {
         ticks: AtomicU64::new(0),
@@ -607,6 +614,7 @@ fn drain_clock_setup(drain_on_sleep: u64) -> (SharedRegion, RingWriter, Arc<Drai
         max_wait: Duration::from_nanos(100_000), // 50µs スライス 2 回分
         ..Default::default()
     };
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(policy, clock.clone() as Arc<dyn Clock>) };
     w.write(input(EventKind::CallEnter, 1, b"a"));
     w.write(input(EventKind::CallEnter, 2, b"b"));
@@ -740,6 +748,7 @@ fn publish_notify_signal_crossing_and_host_waiting() {
     let cfg = RingConfig::new(4, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(no_wait(), clock as Arc<dyn Clock>) };
     let notify_of = |o: WriteOutcome| match o {
         WriteOutcome::Published { notify, .. } => notify,
@@ -760,6 +769,7 @@ fn publish_notify_signal_crossing_and_host_waiting() {
         .control()
         .store(Word::HostWaiting, 1, Ordering::Relaxed);
     let clock2 = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w2 = unsafe { region2.writer(no_wait(), clock2 as Arc<dyn Clock>) };
     assert_eq!(
         notify_of(w2.write(input(EventKind::CallEnter, 1, b"a"))),
@@ -829,6 +839,7 @@ fn bounded_wait_timeout_wins_over_racing_drain() {
     });
     let mut policy = no_wait();
     policy.max_wait = Duration::from_nanos(1);
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(policy, clock as Arc<dyn Clock>) };
     w.write(input(EventKind::CallEnter, 1, b"a"));
     w.write(input(EventKind::CallEnter, 2, b"b"));
@@ -943,6 +954,7 @@ fn validating_reader_accepts_oversized_mapping() {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 7, 1).unwrap();
     let mut w2 =
+        // SAFETY: the only writer of this region (SPSC).
         unsafe { region.writer(no_wait(), Arc::new(ManualClock::new()) as Arc<dyn Clock>) };
     w2.write(input(EventKind::CallEnter, 1, b"m"));
     let known = KnownConfig::new(cfg, cfg.required_len() + 8192);
@@ -1731,6 +1743,7 @@ fn validating_reader_boundaries() {
     // 正常な像を 2 回読んでも 2 回目は空
     let region = SharedRegion::new(cfg, 7, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(no_wait(), clock) };
     w.write(input(EventKind::CallEnter, 1, b"one"));
     let mut vr = ValidatingReader::new(known, 7);

@@ -28,11 +28,13 @@ pub(crate) fn invoke<F: FnOnce(usize) -> R + Copy, S, R: Copy>(
     unsafe extern "C-unwind" fn call<F: FnOnce(usize) -> R + Copy, S, R: Copy>(
         context: *mut c_void,
     ) -> u64 {
+        // SAFETY: `context` is the Invocation that `invoke` below passes, alive and not otherwise borrowed during the call.
         let context = unsafe { &mut *context.cast::<Invocation<F, S, R>>() };
         context.result = Some((context.invoke)(context.original));
         0
     }
     unsafe extern "C" fn cleanup<F, S, R>(context: *mut c_void) {
+        // SAFETY: `context` is the same Invocation; the finally block runs after `call` returned or unwound.
         let context = unsafe { &mut *context.cast::<Invocation<F, S, R>>() };
         let last_error = crate::last_error::get();
         let _guard = crate::runtime::ReentrancyGuard::try_enter();
@@ -45,6 +47,7 @@ pub(crate) fn invoke<F: FnOnce(usize) -> R + Copy, S, R: Copy>(
         state: Some(state),
         result: None,
     };
+    // SAFETY: `call` and `cleanup` match the helper's ABI and receive `context`, which outlives the call.
     unsafe {
         shirusu_invoke_with_finally(
             call::<F, S, R>,
@@ -106,10 +109,13 @@ mod tests {
     #[test]
     fn structured_exception_cleans_state_once_and_reaches_native_caller() {
         unsafe extern "C-unwind" fn run(context: *mut c_void) -> u64 {
+            // SAFETY: the test passes a pointer to its live AtomicUsize.
             let drops = unsafe { &*context.cast::<AtomicUsize>() };
+            // SAFETY: `invoke` runs this inside an SEH frame whose caller catches the exception.
             invoke(0, |_| unsafe { shirusu_test_raise_seh() }, CountDrop(drops)).0
         }
         let mut drops = AtomicUsize::new(0);
+        // SAFETY: `run` matches the helper's callback ABI and `drops` outlives the call.
         let code = unsafe { shirusu_test_catch_seh(run, (&mut drops as *mut AtomicUsize).cast()) };
         assert_eq!(code, 0xe0424242);
         assert_eq!(drops.load(Ordering::SeqCst), 1);

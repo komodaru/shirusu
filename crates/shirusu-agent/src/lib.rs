@@ -1389,6 +1389,7 @@ mod tests {
         let tid = 1;
         a.thread_begin(tid).unwrap();
         let base = a.thread_region(tid).unwrap();
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         let state = a.state_for(tid).unwrap();
         let payload = [7u8; 24];
@@ -1432,6 +1433,7 @@ mod tests {
             black_box(state.writer.with(|w| w.is_detached()));
         });
         time("agent_part_publish_guard", &mut |_| {
+            // SAFETY: depth_cell points at this thread's thread-local counter, which lives as long as the thread.
             let depth = unsafe { &*PublishGuard::depth_cell() };
             black_box(depth.get() > 0);
             let _g = black_box(PublishSection::enter(depth));
@@ -1444,6 +1446,7 @@ mod tests {
         // The same captured write on a plain heap region, outside the Agent:
         // separates the Agent's own cost from the Ring writer's.
         let plain = SharedRegion::new(cfg, 1, 9).unwrap();
+        // SAFETY: the only writer of this region (SPSC).
         let mut plain_writer = unsafe {
             plain.writer_with_timestamps(
                 WriterPolicy::default(),
@@ -1451,6 +1454,7 @@ mod tests {
                 Arc::new(shirusu_transport_win::QpcTimestampSource::new()),
             )
         };
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut plain_reader = unsafe { RingReader::new(plain.shm().clone(), cfg) }.unwrap();
         {
             let mut samples = Vec::new();
@@ -1548,6 +1552,7 @@ mod tests {
             RecordResult::Written(_)
         ));
         let base = a.thread_region(1).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe {
             shirusu_transport::ring::RingReader::new(base.clone(), RingConfig::new(16, 512))
         }
@@ -1576,6 +1581,7 @@ mod tests {
             RecordResult::Written(_)
         ));
         let base = a.thread_region(1).expect("region");
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe {
             shirusu_transport::ring::RingReader::new(base.clone(), RingConfig::new(16, 512))
         }
@@ -1791,6 +1797,7 @@ mod tests {
         // The first thread exits; once the Host drained its Ring, reclaiming
         // the Slot builds the waiting thread's Ring on this (management) path.
         assert!(a.thread_exit(7));
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         assert_eq!(reader.drain_all().events.len(), 1);
         assert_eq!(a.poll_reclaims(), 1);
@@ -1846,6 +1853,7 @@ mod tests {
         assert!(a.reap_terminated_threads().is_empty(), "reaped once");
         // Not reusable before the Host drained what was published.
         assert_eq!(a.poll_reclaims(), 0);
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         let batch = reader.drain_all();
         assert_eq!(batch.events.len(), 1, "only published events are read");
@@ -1884,6 +1892,7 @@ mod tests {
             assert_eq!(a.pending_reclaim_count(), 1);
             // Host 側が drain する (実 Host では DrainWorker が共有
             // 読み位置を進める。ここでは RingReader で同じことをする)
+            // SAFETY: the only reader of this Ring (SPSC).
             let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
             let batch = reader.drain_all();
             assert_eq!(batch.events.len(), 1);
@@ -2023,6 +2032,7 @@ mod tests {
         }
         let _ = a.record_enter(tid, 7, 8, 4, 44, b"args");
         let base = a.thread_region(tid).unwrap();
+        // SAFETY: the only reader of this Ring (SPSC).
         let events = unsafe { RingReader::new(base.clone(), cfg) }
             .unwrap()
             .drain_all()
@@ -2051,6 +2061,7 @@ mod tests {
         }
         let base = a.thread_region(tid).unwrap();
         assert_eq!(
+            // SAFETY: the only reader of this Ring (SPSC).
             unsafe { RingReader::new(base.clone(), cfg) }
                 .unwrap()
                 .drain_all()

@@ -71,11 +71,13 @@ fn create_file_success_error_follows_creation_disposition() {
     let rt = Arc::new(test_runtime());
     rt.set_original(API_CREATE_FILE_W, original as *const () as usize);
     assert!(set_runtime(rt.clone()).is_ok());
+    // SAFETY: GetCurrentThreadId has no preconditions.
     let tid = unsafe { GetCurrentThreadId() } as u64;
     rt.ensure_thread(tid);
     let path = [b'x' as u16, 0];
     for disposition in 1..=5 {
         assert_eq!(
+            // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
             unsafe {
                 detour_create_file_w(
                     path.as_ptr(),
@@ -94,6 +96,7 @@ fn create_file_success_error_follows_creation_disposition() {
     // SAFETY: this test owns the Agent and exclusively uses the local Ring.
     let base = rt.agent().thread_region(tid).unwrap();
     let mut reader =
+        // SAFETY: the only reader of this Ring (SPSC).
         unsafe { shirusu_transport::ring::RingReader::new(base, rt.agent().thread_config()) }
             .unwrap();
     let batch = reader.drain_all();
@@ -139,11 +142,13 @@ fn create_file_a_success_error_follows_creation_disposition() {
         original as *const () as usize,
     );
     assert!(set_runtime(rt.clone()).is_ok());
+    // SAFETY: GetCurrentThreadId has no preconditions.
     let tid = unsafe { GetCurrentThreadId() } as u64;
     rt.ensure_thread(tid);
     let mut path = [b'x', 0];
     for disposition in 1..=5 {
         assert_eq!(
+            // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
             unsafe {
                 detour_generated_kernel32_create_file_a(
                     path.as_mut_ptr().cast(),
@@ -162,6 +167,7 @@ fn create_file_a_success_error_follows_creation_disposition() {
     // SAFETY: this test owns the Agent and exclusively uses the local Ring.
     let base = rt.agent().thread_region(tid).unwrap();
     let mut reader =
+        // SAFETY: the only reader of this Ring (SPSC).
         unsafe { shirusu_transport::ring::RingReader::new(base, rt.agent().thread_config()) }
             .unwrap();
     let batch = reader.drain_all();
@@ -217,17 +223,20 @@ fn measure_generic_detour() {
     let api = crate::api::api_by_import("kernel32.dll", "HeapAlloc").unwrap();
     rt.set_original(api.api_id, original as *const () as usize);
     assert!(set_runtime(rt.clone()).is_ok());
+    // SAFETY: GetCurrentThreadId has no preconditions.
     let tid = unsafe { GetCurrentThreadId() } as u64;
     rt.ensure_thread(tid);
     // SAFETY: Agent owns the local Ring through all samples; this is its
     // only producer and consumer. No hook patches are installed.
     let base = agent.thread_region(tid).unwrap();
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut reader = unsafe { RingReader::new(base, config) }.unwrap();
     let direct: unsafe extern "system-unwind" fn(*mut c_void, u32, usize) -> *mut c_void =
         black_box(original);
     let detour: unsafe extern "system-unwind" fn(*mut c_void, u32, usize) -> *mut c_void =
         black_box(detour_generated_kernel32_heap_alloc);
     for _ in 0..512 {
+        // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
         unsafe {
             black_box(detour(std::ptr::null_mut(), 0, 64));
         }
@@ -239,6 +248,7 @@ fn measure_generic_detour() {
     for _ in 0..ROUNDS {
         let started = Instant::now();
         for _ in 0..CALLS {
+            // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
             unsafe {
                 black_box(direct(std::ptr::null_mut(), 0, black_box(64)));
             }
@@ -253,7 +263,9 @@ fn measure_generic_detour() {
                         *mut c_void,
                         u32,
                         usize,
+                        // SAFETY: `address` is the Detour, which has exactly this signature.
                     ) -> *mut c_void = unsafe { std::mem::transmute(address) };
+                    // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
                     unsafe { call(std::ptr::null_mut(), 0, 64) }
                 },
                 (),
@@ -262,6 +274,7 @@ fn measure_generic_detour() {
         boundary.push(started.elapsed().as_nanos() as f64 / CALLS as f64);
         let started = Instant::now();
         for _ in 0..CALLS {
+            // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
             unsafe {
                 black_box(detour(std::ptr::null_mut(), 0, black_box(64)));
             }
@@ -343,6 +356,7 @@ fn exit_thread_releases_detour_ownership_without_unwinding() {
     };
     let _lock = TEST_RUNTIME_LOCK.lock().unwrap();
     unsafe extern "system" fn worker(_: *mut c_void) -> u32 {
+        // SAFETY: inside a dedicated thread: the Detour forwards to ExitThread, which ends only this thread.
         unsafe { detour_generated_kernel32_exit_thread(37) };
         99 // A real ExitThread never reaches this point.
     }
@@ -353,6 +367,7 @@ fn exit_thread_releases_detour_ownership_without_unwinding() {
     rt.set_original(api.api_id, ExitThread as *const () as usize);
     assert!(set_runtime(Arc::clone(&rt)).is_ok());
     let references = Arc::strong_count(&rt);
+    // SAFETY: `worker` matches LPTHREAD_START_ROUTINE and takes no parameter.
     let thread = unsafe {
         CreateThread(
             std::ptr::null(),
@@ -364,9 +379,12 @@ fn exit_thread_releases_detour_ownership_without_unwinding() {
         )
     };
     assert!(!thread.is_null());
+    // SAFETY: `thread` was created above and is open.
     assert_eq!(unsafe { WaitForSingleObject(thread, 10_000) }, 0);
     let mut code = 0;
+    // SAFETY: `thread` is open and `code` is a writable local.
     assert_ne!(unsafe { GetExitCodeThread(thread, &mut code) }, 0);
+    // SAFETY: `thread` was created above and is closed once.
     assert_ne!(unsafe { CloseHandle(thread) }, 0);
     assert_eq!(code, 37);
     assert_eq!(rt.in_flight(), 0);
@@ -386,6 +404,7 @@ fn seh_releases_detour_state_and_clears_parent_stack() {
         ) -> u32;
     }
     unsafe extern "C-unwind" fn invoke(_: *mut c_void) -> u64 {
+        // SAFETY: the stub original raises an SEH exception that the caller's catch frame handles.
         generic_detour_with(72, &[0, 4, u64::MAX], |_| unsafe {
             shirusu_test_raise_seh()
         })
@@ -395,6 +414,7 @@ fn seh_releases_detour_state_and_clears_parent_stack() {
     assert!(set_runtime(Arc::clone(&rt)).is_ok());
     let references = Arc::strong_count(&rt);
     assert_eq!(
+        // SAFETY: the helper calls `invoke` inside an SEH frame that catches the raised exception.
         unsafe { shirusu_test_catch_seh(invoke, std::ptr::null_mut()) },
         0xe0424242
     );
@@ -422,9 +442,11 @@ fn read_file_seh_cancels_provisional_overlapped_and_releases_state() {
         _: *mut u32,
         _: *mut c_void,
     ) -> i32 {
+        // SAFETY: the stub raises an SEH exception that the caller's catch frame handles.
         unsafe { shirusu_test_raise_seh() as i32 }
     }
     unsafe extern "C-unwind" fn invoke(_: *mut c_void) -> u64 {
+        // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
         unsafe {
             detour_read_file(
                 std::ptr::null_mut(),
@@ -440,6 +462,7 @@ fn read_file_seh_cancels_provisional_overlapped_and_releases_state() {
     assert!(set_runtime(Arc::clone(&rt)).is_ok());
     let references = Arc::strong_count(&rt);
     assert_eq!(
+        // SAFETY: the helper calls `invoke` inside an SEH frame that catches the raised exception.
         unsafe { shirusu_test_catch_seh(invoke, std::ptr::null_mut()) },
         0xe0424242
     );
@@ -472,6 +495,7 @@ fn set_window_long_preserves_non_procedure_values() {
         0
     }
     unsafe extern "system-unwind" fn setter(hwnd: *mut c_void, _: i32, _: usize) -> usize {
+        // SAFETY: SetLastError has no preconditions.
         unsafe {
             SetLastError(0x8000_0002);
         }
@@ -492,9 +516,11 @@ fn set_window_long_preserves_non_procedure_values() {
         }
         for (field, expected) in [(-21, wrapper), (0, wrapper), (-4, procedure)] {
             assert_eq!(
+                // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
                 unsafe { detour_set_window_long_ptr_w(wrapper as *mut c_void, field, 0) },
                 expected
             );
+            // SAFETY: GetLastError has no preconditions.
             assert_eq!(unsafe { GetLastError() }, 0x8000_0002);
         }
     }
@@ -511,7 +537,9 @@ fn activation_factory_preserves_iid_and_output_in_recording_and_passthrough() {
         out: *mut *mut c_void,
     ) -> i32 {
         assert_eq!(class_id, 0);
+        // SAFETY: the Detour passes the caller's valid IID pointer.
         assert_eq!(unsafe { *iid }, IID);
+        // SAFETY: the Detour passes the caller's writable `out` pointer.
         unsafe {
             *out = 0x1234usize as *mut c_void;
             SetLastError(0x8000_0001);
@@ -530,7 +558,9 @@ fn activation_factory_preserves_iid_and_output_in_recording_and_passthrough() {
             rt.shutdown_recording();
         }
         let mut output = std::ptr::null_mut();
+        // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
         assert_eq!(unsafe { detour(0, &IID, &mut output) }, 0);
+        // SAFETY: GetLastError has no preconditions.
         assert_eq!(unsafe { GetLastError() }, 0x8000_0001);
         assert_eq!(output as usize, 0x1234);
     }
@@ -557,6 +587,7 @@ fn completion_can_arrive_inside_original_read_file() {
             .expect("submission must already be registered before entering the OS");
         completed.call_id += 1000;
         rt.register_pending_overlapped(overlapped as u64, completed);
+        // SAFETY: SetLastError has no preconditions.
         unsafe {
             SetLastError(capture::ERROR_IO_PENDING);
         }
@@ -568,6 +599,7 @@ fn completion_can_arrive_inside_original_read_file() {
     let mut overlapped = [0usize; 8];
     let address = overlapped.as_mut_ptr() as *mut c_void;
     assert_eq!(
+        // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
         unsafe {
             detour_read_file(
                 1usize as Handle,
@@ -596,12 +628,14 @@ fn suspended_thread_context_has_native_alignment_and_valid_ip() {
     let worker_stop = Arc::clone(&stop);
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
+        // SAFETY: GetCurrentThreadId has no preconditions.
         tx.send(unsafe { GetCurrentThreadId() }).unwrap();
         while !worker_stop.load(Ordering::Acquire) {
             std::hint::spin_loop();
         }
     });
     let tid = rx.recv().unwrap();
+    // SAFETY: OpenThread takes only values; failure returns null, checked below.
     let handle = unsafe {
         OpenThread(
             THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
@@ -612,10 +646,13 @@ fn suspended_thread_context_has_native_alignment_and_valid_ip() {
     if handle.is_null() {
         stop.store(true, Ordering::Release);
         worker.join().unwrap();
+        // SAFETY: GetLastError has no preconditions.
         panic!("OpenThread failed: {}", unsafe { GetLastError() });
     }
+    // SAFETY: `handle` is an open thread handle with THREAD_SUSPEND_RESUME.
     let suspended = unsafe { SuspendThread(handle) };
     if suspended == u32::MAX {
+        // SAFETY: `handle` was opened above and is closed once on this path.
         unsafe {
             CloseHandle(handle);
         }
@@ -656,8 +693,10 @@ fn ntstatus_and_native_arguments_survive_record_and_passthrough() {
     rt.set_original(API_NT_CLOSE, close as *const () as usize);
     assert!(set_runtime(Arc::clone(&rt)).is_ok());
     let detour: unsafe extern "system-unwind" fn(Handle) -> i32 = detour_nt_close;
+    // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
     assert_eq!(unsafe { detour((usize::MAX - 1) as Handle) }, -0x1234567);
     rt.shutdown_recording();
+    // SAFETY: the Detour has the API's signature; its original is a test stub or the real API, and the arguments are valid for it.
     assert_eq!(unsafe { detour((usize::MAX - 1) as Handle) }, -0x1234567);
     assert!(clear_runtime(&rt));
 }
@@ -687,12 +726,15 @@ fn shared_com_methods_continue_without_vtable_mutation() {
     let reader = std::thread::spawn(move || {
         for _ in 0..10000 {
             let method: unsafe extern "system-unwind" fn(usize) -> u32 =
+                // SAFETY: `other` is a live fixture object whose vtable slot 1 has this signature.
                 unsafe { std::mem::transmute(*(*other as *const usize).add(1)) };
+            // SAFETY: the method receives its own live object.
             assert_eq!(unsafe { method(Arc::as_ptr(&other) as usize) }, 123);
         }
     });
     for _ in 0..1000 {
         assert_eq!(
+            // SAFETY: `ptr` points to a live fixture object whose first word is its vtable.
             unsafe { intercept_object(&rt, ptr, IID_IUNKNOWN) },
             ComInterceptOutcome::MethodInterceptionSkipped("vtable-not-image-data")
         );
@@ -740,13 +782,16 @@ fn installing_process_pseudo_handle_hook_does_not_recurse() {
     rt.set_original(api.api_id, original); // The state after IAT installation.
     rt.shutdown_recording();
     assert!(set_runtime(Arc::clone(&rt)).is_ok());
+    // SAFETY: `original` is the start of a loaded API function with at least 16 readable bytes.
     let before = unsafe { std::slice::from_raw_parts(original as *const u8, 16) }.to_vec();
+    // SAFETY: the API belongs to a loaded module and this test holds TEST_RUNTIME_LOCK, so it owns hook installation.
     let result = unsafe { install_inline_hooks_for(&rt, std::iter::once(api)) };
     if result.installed.is_empty() {
         // Some Windows builds implement this export in fewer bytes than
         // a jump. Refusing it must preserve both code and the IAT original.
         assert_eq!(result.skipped, vec![(api.api_id, "too-short")]);
         assert_eq!(
+            // SAFETY: `original` is the start of a loaded API function with at least 16 readable bytes.
             unsafe { std::slice::from_raw_parts(original as *const u8, 16) },
             before
         );
@@ -755,9 +800,12 @@ fn installing_process_pseudo_handle_hook_does_not_recurse() {
         assert_eq!(result.installed.len(), 1);
         assert!(result.skipped.is_empty());
     }
+    // SAFETY: GetCurrentProcess has no preconditions (pseudo handle).
     assert_eq!(unsafe { GetCurrentProcess() } as usize, usize::MAX);
+    // SAFETY: these hooks were installed by this test, which still owns installation.
     assert!(unsafe { uninstall_inline_hooks(result.installed) }.is_empty());
     assert!(clear_runtime(&rt));
+    // SAFETY: GetCurrentProcess has no preconditions (pseudo handle).
     assert_eq!(unsafe { GetCurrentProcess() } as usize, usize::MAX);
 }
 
@@ -875,8 +923,10 @@ fn unpublished_trampolines_release_memory_and_budget() {
         let prepared = prepare_inline(&planned, bitness).unwrap();
         let address = prepared.descriptor.trampoline;
         drop(prepared);
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         assert_ne!(
+            // SAFETY: VirtualQuery only reads page metadata into a buffer of the size passed.
             unsafe {
                 VirtualQuery(
                     address as *const c_void,
@@ -897,18 +947,21 @@ fn unpublished_trampolines_release_memory_and_budget() {
     }
     // A hook installed after planning must not be overwritten or leave a
     // stale trampoline published as this session's original.
+    // SAFETY: `target` is the test's own committed, writable page.
     unsafe {
         (target as *mut u8).write(0xcc);
     }
     let rt = test_runtime();
     let result = install_planned(&rt, &[planned], bitness).pop().unwrap();
     assert!(matches!(result, Err("target-changed")));
+    // SAFETY: `target` is the test's own committed page.
     assert_eq!(unsafe { (target as *const u8).read() }, 0xcc);
     assert_eq!(rt.original(17), 0);
     assert_eq!(
         TRAMPOLINE_ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+    // SAFETY: `target` was allocated by this test and nothing uses it any more.
     unsafe { VirtualFree(target as *mut c_void, 0, MEM_RELEASE) };
 }
 
@@ -934,8 +987,10 @@ fn retired_trampolines_are_reused_and_never_writable() {
         ..
     } = prepare_inline(&planned, bitness).unwrap();
     let protection = |address: usize| {
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         assert_ne!(
+            // SAFETY: VirtualQuery only reads page metadata into a buffer of the size passed.
             unsafe {
                 VirtualQuery(
                     address as *const c_void,
@@ -971,15 +1026,18 @@ fn retired_trampolines_are_reused_and_never_writable() {
             target,
             address: hook.trampoline
         }));
+    // SAFETY: `target` was allocated by this test and nothing uses it any more.
     unsafe { VirtualFree(target as *mut c_void, 0, MEM_RELEASE) };
 }
 
 #[test]
 fn iat_write_rejects_unaligned_slots_without_touching_memory() {
     let mut storage = [0x55usize; 2];
+    // SAFETY: the offset stays inside `storage` (2 words); the pointer is only checked for alignment, never dereferenced.
     let slot = unsafe { storage.as_mut_ptr().cast::<u8>().add(1).cast::<usize>() };
     let state = IatSlot::installed(0, 0x55, 0x1234);
     assert!(matches!(
+        // SAFETY: exchange_iat rejects the unaligned slot before any access.
         unsafe { exchange_iat(slot, &state, true) },
         Err(EngineError::UnalignedIatSlot)
     ));
@@ -990,6 +1048,7 @@ fn iat_write_rejects_unaligned_slots_without_touching_memory() {
 fn iat_protection_failure_retains_recovery_and_preserves_foreign_pointer() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use windows_sys::Win32::System::Memory::{VirtualQuery, PAGE_READONLY};
+    // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
     let page = unsafe {
         VirtualAlloc(
             std::ptr::null(),
@@ -1000,17 +1059,20 @@ fn iat_protection_failure_retains_recovery_and_preserves_foreign_pointer() {
     };
     assert!(!page.is_null());
     let slot = page.cast::<usize>();
+    // SAFETY: `slot` points into the test's own committed page, which stays allocated until the end of the test.
     unsafe {
         slot.write(0x1111);
     }
     let mut old = 0;
     assert_ne!(
+        // SAFETY: the page was allocated above and `old` is a writable local.
         unsafe { VirtualProtect(page, 4096, PAGE_READONLY, &mut old) },
         0
     );
     let state = IatSlot::installed(0, 0x1111, 0x2222);
     state.owned.store(false, Ordering::Release);
     let mut calls = 0;
+    // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
     let result = unsafe {
         exchange_iat_with(slot, &state, true, |address, size, protection, old| {
             calls += 1;
@@ -1022,12 +1084,16 @@ fn iat_protection_failure_retains_recovery_and_preserves_foreign_pointer() {
         })
     };
     assert!(matches!(result, Err(EngineError::ProtectFailed { .. })));
+    // SAFETY: `slot` points into the test's own committed page, which stays allocated until the end of the test.
     assert_eq!(unsafe { slot.read() }, 0x2222);
     assert!(state.owned.load(Ordering::Acquire));
     assert_eq!(state.protection.load(Ordering::Acquire), PAGE_READONLY);
     // A foreign owner replaces our pointer while restoration is pending.
+    // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
     unsafe { AtomicUsize::from_ptr(slot) }.store(0x3333, Ordering::Release);
+    // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
     assert!(unsafe { exchange_iat(slot, &state, false) }.is_ok());
+    // SAFETY: `slot` points into the test's own committed page, which stays allocated until the end of the test.
     assert_eq!(unsafe { slot.read() }, 0x3333);
     assert!(!state.owned.load(Ordering::Acquire));
     assert_eq!(state.protection.load(Ordering::Acquire), 0);
@@ -1035,17 +1101,21 @@ fn iat_protection_failure_retains_recovery_and_preserves_foreign_pointer() {
         windows_sys::Win32::System::Memory::MEMORY_BASIC_INFORMATION,
     >::uninit();
     assert_ne!(
+        // SAFETY: VirtualQuery only reads page metadata into a buffer of the size passed.
         unsafe { VirtualQuery(page, info.as_mut_ptr(), std::mem::size_of_val(&info)) },
         0
     );
+    // SAFETY: `info` was filled by the successful VirtualQuery above.
     assert_eq!(unsafe { info.assume_init() }.Protect, PAGE_READONLY);
 
     // A different installation restores its pointer but fails to restore
     // protection. The retry must not write that pointer for a second time.
     let state = IatSlot::installed(0, 0x3333, 0x4444);
     state.owned.store(false, Ordering::Release);
+    // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
     assert!(unsafe { exchange_iat(slot, &state, true) }.is_ok());
     let mut calls = 0;
+    // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
     assert!(unsafe {
         exchange_iat_with(slot, &state, false, |address, size, protection, old| {
             calls += 1;
@@ -1057,17 +1127,23 @@ fn iat_protection_failure_retains_recovery_and_preserves_foreign_pointer() {
         })
     }
     .is_err());
+    // SAFETY: `slot` points into the test's own committed page, which stays allocated until the end of the test.
     assert_eq!(unsafe { slot.read() }, 0x3333);
     assert!(!state.owned.load(Ordering::Acquire));
+    // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
     unsafe { AtomicUsize::from_ptr(slot) }.store(0x5555, Ordering::Release);
+    // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
     assert!(unsafe { exchange_iat(slot, &state, false) }.is_ok());
+    // SAFETY: `slot` points into the test's own committed page, which stays allocated until the end of the test.
     assert_eq!(unsafe { slot.read() }, 0x5555);
     let conflict = IatSlot::installed(0, 0x3333, 0x6666);
     conflict.owned.store(false, Ordering::Release);
     assert!(matches!(
+        // SAFETY: `slot` is an aligned usize in the test's own page; nothing else uses it.
         unsafe { exchange_iat(slot, &conflict, true) },
         Err(EngineError::IatChanged)
     ));
+    // SAFETY: `slot` points into the test's own committed page, which stays allocated until the end of the test.
     assert_eq!(unsafe { slot.read() }, 0x5555);
     assert!(!conflict.owned.load(Ordering::Acquire));
     assert_eq!(conflict.protection.load(Ordering::Acquire), 0);
@@ -1075,10 +1151,13 @@ fn iat_protection_failure_retains_recovery_and_preserves_foreign_pointer() {
         windows_sys::Win32::System::Memory::MEMORY_BASIC_INFORMATION,
     >::uninit();
     assert_ne!(
+        // SAFETY: VirtualQuery only reads page metadata into a buffer of the size passed.
         unsafe { VirtualQuery(page, info.as_mut_ptr(), std::mem::size_of_val(&info)) },
         0
     );
+    // SAFETY: `info` was filled by the successful VirtualQuery above.
     assert_eq!(unsafe { info.assume_init() }.Protect, PAGE_READONLY);
+    // SAFETY: the page was allocated by this test and nothing uses it any more.
     assert_ne!(unsafe { VirtualFree(page, 0, MEM_RELEASE) }, 0);
 }
 
@@ -1088,6 +1167,7 @@ fn inline_post_write_failures_retain_protection_and_cache_retry_state() {
     use windows_sys::Win32::System::Memory::{
         VirtualQuery, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ,
     };
+    // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
     let page = unsafe {
         VirtualAlloc(
             std::ptr::null(),
@@ -1097,11 +1177,13 @@ fn inline_post_write_failures_retain_protection_and_cache_retry_state() {
         )
     };
     assert!(!page.is_null());
+    // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
     unsafe {
         std::ptr::write_bytes(page, 0x90, 4096);
     }
     let mut old = 0;
     assert_ne!(
+        // SAFETY: `page` was allocated above and `old` is a writable local.
         unsafe { VirtualProtect(page, 4096, PAGE_EXECUTE_READ, &mut old) },
         0
     );
@@ -1119,21 +1201,24 @@ fn inline_post_write_failures_retain_protection_and_cache_retry_state() {
     };
     let published = std::cell::Cell::new(false);
     let mut calls = 0;
-    assert!(patch_target_with_ops(
-        hook.target,
-        &[0xcc; 5],
-        &hook.restoration,
-        || published.set(true),
-        |address, size, protection, old| {
-            calls += 1;
-            if calls == 2 {
-                0
-            } else {
-                unsafe { VirtualProtect(address, size, protection, old) }
-            }
-        },
-        |_, _| 0
-    )
+    // SAFETY: the test owns this target and no other thread runs it.
+    assert!(unsafe {
+        patch_target_with_ops(
+            hook.target,
+            &[0xcc; 5],
+            &hook.restoration,
+            || published.set(true),
+            |address, size, protection, old| {
+                calls += 1;
+                if calls == 2 {
+                    0
+                } else {
+                    VirtualProtect(address, size, protection, old)
+                }
+            },
+            |_, _| 0,
+        )
+    }
     .is_ok());
     assert!(published.get());
     assert!(hook.maintenance_pending());
@@ -1143,10 +1228,12 @@ fn inline_post_write_failures_retain_protection_and_cache_retry_state() {
     );
     assert!(hook.restoration.cache_pending.load(Ordering::Acquire));
     assert_eq!(
+        // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
         unsafe { std::slice::from_raw_parts(page.cast::<u8>(), 5) },
         &[0xcc; 5]
     );
     // Bytes beyond the actual patch may have a different owner.
+    // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
     unsafe {
         page.cast::<u8>().add(7).write(0x77);
     }
@@ -1158,6 +1245,7 @@ fn inline_post_write_failures_retain_protection_and_cache_retry_state() {
             if calls == 2 {
                 0
             } else {
+                // SAFETY: `old` is the caller's writable local.
                 unsafe { VirtualProtect(address, size, protection, old) }
             }
         },
@@ -1166,28 +1254,36 @@ fn inline_post_write_failures_retain_protection_and_cache_retry_state() {
     .is_err());
     assert!(hook.restoration.code_released.load(Ordering::Acquire));
     assert_eq!(
+        // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
         unsafe { std::slice::from_raw_parts(page.cast::<u8>(), 5) },
         &[0x90; 5]
     );
+    // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
     assert_eq!(unsafe { page.cast::<u8>().add(7).read() }, 0x77);
     // Retry protection/cache only; never write restored bytes again.
+    // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
     unsafe {
         page.cast::<u8>().write(0xab);
     }
     assert!(restore_inline(&hook).is_ok());
     assert!(!hook.maintenance_pending());
+    // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
     assert_eq!(unsafe { page.cast::<u8>().read() }, 0xab);
     let mut info = std::mem::MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
     assert_ne!(
+        // SAFETY: VirtualQuery only reads page metadata into a buffer of the size passed.
         unsafe { VirtualQuery(page, info.as_mut_ptr(), std::mem::size_of_val(&info)) },
         0
     );
+    // SAFETY: `info` was filled by the successful VirtualQuery above.
     assert_eq!(unsafe { info.assume_init() }.Protect, PAGE_EXECUTE_READ);
+    // SAFETY: the page was allocated by this test and nothing uses it any more.
     assert_ne!(unsafe { VirtualFree(page, 0, MEM_RELEASE) }, 0);
 }
 
 #[test]
 fn inline_restore_preserves_a_foreign_patch_without_changing_protection() {
+    // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
     let page = unsafe {
         VirtualAlloc(
             std::ptr::null(),
@@ -1197,6 +1293,7 @@ fn inline_restore_preserves_a_foreign_patch_without_changing_protection() {
         )
     };
     assert!(!page.is_null());
+    // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
     unsafe {
         std::ptr::write_bytes(page, 0xdd, 4096);
     }
@@ -1219,6 +1316,7 @@ fn inline_restore_preserves_a_foreign_patch_without_changing_protection() {
     )
     .is_ok());
     assert_eq!(
+        // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
         unsafe { std::slice::from_raw_parts(page.cast::<u8>(), 5) },
         &[0xdd; 5]
     );
@@ -1226,12 +1324,14 @@ fn inline_restore_preserves_a_foreign_patch_without_changing_protection() {
         .restoration
         .code_released
         .load(std::sync::atomic::Ordering::Acquire));
+    // SAFETY: the page was allocated by this test and nothing uses it any more.
     assert_ne!(unsafe { VirtualFree(page, 0, MEM_RELEASE) }, 0);
 }
 
 #[test]
 fn inline_patch_refuses_different_page_protections_before_publication() {
     use windows_sys::Win32::System::Memory::PAGE_EXECUTE_READ;
+    // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
     let page = unsafe {
         VirtualAlloc(
             std::ptr::null(),
@@ -1241,35 +1341,42 @@ fn inline_patch_refuses_different_page_protections_before_publication() {
         )
     };
     assert!(!page.is_null());
+    // SAFETY: `page` is this test's own committed 8192-byte allocation.
     unsafe {
         std::ptr::write_bytes(page, 0x90, 8192);
     }
     let mut old = 0;
     assert_ne!(
+        // SAFETY: `page` was allocated above and `old` is a writable local.
         unsafe { VirtualProtect(page, 4096, PAGE_EXECUTE_READ, &mut old) },
         0
     );
     let target = page as usize + 4094;
     let published = std::cell::Cell::new(false);
     let mut protect_calls = 0;
-    assert!(patch_target_with_ops(
-        target,
-        &[0xcc; 4],
-        &InlineRestoration::default(),
-        || published.set(true),
-        |_, _, _, _| {
-            protect_calls += 1;
-            0
-        },
-        |_, _| 0
-    )
+    // SAFETY: the test owns this target and no other thread runs it.
+    assert!(unsafe {
+        patch_target_with_ops(
+            target,
+            &[0xcc; 4],
+            &InlineRestoration::default(),
+            || published.set(true),
+            |_, _, _, _| {
+                protect_calls += 1;
+                0
+            },
+            |_, _| 0,
+        )
+    }
     .is_err());
     assert!(!published.get());
     assert_eq!(protect_calls, 0);
     assert_eq!(
+        // SAFETY: `target` lies 2 bytes before the end of the first page, so 4 bytes stay inside the 8192-byte allocation.
         unsafe { std::slice::from_raw_parts(target as *const u8, 4) },
         &[0x90; 4]
     );
+    // SAFETY: the page was allocated by this test and nothing uses it any more.
     assert_ne!(unsafe { VirtualFree(page, 0, MEM_RELEASE) }, 0);
 }
 
@@ -1278,8 +1385,12 @@ fn failed_page_protection_does_not_publish_a_trampoline() {
     let _lock = TEST_RUNTIME_LOCK.lock().unwrap();
     let published = std::cell::Cell::new(false);
     assert!(
-        patch_target_with(0, &[0x90], &InlineRestoration::default(), || published
-            .set(true))
+        // SAFETY: address 0 is never mapped, so VirtualProtect fails before any write.
+        unsafe {
+            patch_target_with(0, &[0x90], &InlineRestoration::default(), || {
+                published.set(true)
+            })
+        }
         .is_err()
     );
     assert!(!published.get());
@@ -1317,6 +1428,7 @@ fn trampoline_survives_uninstall_for_late_passthrough() {
     // trampoline held outside its code while shutdown restores the target.
     for _ in 0..2 {
         let target = alloc_filled_page(0x90);
+        // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
         let trampoline = unsafe {
             VirtualAlloc(
                 std::ptr::null(),
@@ -1327,6 +1439,7 @@ fn trampoline_survives_uninstall_for_late_passthrough() {
         };
         assert!(!trampoline.is_null());
         let code = [0xB8u8, 42, 0, 0, 0, 0xC3];
+        // SAFETY: `trampoline` is this test's own committed page and `code` fits in it.
         unsafe {
             std::ptr::copy_nonoverlapping(code.as_ptr(), trampoline as *mut u8, code.len());
         }
@@ -1348,12 +1461,15 @@ fn trampoline_survives_uninstall_for_late_passthrough() {
         let caller = std::thread::spawn(move || {
             ready_tx.send(()).unwrap();
             go_rx.recv().unwrap();
+            // SAFETY: `address` is the hooked test page, whose trampoline is executable code returning 42.
             unsafe { call_original::<0>(address, &[]) }
         });
         ready_rx.recv().unwrap();
+        // SAFETY: this test owns installation; the hook targets its own page.
         assert!(unsafe { uninstall_inline_hooks(vec![hook]) }.is_empty());
         go_tx.send(()).unwrap();
         assert_eq!(caller.join().unwrap() as u32, 42);
+        // SAFETY: both pages were allocated here and the caller thread has joined.
         unsafe {
             VirtualFree(target, 0, MEM_RELEASE);
         }
@@ -1397,6 +1513,7 @@ fn uninstall_refuses_to_rewrite_a_stopped_instruction_pointer() {
     let code = [
         0x8b, 0x4c, 0x24, 4, 0xc6, 0x41, 1, 1, 0x80, 0x39, 0, 0x74, 0xfb, 0xc2, 4, 0,
     ];
+    // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
     let page = unsafe {
         VirtualAlloc(
             std::ptr::null(),
@@ -1406,6 +1523,7 @@ fn uninstall_refuses_to_rewrite_a_stopped_instruction_pointer() {
         )
     };
     assert!(!page.is_null());
+    // SAFETY: `page` is this test's own committed page and `code` fits in it.
     unsafe {
         std::ptr::copy_nonoverlapping(code.as_ptr(), page as *mut u8, code.len());
         FlushInstructionCache(GetCurrentProcess(), page, code.len());
@@ -1415,7 +1533,9 @@ fn uninstall_refuses_to_rewrite_a_stopped_instruction_pointer() {
     let worker_flags = Arc::clone(&flags);
     let worker = std::thread::spawn(move || {
         let run: unsafe extern "system" fn(*const AtomicU8) =
+            // SAFETY: `address` is the test page holding `code`, a stdcall function taking one pointer.
             unsafe { std::mem::transmute(address) };
+        // SAFETY: the flags array outlives the worker (joined below) and is the pointer the code expects.
         unsafe { run(worker_flags.as_ptr()) };
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1436,19 +1556,23 @@ fn uninstall_refuses_to_rewrite_a_stopped_instruction_pointer() {
         caller_boundary: false,
     };
     let mut pending = InlineHooks::Installed(vec![hook]);
+    // SAFETY: this test owns hook installation; the hook targets its own page.
     let unrestored = unsafe { pending.restore() };
     assert!(matches!(&pending, InlineHooks::RestorePending(p) if p.len() == 1));
     flags[0].store(1, Ordering::Release);
     worker.join().unwrap();
     assert!(entered, "worker did not enter its native loop");
     assert_eq!(unrestored, 1);
+    // SAFETY: this test owns hook installation; the hook targets its own page.
     assert_eq!(unsafe { pending.restore() }, 0);
     assert!(pending.is_empty());
     assert!(
+        // SAFETY: `page` is this test's own committed page (4096 bytes or more), alive until it is freed at the end.
         unsafe { std::slice::from_raw_parts(page.cast::<u8>(), code.len()) }
             .iter()
             .all(|&byte| byte == 0x90)
     );
+    // SAFETY: the page was allocated by this test and nothing uses it any more.
     unsafe { VirtualFree(page, 0, MEM_RELEASE) };
 }
 
@@ -1488,6 +1612,7 @@ fn near_relay_preserves_short_function_tail_and_detects_repeat_install() {
     let detour = replacement as *const () as usize;
     let mut target = 0;
     for hint in [0x1_0000_0000usize, 0x2_0000_0000, 0x3_0000_0000] {
+        // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
         let page = unsafe {
             VirtualAlloc(
                 hint as *const c_void,
@@ -1503,10 +1628,12 @@ fn near_relay_preserves_short_function_tail_and_detects_repeat_install() {
             target = page as usize;
             break;
         }
+        // SAFETY: the page was allocated just above and is not used.
         unsafe { VirtualFree(page, 0, MEM_RELEASE) };
     }
     assert_ne!(target, 0, "no distant test page available");
     let code = [0xb8u8, 42, 0, 0, 0, 0xc3, 0xcc];
+    // SAFETY: `target` is this test's own committed page and `code` fits in it.
     unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), target as *mut u8, code.len()) };
     let plan = plan_with_near_relay(&code, target as u64, detour as u64, 64).unwrap();
     assert_eq!(plan.patch_len, 5);
@@ -1519,17 +1646,26 @@ fn near_relay_preserves_short_function_tail_and_detects_repeat_install() {
     };
     let rt = test_runtime();
     let hook = install_planned(&rt, &[planned], 64).pop().unwrap().unwrap();
+    // SAFETY: `target` holds `code`, a function with this signature.
     let call: unsafe extern "system" fn() -> u32 = unsafe { std::mem::transmute(target) };
     let original: unsafe extern "system" fn() -> u32 =
+        // SAFETY: the trampoline is executable code ending in a jump back to the original tail.
         unsafe { std::mem::transmute(hook.trampoline) };
+    // SAFETY: `call` is the hooked test function.
     assert_eq!(unsafe { call() }, 7);
+    // SAFETY: `original` is the trampoline.
     assert_eq!(unsafe { original() }, 42);
+    // SAFETY: `target` is this test's own committed page.
     let patched = unsafe { std::slice::from_raw_parts(target as *const u8, code.len()) };
     assert_eq!(&patched[5..], &[0xc3, 0xcc]);
     assert!(is_existing_detour(target, detour, 64, patched));
+    // SAFETY: this test owns installation; the hook targets its own page.
     assert!(unsafe { uninstall_inline_hooks(vec![hook]) }.is_empty());
+    // SAFETY: `call` is the restored test function.
     assert_eq!(unsafe { call() }, 42);
+    // SAFETY: `original` is the trampoline, which stays alive.
     assert_eq!(unsafe { original() }, 42);
+    // SAFETY: the page was allocated by this test and nothing uses it any more.
     unsafe { VirtualFree(target as *mut c_void, 0, MEM_RELEASE) };
 }
 

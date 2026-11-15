@@ -41,9 +41,14 @@ rust-version = "1.87"
 # shirusu_loom は shirusu-loom-tests の build.rs だけが立てる (本体の file を
 # #[path] で読み込んだとき、std 前提の単体テストを外す)。
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(shirusu_loom)"] }
+# Review: every unsafe operation is spelled out and justified.
+unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
-all = "warn"
+not_unsafe_ptr_arg_deref = "deny"
+missing_safety_doc = "deny"
+undocumented_unsafe_blocks = "deny"
+all = { level = "warn", priority = -1 }
 
 # cargo-mutants 用（`cargo mutants --profile mutants`）。debug assertion と
 # overflow 検査は残し、総当たり系の重いテストが数十秒かからないよう最適化する。

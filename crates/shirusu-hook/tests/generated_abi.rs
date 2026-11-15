@@ -82,6 +82,7 @@ unsafe extern "system-unwind" fn set_error(value: u32) {
 #[test]
 fn last_error_apis_are_generated_with_void_and_dword_signatures() {
     for code in [0, 5, 0x8000_0001, u32::MAX] {
+        // SAFETY: the Detour has the API's signature and the test passes arguments its stub original accepts.
         unsafe {
             detour_generated_kernel32_set_last_error(code);
             assert_eq!(detour_generated_kernel32_get_last_error(), code);
@@ -108,6 +109,7 @@ fn cdecl_wrappers_keep_caller_stack_cleanup_and_return_width() {
     let close: unsafe extern "C-unwind" fn(*mut c_void) -> u32 =
         detour_generated_wldap32_ldap_unbind;
     for _ in 0..1024 {
+        // SAFETY: the Detour has the API's signature and the test passes arguments its stub original accepts.
         unsafe {
             let handle = init(0x1234usize as *mut c_void, u32::MAX);
             assert_eq!(open(0x1234usize as *mut c_void, u32::MAX), handle);
@@ -124,6 +126,7 @@ fn void_integer_and_pointer_returns_preserve_abi() {
         detour_generated_kernel32_get_current_process;
     let event: unsafe extern "system-unwind" fn(*mut c_void) -> i32 =
         detour_generated_kernel32_set_event;
+    // SAFETY: the Detour has the API's signature and the test passes arguments its stub original accepts.
     unsafe {
         assert_eq!(event(usize::MAX as *mut c_void), -123);
         sleep(0xABCD_1234);
@@ -135,6 +138,7 @@ fn void_integer_and_pointer_returns_preserve_abi() {
 
 #[test]
 fn generated_wrapper_allows_unwinding_to_original_caller() {
+    // SAFETY: the stub original panics, which unwinds through the system-unwind ABI into catch_unwind.
     let result = std::panic::catch_unwind(|| unsafe { detour_generated_kernel32_sleep(u32::MAX) });
     assert!(result.is_err());
 }
@@ -181,6 +185,7 @@ unsafe extern "system-unwind" fn depth_range(near: f64, far: f64) {
 }
 #[test]
 fn generated_abi_preserves_wide_narrow_and_floating_values() {
+    // SAFETY: the Detour has the API's signature and the test passes arguments its stub original accepts.
     unsafe {
         assert_eq!(
             detour_generated_kernel32_get_tick_count64(),
@@ -247,11 +252,13 @@ fn captured_floating_values_roundtrip_without_nan_canonicalization() {
 // ---- IAT-only broad tier: the shared non-generic detour body ----
 unsafe extern "system-unwind" fn var_bool_from_date(date: f64, out: *mut c_void) -> i32 {
     assert_eq!(date.to_bits(), (-0.0f64).to_bits());
+    // SAFETY: the Detour passes the caller's `out`, which points to a writable i16.
     unsafe { *out.cast::<i16>() = -1 };
     0x0123_4567
 }
 unsafe extern "system-unwind" fn var_bool_from_r4(value: f32, out: *mut c_void) -> i32 {
     assert_eq!(value.to_bits(), 0x7fc0_4321, "NaN payload must survive");
+    // SAFETY: the Detour passes the caller's `out`, which points to a writable i16.
     unsafe { *out.cast::<i16>() = 0 };
     -1
 }
@@ -273,6 +280,7 @@ fn broad_tier_wrappers_preserve_wide_floating_and_narrow_values() {
     let api = shirusu_hook::api::api_by_name("VarBoolFromR4").unwrap();
     assert!(shirusu_hook::api::is_iat_only_api(api.api_id));
     let mut out: i16 = 7;
+    // SAFETY: the Detour has the API's signature and the test passes arguments its stub original accepts.
     unsafe {
         let r = detour_generated_oleaut32_var_bool_from_date(-0.0, (&mut out as *mut i16).cast());
         assert_eq!((r, out), (0x0123_4567, -1));

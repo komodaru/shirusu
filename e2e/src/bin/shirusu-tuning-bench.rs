@@ -84,6 +84,7 @@ fn run_capacity_throughput(desc: usize, payload: usize, attempts: u64) -> CapThr
     let d2 = done.clone();
     let r2 = region.clone();
     let consumer = std::thread::spawn(move || {
+        // SAFETY: the only reader of this region (SPSC).
         let mut reader = unsafe { r2.reader() };
         let mut drained = 0u64;
         while !d2.load(Ordering::Relaxed) {
@@ -96,6 +97,7 @@ fn run_capacity_throughput(desc: usize, payload: usize, attempts: u64) -> CapThr
     let r3 = region.clone();
     let start = Instant::now();
     let producer = std::thread::spawn(move || {
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { r3.writer(WriterPolicy::default(), system_clock() as Arc<dyn Clock>) };
         let mut published = 0u64;
         let mut degraded = 0u64;
@@ -142,6 +144,7 @@ fn run_capacity_slow_host(desc: usize, payload: usize, secs: u64) -> CapSlowHost
     let d2 = done.clone();
     let r2 = region.clone();
     let consumer = std::thread::spawn(move || {
+        // SAFETY: the only reader of this region (SPSC).
         let mut reader = unsafe { r2.reader() };
         let mut drained = 0u64;
         while !d2.load(Ordering::Relaxed) {
@@ -153,6 +156,7 @@ fn run_capacity_slow_host(desc: usize, payload: usize, secs: u64) -> CapSlowHost
     });
     let r3 = region.clone();
     let producer = std::thread::spawn(move || {
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { r3.writer(WriterPolicy::default(), system_clock() as Arc<dyn Clock>) };
         let start = Instant::now();
         let mut attempted = 0u64;
@@ -206,6 +210,7 @@ fn run_max_wait_resume(max_wait: Duration, rounds: usize) -> MaxWaitResume {
         let o2 = outcome.clone();
         let r2 = region.clone();
         let producer = std::thread::spawn(move || {
+            // SAFETY: the only writer of this region (SPSC).
             let mut w = unsafe {
                 r2.writer(
                     WriterPolicy {
@@ -233,6 +238,7 @@ fn run_max_wait_resume(max_wait: Duration, rounds: usize) -> MaxWaitResume {
                 std::thread::sleep(Duration::from_micros(200));
             }
             std::thread::sleep(Duration::from_micros(500));
+            // SAFETY: the only reader of this Ring (SPSC).
             let mut worker = unsafe { DrainWorker::new(r3.shm().clone(), cfg, 1) }.unwrap();
             let _ = worker.drain_all();
             *d2.lock().unwrap() = Some(Instant::now());
@@ -272,6 +278,7 @@ fn run_max_wait_stuck(max_wait: Duration, rounds: usize) -> MaxWaitStuck {
         let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
         let r2 = region.clone();
         let producer = std::thread::spawn(move || {
+            // SAFETY: the only writer of this region (SPSC).
             let mut w = unsafe {
                 r2.writer(
                     WriterPolicy {
@@ -294,6 +301,7 @@ fn run_max_wait_stuck(max_wait: Duration, rounds: usize) -> MaxWaitStuck {
         let r3 = region.clone();
         let host = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(30));
+            // SAFETY: the only reader of this Ring (SPSC).
             let mut worker = unsafe { DrainWorker::new(r3.shm().clone(), cfg, 1) }.unwrap();
             let _ = worker.drain_all();
         });
@@ -391,6 +399,7 @@ fn run_recheck_detect(interval: Duration, rounds: usize) -> RecheckResult {
 fn resume_after_batch_drain(pct: u64, drain_n: usize) -> bool {
     let cfg = RingConfig::new(16, 4096);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -401,6 +410,7 @@ fn resume_after_batch_drain(pct: u64, drain_n: usize) -> bool {
             Arc::new(ManualClock::new()) as Arc<dyn Clock>,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let mut reader = unsafe { region.reader() };
     let mut i = 0u64;
     loop {
@@ -436,6 +446,7 @@ fn run_resume_threshold(pct: u64) -> ResumeResult {
     // headroom: 復帰させてから回収なしで書き続け、再 OVERFLOW までの Published 数。
     let cfg = RingConfig::new(16, 4096);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -446,6 +457,7 @@ fn run_resume_threshold(pct: u64) -> ResumeResult {
             Arc::new(ManualClock::new()) as Arc<dyn Clock>,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let mut reader = unsafe { region.reader() };
     let mut i = 0u64;
     loop {
@@ -470,6 +482,7 @@ fn run_resume_threshold(pct: u64) -> ResumeResult {
     // 小刻み回収の確認: drain 1 件→書込 1 件を 32 回繰り返す。
     let cfg2 = RingConfig::new(16, 4096);
     let region2 = SharedRegion::new(cfg2, 1, 1).unwrap();
+    // SAFETY: the only writer of this region (SPSC).
     let mut w2 = unsafe {
         region2.writer(
             WriterPolicy {
@@ -480,6 +493,7 @@ fn run_resume_threshold(pct: u64) -> ResumeResult {
             Arc::new(ManualClock::new()) as Arc<dyn Clock>,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let mut reader2 = unsafe { region2.reader() };
     let mut j = 0u64;
     loop {

@@ -51,6 +51,7 @@ fn drain_pending_exits_slow() {
     let mut node = PENDING.swap(std::ptr::null_mut(), Ordering::Acquire);
     while !node.is_null() {
         // The atomic swap grants sole ownership of this detached list.
+        // SAFETY: every node came from Box::into_raw, and the swap made this list ours alone.
         let owned = unsafe { Box::from_raw(node) };
         node = owned.next;
         notify_exit(owned.thread_id);
@@ -79,6 +80,7 @@ unsafe extern "system" fn thread_callback(
             loop {
                 // This node was allocated when arming, and is exclusively ours
                 // until the successful release CAS publishes it to a consumer.
+                // SAFETY: `node` came from Box::into_raw and is ours until the CAS below publishes it.
                 unsafe {
                     (*node).next = head;
                 }

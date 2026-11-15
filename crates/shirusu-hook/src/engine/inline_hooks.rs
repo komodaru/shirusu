@@ -187,9 +187,12 @@ pub(super) struct SuspendedThreads {
 pub(super) struct AlignedContext(CONTEXT);
 
 pub(super) fn thread_instruction_pointer(handle: *mut c_void) -> Result<usize, u32> {
+    // SAFETY: a plain C struct; all-zero bytes are a valid value.
     let mut ctx = AlignedContext(unsafe { std::mem::zeroed() });
     ctx.0.ContextFlags = CONTEXT_CONTROL;
+    // SAFETY: the caller passes an open thread handle with THREAD_GET_CONTEXT, and `ctx` is a 16-byte aligned CONTEXT.
     if unsafe { GetThreadContext(handle, &mut ctx.0) } == 0 {
+        // SAFETY: GetLastError has no preconditions.
         return Err(unsafe { GetLastError() });
     }
     #[cfg(target_arch = "x86_64")]
@@ -231,7 +234,9 @@ impl SuspendedThreads {
     ) -> Result<Self, &'static str> {
         let snapshot_buffer = crate::thread_snapshot::ThreadSnapshot::new()
             .map_err(|_| "thread-snapshot-unavailable")?;
+        // SAFETY: GetCurrentThreadId has no preconditions.
         let current_tid = unsafe { GetCurrentThreadId() };
+        // SAFETY: GetCurrentProcessId has no preconditions.
         let current_pid = unsafe { GetCurrentProcessId() };
         // SAFETY: スレッド一覧のスナップショット。
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
@@ -242,8 +247,10 @@ impl SuspendedThreads {
         let mut thread_ids = Vec::new();
         let mut entry = THREADENTRY32 {
             dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            // SAFETY: a plain C struct; all-zero bytes are a valid value.
             ..unsafe { std::mem::zeroed() }
         };
+        // SAFETY: `snapshot` is an open thread snapshot and `entry` is initialised with its size.
         let mut more = unsafe { Thread32First(snapshot, &mut entry) } != 0;
         let mut failed = false;
         while more {
@@ -262,7 +269,9 @@ impl SuspendedThreads {
                     // in fact still running appears in the second snapshot
                     // below, which then refuses the set. Any other failure
                     // (access denied) stops the attempt.
+                    // SAFETY: GetLastError has no preconditions.
                     if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
+                        // SAFETY: `snapshot` is open and `entry` is initialised with its size.
                         more = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
                         continue;
                     }
@@ -272,19 +281,25 @@ impl SuspendedThreads {
                 // A terminated thread ID may have been reused since Toolhelp.
                 // Never suspend a handle belonging to a different process;
                 // our thread with that ID has exited, so skip it.
+                // SAFETY: `handle` was just opened by OpenThread and is still open.
                 if unsafe { GetProcessIdOfThread(handle) } != current_pid {
+                    // SAFETY: `handle` was opened above, is not kept, and is closed once.
                     unsafe { CloseHandle(handle) };
+                    // SAFETY: `snapshot` is open and `entry` is initialised with its size.
                     more = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
                     continue;
                 }
                 handles.push(handle);
                 thread_ids.push(entry.th32ThreadID);
             }
+            // SAFETY: `snapshot` is open and `entry` is initialised with its size.
             more = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
         }
+        // SAFETY: `snapshot` was opened above and is closed once.
         unsafe { CloseHandle(snapshot) };
         if failed {
             for h in handles {
+                // SAFETY: each handle was opened above and is closed once on this failure path.
                 unsafe { CloseHandle(h) };
             }
             return Err("thread-suspend-failed");
@@ -293,13 +308,16 @@ impl SuspendedThreads {
         #[cfg(test)]
         crate::heap_watch::begin();
         for (suspended, &handle) in handles.iter().enumerate() {
+            // SAFETY: each handle is an open thread handle of this process with THREAD_SUSPEND_RESUME.
             if unsafe { SuspendThread(handle) } == u32::MAX {
                 for &h in &handles[..suspended] {
+                    // SAFETY: these handles were suspended just above and are still open.
                     unsafe { ResumeThread(h) };
                 }
                 #[cfg(test)]
                 crate::heap_watch::end();
                 for &h in &handles {
+                    // SAFETY: each handle was opened above and is closed once on this failure path.
                     unsafe { CloseHandle(h) };
                 }
                 return Err("thread-suspend-failed");
@@ -359,11 +377,13 @@ impl SuspendedThreads {
     pub(super) fn resume(mut self) {
         let handles = std::mem::take(&mut self.handles);
         for &h in &handles {
+            // SAFETY: every handle in the set was suspended by suspend_all and is still open.
             unsafe { ResumeThread(h) };
         }
         #[cfg(test)]
         crate::heap_watch::end();
         for h in handles {
+            // SAFETY: the handles were opened by suspend_all and are closed once, here.
             unsafe { CloseHandle(h) };
         }
     }
@@ -373,11 +393,13 @@ impl Drop for SuspendedThreads {
     fn drop(&mut self) {
         let handles = std::mem::take(&mut self.handles);
         for &h in &handles {
+            // SAFETY: every handle in the set was suspended by suspend_all and is still open.
             unsafe { ResumeThread(h) };
         }
         #[cfg(test)]
         crate::heap_watch::end();
         for h in handles {
+            // SAFETY: the handles were opened by suspend_all and are closed once, here.
             unsafe { CloseHandle(h) };
         }
     }
@@ -408,6 +430,7 @@ pub(super) fn follow_import_thunks(mut address: usize) -> Option<usize> {
     };
     let module_at = |address: usize| {
         let mut module = std::ptr::null_mut();
+        // SAFETY: FROM_ADDRESS with UNCHANGED_REFCOUNT only looks up the module; `module` is a writable local.
         unsafe {
             GetModuleHandleExW(
                 GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
@@ -510,7 +533,9 @@ pub(super) fn alloc_near(target: usize, size: usize) -> Option<usize> {
 pub(super) fn restore_inline(hook: &InstalledInlineHook) -> Result<(), ()> {
     restore_inline_with_ops(
         hook,
+        // SAFETY: `old` is the caller's writable local.
         |address, size, protection, old| unsafe { VirtualProtect(address, size, protection, old) },
+        // SAFETY: flushing a range of our own process has no preconditions.
         |address, size| unsafe { FlushInstructionCache(GetCurrentProcess(), address, size) },
     )
 }
@@ -545,14 +570,19 @@ pub(super) fn restore_inline_with_ops(
                 Ok(())
             };
         }
-        patch_target_with_ops(
-            hook.target,
-            bytes,
-            &hook.restoration,
-            || {},
-            &mut protect,
-            &mut flush,
-        )?;
+        // SAFETY: an InstalledInlineHook names a target this module patched
+        // (its bytes were just verified), restoration is serialized with
+        // installation, and the caller suspended the other threads.
+        unsafe {
+            patch_target_with_ops(
+                hook.target,
+                bytes,
+                &hook.restoration,
+                || {},
+                &mut protect,
+                &mut flush,
+            )
+        }?;
         hook.restoration
             .code_released
             .store(true, Ordering::Release);
@@ -588,23 +618,33 @@ pub(super) fn finish_inline_write(
 
 /// Err means nothing was published. Post-write failures remain owned by state;
 /// callers must keep the descriptor even though the pointer is already live.
-pub(super) fn patch_target_with(
+///
+/// # Safety
+/// `target..target + patch.len()` is code of a loaded module that this caller
+/// exclusively patches (hook installation is serialized), and no thread
+/// executes those bytes during the write (they are suspended and outside it).
+pub(super) unsafe fn patch_target_with(
     target: usize,
     patch: &[u8],
     state: &InlineRestoration,
     before_write: impl FnOnce(),
 ) -> Result<(), ()> {
-    patch_target_with_ops(
-        target,
-        patch,
-        state,
-        before_write,
-        |address, size, protection, old| unsafe { VirtualProtect(address, size, protection, old) },
-        |address, size| unsafe { FlushInstructionCache(GetCurrentProcess(), address, size) },
-    )
+    // SAFETY: `old` is the caller's writable local.
+    let protect =
+        |address, size, protection, old| unsafe { VirtualProtect(address, size, protection, old) };
+    // SAFETY: flushing a range of our own process has no preconditions.
+    let flush =
+        |address, size| unsafe { FlushInstructionCache(GetCurrentProcess(), address, size) };
+    // SAFETY: forwarded from this function's contract.
+    unsafe { patch_target_with_ops(target, patch, state, before_write, protect, flush) }
 }
 
-pub(super) fn patch_target_with_ops(
+/// [`patch_target_with`] with injectable page-protection and cache-flush
+/// operations (tests make them fail).
+///
+/// # Safety
+/// Same as [`patch_target_with`].
+pub(super) unsafe fn patch_target_with_ops(
     target: usize,
     patch: &[u8],
     state: &InlineRestoration,
@@ -621,6 +661,7 @@ pub(super) fn patch_target_with_ops(
         return Err(());
     }
     let mut region = std::mem::MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
+    // SAFETY: VirtualQuery only reads page metadata; `region` has the size passed.
     if unsafe {
         VirtualQuery(
             target as *const c_void,
@@ -631,6 +672,7 @@ pub(super) fn patch_target_with_ops(
     {
         return Err(());
     }
+    // SAFETY: VirtualQuery succeeded, so it filled `region`.
     let region = unsafe { region.assume_init() };
     // VirtualProtect reports only the first page's protection. Refuse crossing
     // regions rather than flattening different original protections on restore.
@@ -656,6 +698,9 @@ pub(super) fn patch_target_with_ops(
         .protection
         .compare_exchange(0, old, Ordering::AcqRel, Ordering::Acquire);
     before_write();
+    // SAFETY: the range is committed, accessible and inside one region
+    // (checked above), now writable, and the caller's contract keeps other
+    // threads off it.
     unsafe {
         std::ptr::copy_nonoverlapping(patch.as_ptr(), target as *mut u8, patch.len());
     }
@@ -1011,13 +1056,19 @@ pub(super) fn install_planned(
                     *result = Err("target-changed");
                     continue;
                 }
-                if patch_target_with(p.target, patch, &hook.restoration, || {
-                    // VirtualProtect has succeeded, so the only remaining steps
-                    // publish the original and copy the patch. Once visible, retain
-                    // the trampoline even if a later operation cannot complete.
-                    allocation.published = true;
-                    p.slot.set_original(rt, hook.trampoline);
-                })
+                // SAFETY: a PlannedInline target was decoded inside a loaded
+                // module; every other thread is suspended and none is inside
+                // the range (checked above); the bytes are still the original
+                // ones, so no other owner patches them concurrently.
+                if unsafe {
+                    patch_target_with(p.target, patch, &hook.restoration, || {
+                        // VirtualProtect has succeeded, so the only remaining steps
+                        // publish the original and copy the patch. Once visible, retain
+                        // the trampoline even if a later operation cannot complete.
+                        allocation.published = true;
+                        p.slot.set_original(rt, hook.trampoline);
+                    })
+                }
                 .is_err()
                 {
                     *result = Err("protect-failed");
@@ -1187,6 +1238,7 @@ pub(super) unsafe fn uninstall_inline_indices(installed: &[InstalledInlineHook])
 pub unsafe fn uninstall_inline_hooks(
     mut installed: Vec<InstalledInlineHook>,
 ) -> Vec<RestorePendingInlineHook> {
+    // SAFETY: forwarded from this function's contract.
     let failed = unsafe { uninstall_inline_indices(&installed) };
     retain_failed_indices(&mut installed, &failed);
     installed

@@ -182,21 +182,31 @@ impl SharedRegion {
 }
 
 // Descriptor / Payload の生コピー（公開前領域への書込、確定領域からの読出）。
+//
+// # Safety (all four)
+// `base` points to a live mapping of at least `cfg.required_len()` bytes
+// laid out by `cfg`. Every offset below is `cfg`'s region offset plus an
+// index reduced modulo that region's capacity, so it stays inside.
 #[inline(always)]
 unsafe fn write_descriptor_at(base: *mut u8, cfg: RingConfig, cursor: u64, desc: &EventDescriptor) {
     let off = cfg.descriptors_offset()
         + (slot_index(cursor, cfg.descriptor_capacity_u64()) as usize) * 64;
-    std::ptr::copy_nonoverlapping(
-        desc as *const EventDescriptor as *const u8,
-        base.add(off),
-        64,
-    );
+    // SAFETY: the slot `off..off + 64` lies in the descriptor region (see
+    // above) and `desc` is a 64-byte value that does not alias the mapping.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            desc as *const EventDescriptor as *const u8,
+            base.add(off),
+            64,
+        );
+    }
 }
 unsafe fn read_descriptor_at(base: *const u8, cfg: RingConfig, cursor: u64) -> EventDescriptor {
     let off = cfg.descriptors_offset()
         + (slot_index(cursor, cfg.descriptor_capacity_u64()) as usize) * 64;
     let mut buf = [0u8; 64];
-    std::ptr::copy_nonoverlapping(base.add(off), buf.as_mut_ptr(), 64);
+    // SAFETY: the slot `off..off + 64` lies in the descriptor region.
+    unsafe { std::ptr::copy_nonoverlapping(base.add(off), buf.as_mut_ptr(), 64) };
     EventDescriptor::from_bytes(&buf).expect("64 bytes always decode")
 }
 /// 終端をまたぐ場合は末尾と先頭に分割してコピーする。
@@ -207,11 +217,19 @@ unsafe fn copy_payload_write(base: *mut u8, cfg: RingConfig, position: u64, data
     }
     let start = payload_index(position, cfg.payload_capacity_u64()) as usize;
     let first = core::cmp::min(data.len(), cfg.payload_capacity() - start);
-    let dst = base.add(cfg.payload_offset() + start);
-    std::ptr::copy_nonoverlapping(data.as_ptr(), dst, first);
+    // SAFETY: `start + first <= payload_capacity`, so the first part stays in
+    // the payload region; `data` is a caller buffer, not the mapping.
+    unsafe {
+        let dst = base.add(cfg.payload_offset() + start);
+        std::ptr::copy_nonoverlapping(data.as_ptr(), dst, first);
+    }
     if first < data.len() {
-        let dst2 = base.add(cfg.payload_offset());
-        std::ptr::copy_nonoverlapping(data.as_ptr().add(first), dst2, data.len() - first);
+        // SAFETY: the wrapped rest is shorter than the capacity (a record
+        // never exceeds it) and starts at the payload region's beginning.
+        unsafe {
+            let dst2 = base.add(cfg.payload_offset());
+            std::ptr::copy_nonoverlapping(data.as_ptr().add(first), dst2, data.len() - first);
+        }
     }
 }
 unsafe fn copy_payload_read(
@@ -226,17 +244,24 @@ unsafe fn copy_payload_read(
     }
     let start = payload_index(position, cfg.payload_capacity_u64()) as usize;
     let first = core::cmp::min(len, cfg.payload_capacity() - start);
-    std::ptr::copy_nonoverlapping(
-        base.add(cfg.payload_offset() + start),
-        out.as_mut_ptr(),
-        first,
-    );
-    if first < len {
+    // SAFETY: `start + first <= payload_capacity`; `out` holds `len` bytes.
+    unsafe {
         std::ptr::copy_nonoverlapping(
-            base.add(cfg.payload_offset()),
-            out.as_mut_ptr().add(first),
-            len - first,
+            base.add(cfg.payload_offset() + start),
+            out.as_mut_ptr(),
+            first,
         );
+    }
+    if first < len {
+        // SAFETY: the wrapped rest is shorter than the capacity (callers pass
+        // a validated record length) and `out` has room for it after `first`.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                base.add(cfg.payload_offset()),
+                out.as_mut_ptr().add(first),
+                len - first,
+            );
+        }
     }
     out
 }
@@ -500,6 +525,7 @@ impl RingWriter {
             .payload_write_position
             .saturating_sub(self.cached_payload_read_position);
         if let Some(p) = payload {
+            // SAFETY: `self.base` maps `self.cfg`, and this writer is the Ring's only writer, so the unpublished payload range is ours.
             unsafe { copy_payload_write(self.base, self.cfg, desc.payload_position, p) };
             self.payload_write_position = desc.payload_position + p.len() as u64;
             self.ctl().store(
@@ -508,6 +534,7 @@ impl RingWriter {
                 Ordering::Relaxed,
             );
         }
+        // SAFETY: `self.base` maps `self.cfg`; slot `wc` is not yet published, so no reader looks at it.
         unsafe { write_descriptor_at(self.base, self.cfg, wc, &desc) };
         // 単一公開点: この Release store より前の書込みは、Acquire で読む読み手から見える。
         self.ctl()
@@ -1097,6 +1124,7 @@ impl RingReader {
         let mut last_payload_end: Option<u64> = None;
         for i in 0..n {
             let cursor = rc + i;
+            // SAFETY: `self.base` maps `self.cfg`; cursor `rc + i` is below the Acquire-loaded write cursor, so the slot is published.
             let desc = unsafe { read_descriptor_at(self.base, self.cfg, cursor) };
             if let Err(e) = self.check_descriptor(&desc, payload_write_position) {
                 batch.integrity_error = Some(e.clone());
@@ -1112,6 +1140,7 @@ impl RingReader {
             let payload = if desc.payload_dropped() || desc.payload_len == 0 {
                 Vec::new()
             } else {
+                // SAFETY: `self.base` maps `self.cfg` and `check_descriptor` bounded the payload to the published range.
                 unsafe {
                     copy_payload_read(
                         self.base,
@@ -1218,7 +1247,9 @@ mod tests {
         let cfg = RingConfig::new(cap, pcap);
         let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let w = unsafe { region.writer(WriterPolicy::default(), clock) };
+        // SAFETY: the only reader of this region (SPSC).
         let r = unsafe { region.reader() };
         (region, w, r)
     }
@@ -1293,6 +1324,7 @@ mod tests {
     fn writer_with_manual_clock(cap: usize, pcap: usize) -> (SharedRegion, RingWriter) {
         let region = SharedRegion::new(RingConfig::new(cap, pcap), 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let w = unsafe { region.writer(WriterPolicy::default(), clock) };
         (region, w)
     }
@@ -1316,7 +1348,9 @@ mod tests {
     fn overflow_resumes_after_payload_drains() {
         let region = SharedRegion::new(RingConfig::new(64, 64), 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
+        // SAFETY: the only reader of this region (SPSC).
         let mut rd = unsafe { region.reader() };
         let payload = [0u8; 48];
         w.write(input(EventKind::CallEnter, 1, &payload));
@@ -1462,6 +1496,7 @@ mod tests {
         let cfg = RingConfig::new(2, 64);
         let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1487,6 +1522,7 @@ mod tests {
             let cfg = RingConfig::new(2, 64);
             let region = SharedRegion::new(cfg, 1, 100).unwrap();
             let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+            // SAFETY: the only writer of this region (SPSC).
             let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
             w.write(input(EventKind::CallEnter, 1, b"a"));
             w.write(input(EventKind::CallEnter, 2, b"b"));
@@ -1504,6 +1540,7 @@ mod tests {
         let cfg = RingConfig::new(2, 64);
         let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1523,6 +1560,7 @@ mod tests {
         assert!(!region.control().writer_waiting());
         // NotHeld に戻し、空きを作ってから再度満杯にすれば待つようになる
         w.set_loader_lock_state(LoaderLockState::NotHeld);
+        // SAFETY: the only reader of this region (SPSC).
         let mut rd = unsafe { region.reader() };
         let _ = rd.drain_all(); // 使用率 0% → 次の write で Normal に復帰
         w.write(input(EventKind::CallEnter, 4, b"d"));
@@ -1539,6 +1577,7 @@ mod tests {
         let cfg = RingConfig::new(2, 64);
         let region = SharedRegion::new(cfg, 1, 100).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(SystemClock::default());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {

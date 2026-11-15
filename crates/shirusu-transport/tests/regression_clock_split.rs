@@ -66,7 +66,9 @@ fn stamps_do_not_come_from_wait_clock() {
     let region = SharedRegion::new(cfg, 1, 100).unwrap();
     let clock = Arc::new(ManualClock::new());
     clock.set(777_000_000);
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(WriterPolicy::default(), clock as Arc<dyn Clock>) };
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     w.write(input(1, b"x"));
     w.write(input(2, b"y"));
@@ -85,6 +87,7 @@ fn writer_stamps_track_timestamp_source_not_clock_swaps() {
     let ts = Arc::new(ManualTimestampSource::new(424_242, 10_000_000));
     let clock = Arc::new(ManualClock::new());
     clock.set(111);
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer_with_timestamps(
             WriterPolicy::default(),
@@ -92,6 +95,7 @@ fn writer_stamps_track_timestamp_source_not_clock_swaps() {
             ts.clone() as Arc<dyn TimestampSource>,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     w.write(input(1, b"a"));
     // 待機用 Clock を差し替えても (R7 の EventClock 化に相当) 刻印は不変。

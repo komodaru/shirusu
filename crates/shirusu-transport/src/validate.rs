@@ -997,6 +997,7 @@ mod tests {
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: std::sync::Arc<dyn crate::clock::Clock> =
             std::sync::Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         for p in [b"one".as_slice(), b"two".as_slice(), b"three".as_slice()] {
             w.write(crate::ring::EventInput {
@@ -1038,6 +1039,7 @@ mod tests {
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: std::sync::Arc<dyn crate::clock::Clock> =
             std::sync::Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         w.write(crate::ring::EventInput {
             kind: EventKind::CallEnter,
@@ -1077,6 +1079,7 @@ mod tests {
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: std::sync::Arc<dyn crate::clock::Clock> =
             std::sync::Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         let write = |w: &mut crate::ring::RingWriter,
                      state: crate::descriptor::CaptureState,

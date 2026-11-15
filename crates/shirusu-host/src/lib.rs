@@ -1262,6 +1262,7 @@ mod tests {
         let cfg = RingConfig::new(16, 512);
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1271,6 +1272,7 @@ mod tests {
                 clock,
             )
         };
+        // SAFETY: the only reader of this Ring (SPSC).
         let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         (region, w, worker)
     }
@@ -1296,6 +1298,7 @@ mod tests {
     ) {
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1305,6 +1308,7 @@ mod tests {
                 clock,
             )
         };
+        // SAFETY: the only reader of this fresh Ring (SPSC), starting at read position 0.
         let collector = unsafe { CommittedRangeCollector::new(region.shm().clone(), cfg) }.unwrap();
         (region, w, collector, DrainWorker::for_chunks(cfg, 1))
     }
@@ -1523,6 +1527,7 @@ mod tests {
         let cfg = RingConfig::PRODUCTION;
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1532,6 +1537,7 @@ mod tests {
                 clock,
             )
         };
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         w.write(ev(EventKind::CallEnter, 1, b"hello"));
         let batch = host.drain_all();
@@ -1572,6 +1578,7 @@ mod tests {
         let cfg = RingConfig::new(16, 512);
         let region = SharedRegion::new(cfg, 3, 9).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1773,6 +1780,7 @@ mod tests {
         let cfg = RingConfig::new(4, 256);
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1782,6 +1790,7 @@ mod tests {
                 clock,
             )
         };
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         for i in 0..4u64 {
             w.write(ev(EventKind::CallEnter, i, b"x"));
@@ -1821,6 +1830,7 @@ mod tests {
         let cfg = RingConfig::new(8, 256);
         let region = SharedRegion::new(cfg, 3, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1903,6 +1913,7 @@ mod tests {
         let cfg = RingConfig::new(8, 256);
         let region = SharedRegion::new(cfg, 3, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -1939,6 +1950,7 @@ mod tests {
         w.write(ev(EventKind::CallEnter, 2, b"b"));
         assert_eq!(host.drain_all().events.len(), 2);
         let cfg = region.config();
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut host2 = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
         host2.resume_from_shared();
         assert!(!host2.integrity_lost);
@@ -2048,6 +2060,7 @@ mod tests {
         let cfg = RingConfig::new(8, 256);
         let region = SharedRegion::new(cfg, 3, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -2093,6 +2106,7 @@ mod tests {
         let cfg = RingConfig::new(16, 512);
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -2103,6 +2117,7 @@ mod tests {
             )
         };
         w.write(ev(EventKind::CallEnter, 1, b"gen1"));
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 2) }.unwrap();
         let batch = host.drain_all();
         assert!(batch.events.is_empty());
@@ -2142,6 +2157,7 @@ mod tests {
         assert_eq!(waited, Ok(()));
         // 遷移後に作った Worker は新世代のイベントを回収できる。
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -2152,6 +2168,7 @@ mod tests {
             )
         };
         w.write(ev(EventKind::CallEnter, 9, b"gen2"));
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut host = unsafe { DrainWorker::new(region.shm().clone(), cfg, 2) }.unwrap();
         let batch = host.drain_all();
         assert_eq!(batch.events.len(), 1);

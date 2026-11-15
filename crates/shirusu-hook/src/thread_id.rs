@@ -5,6 +5,7 @@
 #[inline(always)]
 pub fn current() -> u32 {
     #[cfg(target_arch = "x86_64")]
+    // SAFETY: TEB+0x48 is this thread's ClientId.UniqueThread on x64; the TEB is always mapped.
     unsafe {
         let value: u32;
         // NT_TIB (0x38), EnvironmentPointer (0x08), then CLIENT_ID:
@@ -14,6 +15,7 @@ pub fn current() -> u32 {
         value
     }
     #[cfg(target_arch = "x86")]
+    // SAFETY: TEB+0x24 is this thread's ClientId.UniqueThread on x86; the TEB is always mapped.
     unsafe {
         let value: u32;
         // 32-bit TEB, including WoW64: ClientId.UniqueThread is at 0x24.
@@ -34,6 +36,7 @@ mod tests {
 
     #[test]
     fn direct_id_matches_windows_across_live_threads_and_preserves_last_error() {
+        // SAFETY: GetCurrentThreadId has no preconditions.
         let parent = unsafe { GetCurrentThreadId() };
         assert_eq!(current(), parent);
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(9));
@@ -41,6 +44,7 @@ mod tests {
             .map(|_| {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
+                    // SAFETY: GetCurrentThreadId has no preconditions.
                     let expected = unsafe { GetCurrentThreadId() };
                     barrier.wait();
                     let saved = crate::last_error::get();

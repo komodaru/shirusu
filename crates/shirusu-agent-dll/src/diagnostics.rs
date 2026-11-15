@@ -51,6 +51,7 @@ fn prepare(dir: &std::path::Path) -> std::io::Result<()> {
         .truncate(true)
         .open(dir.join(format!("native-{pid}-exception.bin")))?;
     file.set_len(4096)?;
+    // SAFETY: `file` is open and 4096 bytes long; the section is unnamed with default security.
     let mapping = unsafe {
         CreateFileMappingW(
             file.as_raw_handle(),
@@ -64,14 +65,18 @@ fn prepare(dir: &std::path::Path) -> std::io::Result<()> {
     if mapping.is_null() {
         return Err(std::io::Error::last_os_error());
     }
+    // SAFETY: `mapping` was created above; failure returns a null view, checked below.
     let view = unsafe { MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 4096) };
+    // SAFETY: `mapping` was created above; the view keeps the section alive after this close.
     unsafe { CloseHandle(mapping) };
     if view.Value.is_null() {
         return Err(std::io::Error::last_os_error());
     }
     VIEW.store(view.Value.cast(), Ordering::Release);
+    // SAFETY: `exception` matches PVECTORED_EXCEPTION_HANDLER and this module is never unloaded while recording.
     if unsafe { AddVectoredExceptionHandler(1, Some(exception)) }.is_null() {
         VIEW.store(std::ptr::null_mut(), Ordering::Release);
+        // SAFETY: `view` was mapped above and no handler was installed to use it.
         unsafe { UnmapViewOfFile(view) };
         return Err(std::io::Error::last_os_error());
     }
@@ -83,10 +88,12 @@ unsafe extern "system" fn exception(pointers: *mut EXCEPTION_POINTERS) -> i32 {
     if pointers.is_null() {
         return CONTINUE_SEARCH;
     }
+    // SAFETY: the OS passes a valid EXCEPTION_POINTERS (non-null, checked above) for the handler's duration.
     let pointers = unsafe { &*pointers };
     if pointers.ExceptionRecord.is_null() || pointers.ContextRecord.is_null() {
         return CONTINUE_SEARCH;
     }
+    // SAFETY: the record pointer is non-null (checked above) and valid for the handler's duration.
     let record = unsafe { &*pointers.ExceptionRecord };
     if record.ExceptionCode as u32 != 0xc000_0005 {
         return CONTINUE_SEARCH;
@@ -95,6 +102,7 @@ unsafe extern "system" fn exception(pointers: *mut EXCEPTION_POINTERS) -> i32 {
     if view.is_null() || RECORDED.swap(true, Ordering::AcqRel) {
         return CONTINUE_SEARCH;
     }
+    // SAFETY: the context pointer is non-null (checked above) and valid for the handler's duration.
     let context = unsafe { &*pointers.ContextRecord };
     // Fixed little-endian u64 words, independent of target pointer width:
     // magic, pointer bits, exception code, address, IP, SP, access kind,
@@ -158,6 +166,7 @@ unsafe extern "system" fn exception(pointers: *mut EXCEPTION_POINTERS) -> i32 {
         },
     ];
     for (index, value) in header.into_iter().chain(registers).enumerate() {
+        // SAFETY: `view` maps 4096 bytes and the header plus registers stay far below 512 words.
         unsafe { std::ptr::write_volatile(view.add(index), value) };
     }
     CONTINUE_SEARCH
@@ -172,6 +181,7 @@ fn snapshot_exports(dir: &std::path::Path, pid: u32) -> std::io::Result<()> {
     let mut text = String::from("module\tfunction\taddress\tbytes\n");
     for module in ["kernel32.dll", "kernelbase.dll"] {
         let wide: Vec<u16> = module.encode_utf16().chain([0]).collect();
+        // SAFETY: the name is a NUL-terminated UTF-16 string that outlives the call.
         let handle = unsafe { GetModuleHandleW(wide.as_ptr()) };
         if handle.is_null() {
             continue;
@@ -184,12 +194,14 @@ fn snapshot_exports(dir: &std::path::Path, pid: u32) -> std::io::Result<()> {
             "HeapAlloc",
         ] {
             let cname = std::ffi::CString::new(name).unwrap();
+            // SAFETY: `handle` is a loaded module and `cname` is NUL-terminated.
             let Some(function) = (unsafe { GetProcAddress(handle, cname.as_ptr().cast()) }) else {
                 continue;
             };
             let address = function as *const () as usize;
             let mut bytes = [0u8; 32];
             let mut count = 0;
+            // SAFETY: reads our own process through the kernel, which rejects an unreadable range; `bytes` and `count` are writable locals.
             if unsafe {
                 ReadProcessMemory(
                     GetCurrentProcess(),

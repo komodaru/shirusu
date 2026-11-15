@@ -278,6 +278,7 @@ fn measure_ratio(
             let done = done.clone();
             let consumer_done = consumer_done.clone();
             std::thread::spawn(move || {
+                // SAFETY: the only reader of this Ring (SPSC).
                 let mut worker = unsafe { DrainWorker::new(worker_shm, cfg, 1) }.unwrap();
                 let mut recorder =
                     TraceRecorder::from_environment(Vec::new(), env(session)).expect("recorder");
@@ -404,6 +405,7 @@ fn measure_burst(spec: &WorkloadSpec, rounds: usize) -> (BufferUsage, u64, u64, 
         let base = agent.thread_region(1).expect("agent region");
         let worker_shm = base.clone();
         // Cursor だけを読む観測用 Reader。回収は DrainWorker が行う。
+        // SAFETY: the only reader of this Ring (SPSC).
         let observer = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
         let done = Arc::new(AtomicBool::new(false));
         let peak_desc = Arc::new(AtomicU64::new(0));
@@ -411,6 +413,7 @@ fn measure_burst(spec: &WorkloadSpec, rounds: usize) -> (BufferUsage, u64, u64, 
         let consumer = {
             let done = done.clone();
             std::thread::spawn(move || {
+                // SAFETY: the only reader of this Ring (SPSC).
                 let mut worker = unsafe { DrainWorker::new(worker_shm, cfg, 1) }.unwrap();
                 let mut total = 0u64;
                 loop {

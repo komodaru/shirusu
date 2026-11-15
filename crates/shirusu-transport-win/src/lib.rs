@@ -160,6 +160,7 @@ mod imp {
     pub(super) fn last_err(api: &'static str) -> WinError {
         WinError::OsError {
             api,
+            // SAFETY: GetLastError has no preconditions.
             code: unsafe { GetLastError() },
         }
     }
@@ -216,15 +217,18 @@ mod imp {
         use windows_sys::Win32::System::Threading::OpenProcessToken;
         // 1. プロセストークンからユーザー SID を取得する。
         let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: the pseudo handle needs no closing and `token` is a writable local.
         if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
             return Err(last_err("OpenProcessToken"));
         }
         let mut needed: u32 = 0;
+        // SAFETY: a null buffer of length 0 only asks for the size (written to `needed`).
         unsafe {
             // 必要サイズの問い合わせ（ERROR_INSUFFICIENT_BUFFER を期待する）。
             GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
         }
         let mut token_info = vec![0u8; needed as usize];
+        // SAFETY: `token_info` has room for the `needed` bytes reported above.
         let ok = unsafe {
             GetTokenInformation(
                 token,
@@ -236,31 +240,39 @@ mod imp {
         };
         if ok == 0 {
             let e = last_err("GetTokenInformation");
+            // SAFETY: `token` was opened above and is closed once on this path.
             unsafe { CloseHandle(token) };
             return Err(e);
         }
+        // SAFETY: `token` was opened above and is closed once on this path.
         unsafe { CloseHandle(token) };
+        // SAFETY: GetTokenInformation filled `token_info` with a TOKEN_USER (its SID points inside the buffer, which lives to the end of this function).
         let user = unsafe { &*(token_info.as_ptr() as *const TOKEN_USER) };
         let sid = user.User.Sid;
         // 2. ACL を構築する（ユーザー SID に GENERIC_ALL の ACE 1 本だけ）。
+        // SAFETY: `sid` points to a valid SID inside `token_info`.
         let sid_len = unsafe { GetLengthSid(sid) } as usize;
         let acl_len = std::mem::size_of::<ACL>() + std::mem::size_of::<ACCESS_ALLOWED_ACE>()
             - std::mem::size_of::<u32>()
             + sid_len;
         let mut acl = vec![0u8; acl_len];
         let acl_ptr = acl.as_mut_ptr() as *mut ACL;
+        // SAFETY: `acl` is a writable buffer of `acl_len` bytes.
         if unsafe { InitializeAcl(acl_ptr, acl_len as u32, ACL_REVISION) } == 0 {
             return Err(last_err("InitializeAcl"));
         }
+        // SAFETY: `acl_ptr` was initialised with room for one ACE of this SID length.
         if unsafe { AddAccessAllowedAce(acl_ptr, ACL_REVISION, GENERIC_ALL, sid) } == 0 {
             return Err(last_err("AddAccessAllowedAce"));
         }
         // 3. セキュリティ記述子に DACL を設定する。
         let mut sd = vec![0u8; std::mem::size_of::<SECURITY_DESCRIPTOR>()];
         let sd_ptr = sd.as_mut_ptr() as PSECURITY_DESCRIPTOR;
+        // SAFETY: `sd` is a writable buffer of SECURITY_DESCRIPTOR size.
         if unsafe { InitializeSecurityDescriptor(sd_ptr, SECURITY_DESCRIPTOR_REVISION) } == 0 {
             return Err(last_err("InitializeSecurityDescriptor"));
         }
+        // SAFETY: `sd_ptr` is initialised and `acl_ptr` outlives it (both are kept in the returned struct).
         if unsafe { SetSecurityDescriptorDacl(sd_ptr, 1, acl_ptr, 0) } == 0 {
             return Err(last_err("SetSecurityDescriptorDacl"));
         }
@@ -340,6 +352,7 @@ mod imp {
                 return Err(WinError::InvalidArgument("len"));
             }
             let (size_high, size_low) = split_mapping_size(len);
+            // SAFETY: an unnamed page-file-backed section with default security; failure returns null, checked below.
             let handle = unsafe {
                 CreateFileMappingW(
                     INVALID_HANDLE_VALUE,
@@ -366,6 +379,7 @@ mod imp {
             }
             let restricted = restricted_security_attributes()?;
             let (size_high, size_low) = split_mapping_size(len);
+            // SAFETY: an unnamed section; `restricted` keeps its descriptor and ACL alive for the call.
             let handle = unsafe {
                 CreateFileMappingW(
                     INVALID_HANDLE_VALUE,
@@ -393,11 +407,13 @@ mod imp {
         }
         /// 対象プロセスへ DuplicateHandle で渡す。
         pub fn duplicate_to_process(&self, target_pid: u32) -> Result<RemoteHandle> {
+            // SAFETY: OpenProcess takes only values; failure returns null, checked below.
             let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
             if target.is_null() {
                 return Err(last_err("OpenProcess"));
             }
             let mut dup: HANDLE = std::ptr::null_mut();
+            // SAFETY: `self.handle` and `target` are open handles and `dup` is a writable local.
             let ok = unsafe {
                 DuplicateHandle(
                     GetCurrentProcess(),
@@ -409,6 +425,7 @@ mod imp {
                     DUPLICATE_SAME_ACCESS,
                 )
             };
+            // SAFETY: `target` was opened above, is not used after this, and is closed once.
             unsafe { CloseHandle(target) };
             if ok == 0 {
                 return Err(last_err("DuplicateHandle"));
@@ -417,6 +434,7 @@ mod imp {
         }
         /// 継承可能なハンドルにする（CreateProcess で子へ渡す E2E 用）。
         pub fn make_inheritable(&self) -> Result<()> {
+            // SAFETY: `self.handle` is an open handle owned by this mapping.
             let ok = unsafe {
                 SetHandleInformation(
                     h(self.handle.borrow()),
@@ -449,6 +467,7 @@ mod imp {
     }
     impl EventObject {
         pub fn new(auto_reset: bool, initially_signaled: bool) -> Result<Self> {
+            // SAFETY: an anonymous event with default security; failure returns null, checked below.
             let handle = unsafe {
                 CreateEventW(
                     std::ptr::null(),
@@ -479,11 +498,13 @@ mod imp {
         /// 対象プロセスへ DuplicateHandle で渡す（Host→Agent の space_available
         /// 受け渡し。A68）。返した値は対象プロセス側のハンドル値。
         pub fn duplicate_to_process(&self, target_pid: u32) -> Result<RemoteHandle> {
+            // SAFETY: OpenProcess takes only values; failure returns null, checked below.
             let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
             if target.is_null() {
                 return Err(last_err("OpenProcess"));
             }
             let mut dup: HANDLE = std::ptr::null_mut();
+            // SAFETY: `self.handle` and `target` are open handles and `dup` is a writable local.
             let ok = unsafe {
                 DuplicateHandle(
                     GetCurrentProcess(),
@@ -495,6 +516,7 @@ mod imp {
                     DUPLICATE_SAME_ACCESS,
                 )
             };
+            // SAFETY: `target` was opened above, is not used after this, and is closed once.
             unsafe { CloseHandle(target) };
             if ok == 0 {
                 return Err(last_err("DuplicateHandle"));
@@ -502,6 +524,7 @@ mod imp {
             Ok(remote(dup))
         }
         pub fn make_inheritable(&self) -> Result<()> {
+            // SAFETY: `self.handle` is an open handle owned by this event.
             let ok = unsafe {
                 SetHandleInformation(
                     h(self.handle.borrow()),
@@ -515,6 +538,7 @@ mod imp {
             Ok(())
         }
         pub fn set(&self) -> Result<()> {
+            // SAFETY: `self.handle` is an open event handle owned by this value.
             if unsafe { SetEvent(h(self.handle.borrow())) } == 0 {
                 return Err(last_err("SetEvent"));
             }
@@ -534,6 +558,7 @@ mod imp {
                     return signaled;
                 }
             }
+            // SAFETY: `self.handle` is an open event handle owned by this value.
             unsafe { WaitForSingleObject(h(self.handle.borrow()), ms) == 0 }
         }
 
@@ -584,9 +609,12 @@ mod imp {
             CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
         };
         let mut cmd: Vec<u16> = cmdline.encode_utf16().chain([0]).collect();
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `cmd` is a mutable NUL-terminated buffer and `si`/`pi` are initialised locals.
         let ok = unsafe {
             CreateProcessW(
                 std::ptr::null(),
@@ -604,6 +632,7 @@ mod imp {
         if ok == 0 {
             return Err(last_err("CreateProcessW"));
         }
+        // SAFETY: `pi.hThread` was returned to us by CreateProcessW and is not used afterwards.
         unsafe {
             CloseHandle(pi.hThread);
         }
@@ -614,11 +643,13 @@ mod imp {
         use windows_sys::Win32::System::Threading::GetExitCodeProcess;
         let handle = h(process);
         let ms = super::wait_timeout_millis(timeout);
+        // SAFETY: the borrowed process handle is open for the call.
         let r = unsafe { WaitForSingleObject(handle, ms) };
         if r != 0 {
             return None;
         }
         let mut code: u32 = 0;
+        // SAFETY: the borrowed process handle is open and `code` is a writable local.
         unsafe {
             GetExitCodeProcess(handle, &mut code);
         }
@@ -633,9 +664,12 @@ mod imp {
             CreateProcessW, CREATE_SUSPENDED, PROCESS_INFORMATION, STARTUPINFOW,
         };
         let mut cmd: Vec<u16> = cmdline.encode_utf16().chain([0]).collect();
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `cmd` is a mutable NUL-terminated buffer and `si`/`pi` are initialised locals.
         let ok = unsafe {
             CreateProcessW(
                 std::ptr::null(),
@@ -663,6 +697,7 @@ mod imp {
     /// 停止中のメインスレッドを再開する。戻り値は直前のサスペンド数。
     pub fn resume_main_thread(thread: BorrowedHandle<'_>) -> Result<u32> {
         use windows_sys::Win32::System::Threading::ResumeThread;
+        // SAFETY: the borrowed thread handle is open for the call.
         let prev = unsafe { ResumeThread(h(thread)) };
         if prev == u32::MAX {
             return Err(last_err("ResumeThread"));
@@ -683,6 +718,7 @@ mod imp {
             | PROCESS_VM_WRITE
             | PROCESS_DUP_HANDLE
             | PROCESS_SYNCHRONIZE;
+        // SAFETY: OpenProcess takes only values; failure returns null, checked below.
         let handle = unsafe { OpenProcess(access, 0, pid) };
         if handle.is_null() {
             return Err(last_err("OpenProcess(inject)"));
@@ -693,6 +729,7 @@ mod imp {
     /// プロセスが終了済みかどうか（待たない確認）。
     pub fn process_exited(process: BorrowedHandle<'_>) -> Result<bool> {
         use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        // SAFETY: the borrowed process handle is open for the call.
         match unsafe { WaitForSingleObject(h(process), 0) } {
             WAIT_OBJECT_0 => Ok(true),
             WAIT_TIMEOUT => Ok(false),
@@ -709,6 +746,7 @@ mod imp {
             return Ok(None);
         }
         let mut code = 0;
+        // SAFETY: the borrowed process handle is open and `code` is a writable local.
         if unsafe { GetExitCodeProcess(h(process), &mut code) } == 0 {
             return Err(last_err("GetExitCodeProcess"));
         }
@@ -730,8 +768,10 @@ mod imp {
         use windows_sys::Win32::System::ProcessStatus::{
             GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
         };
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
         counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        // SAFETY: `handle` is the current process pseudo handle or a borrowed open one, and `counters` has the size passed.
         if unsafe { GetProcessMemoryInfo(handle, &mut counters, counters.cb) } == 0 {
             return Err(last_err("GetProcessMemoryInfo"));
         }
@@ -744,7 +784,9 @@ mod imp {
     pub fn process_creation_time(process: BorrowedHandle<'_>) -> Result<u64> {
         use windows_sys::Win32::Foundation::FILETIME;
         use windows_sys::Win32::System::Threading::GetProcessTimes;
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut times: [FILETIME; 4] = unsafe { std::mem::zeroed() };
+        // SAFETY: the borrowed process handle is open and each FILETIME is a writable local.
         if unsafe {
             GetProcessTimes(
                 h(process),
@@ -766,11 +808,13 @@ mod imp {
         handle: BorrowedHandle<'_>,
         target_pid: u32,
     ) -> Result<RemoteHandle> {
+        // SAFETY: OpenProcess takes only values; failure returns null, checked below.
         let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
         if target.is_null() {
             return Err(last_err("OpenProcess"));
         }
         let mut dup: HANDLE = std::ptr::null_mut();
+        // SAFETY: `handle` and `target` are open handles and `dup` is a writable local.
         let ok = unsafe {
             DuplicateHandle(
                 GetCurrentProcess(),
@@ -782,6 +826,7 @@ mod imp {
                 DUPLICATE_SAME_ACCESS,
             )
         };
+        // SAFETY: `target` was opened above, is not used after this, and is closed once.
         unsafe { CloseHandle(target) };
         if ok == 0 {
             return Err(last_err("DuplicateHandle"));
@@ -794,11 +839,13 @@ mod imp {
     /// receive VM write, thread creation or handle duplication rights.
     pub fn duplicate_self_synchronize_to_process(target_pid: u32) -> Result<RemoteHandle> {
         use windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
+        // SAFETY: OpenProcess takes only values; failure returns null, checked below.
         let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
         if target.is_null() {
             return Err(last_err("OpenProcess"));
         }
         let mut dup: HANDLE = std::ptr::null_mut();
+        // SAFETY: the current process pseudo handle and `target` are valid and `dup` is a writable local.
         let ok = unsafe {
             DuplicateHandle(
                 GetCurrentProcess(),
@@ -810,6 +857,7 @@ mod imp {
                 0,
             )
         };
+        // SAFETY: `target` was opened above, is not used after this, and is closed once.
         unsafe { CloseHandle(target) };
         if ok == 0 {
             return Err(last_err("DuplicateHandle(host liveness)"));
@@ -826,10 +874,12 @@ mod imp {
         if value.raw == 0 {
             return Ok(());
         }
+        // SAFETY: OpenProcess takes only values; failure returns null, checked below.
         let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
         if target.is_null() {
             return Err(last_err("OpenProcess"));
         }
+        // SAFETY: `target` is open; DUPLICATE_CLOSE_SOURCE closes `value` in that process and returns nothing here.
         let ok = unsafe {
             DuplicateHandle(
                 target,
@@ -841,6 +891,7 @@ mod imp {
                 DUPLICATE_CLOSE_SOURCE,
             )
         };
+        // SAFETY: `target` was opened above, is not used after this, and is closed once.
         unsafe { CloseHandle(target) };
         if ok == 0 {
             return Err(last_err("DuplicateHandle(close remote)"));
@@ -848,24 +899,27 @@ mod imp {
         Ok(())
     }
 
+    /// Copies `src` to address `dest` of the target process. The target
+    /// address is checked by the kernel (an invalid range is an error).
     pub fn write_process_memory(
         process: BorrowedHandle<'_>,
         dest: usize,
-        src: *const u8,
-        len: usize,
+        src: &[u8],
     ) -> Result<()> {
         use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
         let mut written: usize = 0;
+        // SAFETY: `src` is a live slice of `src.len()` bytes and `written` is a
+        // writable local; the remote range is validated by the kernel.
         let ok = unsafe {
             WriteProcessMemory(
                 h(process),
                 dest as *const c_void,
-                src as *const c_void,
-                len,
+                src.as_ptr() as *const c_void,
+                src.len(),
                 &mut written,
             )
         };
-        if ok == 0 || written != len {
+        if ok == 0 || written != src.len() {
             return Err(last_err("WriteProcessMemory"));
         }
         Ok(())
@@ -875,21 +929,22 @@ mod imp {
     pub fn read_process_memory(
         process: BorrowedHandle<'_>,
         src: usize,
-        dest: *mut u8,
-        len: usize,
+        dest: &mut [u8],
     ) -> Result<()> {
         use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
         let mut read: usize = 0;
+        // SAFETY: `dest` is a live, exclusively borrowed slice of `dest.len()`
+        // bytes; the remote range is validated by the kernel.
         let ok = unsafe {
             ReadProcessMemory(
                 h(process),
                 src as *const c_void,
-                dest as *mut c_void,
-                len,
+                dest.as_mut_ptr() as *mut c_void,
+                dest.len(),
                 &mut read,
             )
         };
-        if ok == 0 || read != len {
+        if ok == 0 || read != dest.len() {
             return Err(last_err("ReadProcessMemory"));
         }
         Ok(())
@@ -914,6 +969,7 @@ mod imp {
         // （呼び出し側が LoadLibrary 済みモジュールのベース + RVA で保証する）。
         let routine: LPTHREAD_START_ROUTINE =
             unsafe { std::mem::transmute(start as *const c_void) };
+        // SAFETY: `routine` is a function in the target process (caller's contract above) and the process handle is open.
         let thread = unsafe {
             CreateRemoteThread(
                 h(process),
@@ -928,15 +984,19 @@ mod imp {
         if thread.is_null() {
             return Err(last_err("CreateRemoteThread"));
         }
+        // SAFETY: `thread` was created above and is still open.
         let waited = unsafe { WaitForSingleObject(thread, super::wait_timeout_millis(timeout)) };
         if waited != 0 {
+            // SAFETY: `thread` was created above and is closed once on this path.
             unsafe { CloseHandle(thread) };
             return Err(WinError::RemoteCallPending {
                 wait_status: waited,
             });
         }
         let mut code: u32 = 0;
+        // SAFETY: `thread` is open and `code` is a writable local.
         let ok = unsafe { GetExitCodeThread(thread, &mut code) };
+        // SAFETY: `thread` was created above and is closed once on this path.
         unsafe { CloseHandle(thread) };
         if ok == 0 {
             return Err(last_err("GetExitCodeThread"));
@@ -964,6 +1024,7 @@ mod imp {
         let proc_handle = h(process);
         let wide: Vec<u16> = dll_path.encode_utf16().chain([0]).collect();
         let bytes = wide.len() * 2;
+        // SAFETY: the process handle is open; failure returns null, checked below.
         let remote = unsafe {
             VirtualAllocEx(
                 proc_handle,
@@ -977,12 +1038,15 @@ mod imp {
             return Err(last_err("VirtualAllocEx"));
         }
         let result = (|| -> Result<()> {
-            write_process_memory(process, remote as usize, wide.as_ptr() as *const u8, bytes)?;
+            let wide_bytes: Vec<u8> = wide.iter().flat_map(|u| u.to_le_bytes()).collect();
+            write_process_memory(process, remote as usize, &wide_bytes)?;
             let k32_name: Vec<u16> = "kernel32.dll".encode_utf16().chain([0]).collect();
+            // SAFETY: the name is a NUL-terminated UTF-16 string that outlives the call.
             let k32 = unsafe { GetModuleHandleW(k32_name.as_ptr()) };
             if k32.is_null() {
                 return Err(last_err("GetModuleHandleW"));
             }
+            // SAFETY: `k32` is the loaded kernel32 module and the name is a NUL-terminated C string.
             let load = unsafe { GetProcAddress(k32, c"LoadLibraryW".as_ptr() as *const u8) };
             let Some(load) = load else {
                 return Err(WinError::OsError {
@@ -1002,6 +1066,7 @@ mod imp {
         // A timeout does not stop LoadLibraryW. Its input must remain valid
         // until the remote thread finishes (or the target process exits).
         if !matches!(result, Err(WinError::RemoteCallPending { .. })) {
+            // SAFETY: `remote` was allocated above in that process and the remote thread is no longer using it.
             unsafe { VirtualFreeEx(proc_handle, remote, 0, MEM_RELEASE) };
         }
         result
@@ -1014,13 +1079,16 @@ mod imp {
             CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
             TH32CS_SNAPPROCESS,
         };
+        // SAFETY: a process snapshot takes only values; failure returns INVALID_HANDLE_VALUE, checked below.
         let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
         if snap == INVALID_HANDLE_VALUE {
             return Err(last_err("CreateToolhelp32Snapshot"));
         }
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
         let mut out = Vec::new();
+        // SAFETY: `snap` is the open snapshot and `entry` is initialised with its size; the snapshot is closed once.
         unsafe {
             if Process32FirstW(snap, &mut entry) != 0 {
                 loop {
@@ -1047,13 +1115,16 @@ mod imp {
             TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32,
         };
         let snap =
+            // SAFETY: a module snapshot takes only values; failure returns INVALID_HANDLE_VALUE, checked below.
             unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) };
         if snap == INVALID_HANDLE_VALUE {
             return Err(last_err("CreateToolhelp32Snapshot"));
         }
+        // SAFETY: a plain C struct; all-zero bytes are a valid value.
         let mut entry: MODULEENTRY32W = unsafe { std::mem::zeroed() };
         entry.dwSize = std::mem::size_of::<MODULEENTRY32W>() as u32;
         let mut result = Err(WinError::InvalidArgument("module not loaded in target"));
+        // SAFETY: `snap` is the open snapshot and `entry` is initialised with its size; the snapshot is closed once.
         unsafe {
             if Module32FirstW(snap, &mut entry) != 0 {
                 loop {
@@ -1082,6 +1153,7 @@ mod imp {
         use windows_sys::Win32::System::Memory::{
             VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
         };
+        // SAFETY: the process handle is open; failure returns null, checked below.
         let addr = unsafe {
             VirtualAllocEx(
                 h(process),
@@ -1098,9 +1170,15 @@ mod imp {
     }
 
     /// `remote_alloc` で確保したメモリを解放する。
-    pub fn remote_free(process: BorrowedHandle<'_>, addr: usize) {
+    ///
+    /// # Safety
+    /// `addr` is 0 or an address `remote_alloc` returned for `process`, and
+    /// nothing (in that process, or here if it is the current one) uses it
+    /// any more.
+    pub unsafe fn remote_free(process: BorrowedHandle<'_>, addr: usize) {
         use windows_sys::Win32::System::Memory::{VirtualFreeEx, MEM_RELEASE};
         if addr != 0 {
+            // SAFETY: the caller passes an address that remote_alloc returned for this process.
             unsafe { VirtualFreeEx(h(process), addr as *mut c_void, 0, MEM_RELEASE) };
         }
     }
@@ -1109,6 +1187,7 @@ mod imp {
     /// （他人のプロセスに使わないこと）。
     pub fn terminate_process(process: BorrowedHandle<'_>, exit_code: u32) -> Result<()> {
         use windows_sys::Win32::System::Threading::TerminateProcess;
+        // SAFETY: the borrowed process handle is open for the call.
         let ok = unsafe { TerminateProcess(h(process), exit_code) };
         if ok == 0 {
             return Err(last_err("TerminateProcess"));
@@ -1128,28 +1207,27 @@ mod imp {
 
             unsafe extern "system" fn delayed_read(parameter: *mut c_void) -> u32 {
                 let waited =
+                    // SAFETY: GATE holds the event created before this thread started, open until the test closes it.
                     unsafe { WaitForSingleObject(GATE.load(Ordering::SeqCst) as HANDLE, 5_000) };
                 if waited == 0 {
                     let mut first = [0u8; 2];
                     // ReadProcessMemory reports a freed allocation without
                     // deliberately crashing the test process on an invalid read.
-                    if read_process_memory(
-                        current_process(),
-                        parameter as usize,
-                        first.as_mut_ptr(),
-                        first.len(),
-                    )
-                    .is_ok()
+                    if read_process_memory(current_process(), parameter as usize, &mut first)
+                        .is_ok()
                     {
                         OBSERVED.store(u16::from_le_bytes(first) as u32, Ordering::SeqCst);
                     }
                 }
+                // SAFETY: DONE holds the event created before this thread started, open until the test closes it.
                 unsafe { SetEvent(DONE.load(Ordering::SeqCst) as HANDLE) };
                 1
             }
 
             let process = current_process();
+            // SAFETY: an anonymous event with default security; failure returns null, checked below.
             let gate = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+            // SAFETY: an anonymous event with default security; failure returns null, checked below.
             let done = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
             assert!(!gate.is_null() && !done.is_null());
             GATE.store(gate as usize, Ordering::SeqCst);
@@ -1166,12 +1244,17 @@ mod imp {
             });
             // The thread cannot complete before this signal, irrespective of
             // scheduler speed. Its delayed read happens after the timeout path.
+            // SAFETY: `gate` was created above and is still open.
             unsafe { SetEvent(gate) };
+            // SAFETY: `done` was created above and is still open.
             let finished = unsafe { WaitForSingleObject(done, 5_000) } == 0;
             let observed = OBSERVED.load(Ordering::SeqCst);
             if finished {
                 // The callback has finished using parameter before signaling.
-                remote_free(process, parameter);
+                // SAFETY: `parameter` came from remote_alloc above and the
+                // callback signalled DONE after its last use.
+                unsafe { remote_free(process, parameter) };
+                // SAFETY: both events were created above and are closed once, after the thread finished with them.
                 unsafe {
                     CloseHandle(gate);
                     CloseHandle(done);
@@ -1315,16 +1398,14 @@ mod imp {
     pub fn write_process_memory(
         _process: BorrowedHandle<'_>,
         _dest: usize,
-        _src: *const u8,
-        _len: usize,
+        _src: &[u8],
     ) -> Result<()> {
         Err(WinError::Unsupported)
     }
     pub fn read_process_memory(
         _process: BorrowedHandle<'_>,
         _src: usize,
-        _dest: *mut u8,
-        _len: usize,
+        _dest: &mut [u8],
     ) -> Result<()> {
         Err(WinError::Unsupported)
     }
@@ -1344,7 +1425,9 @@ mod imp {
     pub fn remote_alloc(_process: BorrowedHandle<'_>, _len: usize) -> Result<usize> {
         Err(WinError::Unsupported)
     }
-    pub fn remote_free(_process: BorrowedHandle<'_>, _addr: usize) {}
+    /// # Safety
+    /// Same contract as the Windows version (this stub does nothing).
+    pub unsafe fn remote_free(_process: BorrowedHandle<'_>, _addr: usize) {}
     pub fn terminate_process(_process: BorrowedHandle<'_>, _exit_code: u32) -> Result<()> {
         Err(WinError::Unsupported)
     }
@@ -1739,6 +1822,7 @@ pub struct ThreadLiveness {
 // SAFETY: the handle is only waited on and closed; it is not tied to the
 // thread that opened it.
 unsafe impl Send for ThreadLiveness {}
+// SAFETY: shared use only waits on the handle, which the kernel allows from any thread.
 unsafe impl Sync for ThreadLiveness {}
 
 #[cfg(not(windows))]
@@ -2047,6 +2131,7 @@ impl std::fmt::Debug for ThreadLiveness {
 fn qpc_frequency() -> u64 {
     use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
     let mut f: i64 = 0;
+    // SAFETY: `f` is a writable local.
     let ok = unsafe { QueryPerformanceFrequency(&mut f) };
     if ok != 0 && f > 0 {
         f as u64
@@ -2065,6 +2150,7 @@ impl shirusu_transport::TimestampSource for QpcTimestampSource {
         {
             use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
             let mut v: i64 = 0;
+            // SAFETY: `v` is a writable local.
             let ok = unsafe { QueryPerformanceCounter(&mut v) };
             if ok != 0 && v > 0 {
                 v as u64
@@ -2105,6 +2191,7 @@ mod tests {
         drop(child);
         assert!(process_exited(handle.borrow()).unwrap());
         // 0 はハンドルとして引き受けられない (無効なハンドルを生存と取り違えない)。
+        // SAFETY: 0 is never a valid handle, so nothing is taken over.
         assert!(unsafe { OwnedHandle::from_raw(0) }.is_none());
     }
 
@@ -2117,7 +2204,7 @@ mod tests {
         assert!(!process_exited(handle.borrow()).unwrap());
         let value = 0u8;
         assert!(
-            write_process_memory(handle.borrow(), &value as *const u8 as usize, &value, 1).is_err(),
+            write_process_memory(handle.borrow(), &value as *const u8 as usize, &[value]).is_err(),
             "liveness handle must not grant PROCESS_VM_WRITE"
         );
         assert!(
@@ -2538,6 +2625,7 @@ mod portable_tests {
             Err(WinError::Unsupported)
         ));
         // スタブでは閉じない値なので、任意の数を引き受けてよい。
+        // SAFETY: the stub never closes handle values, so a made-up value is harmless.
         let fake = || unsafe { OwnedHandle::from_raw(123) }.unwrap();
         assert!(matches!(
             SharedMapping::from_owned(fake(), 4096),

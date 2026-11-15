@@ -114,6 +114,7 @@ fn run_round(strategy: Strategy) -> RoundResult {
     let r2 = region.clone();
     let c2 = clock.clone();
     let producer = std::thread::spawn(move || {
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             r2.writer(
                 WriterPolicy {
@@ -165,6 +166,7 @@ fn run_round(strategy: Strategy) -> RoundResult {
     }
     // 書き手が待機の最中であることを確定させてから回収する。
     std::thread::sleep(Duration::from_millis(10));
+    // SAFETY: the only reader of this Ring (SPSC).
     let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     let mut host = NotifyingDrainWorker::new(worker, Arc::clone(&notify), &region);
     let mut drained = host.drain_all().events.len();

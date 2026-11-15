@@ -4,12 +4,14 @@
 #[inline(always)]
 pub fn get() -> u32 {
     #[cfg(target_arch = "x86_64")]
+    // SAFETY: TEB+0x68 is this thread's LastErrorValue on x64; the TEB is always mapped.
     unsafe {
         let value: u32;
         core::arch::asm!("mov {value:e}, gs:[0x68]", value = out(reg) value, options(nostack, preserves_flags, readonly));
         value
     }
     #[cfg(target_arch = "x86")]
+    // SAFETY: TEB+0x34 is this thread's LastErrorValue on x86; the TEB is always mapped.
     unsafe {
         let value: u32;
         core::arch::asm!("mov {value:e}, fs:[0x34]", value = out(reg) value, options(nostack, preserves_flags, readonly));
@@ -24,10 +26,12 @@ pub fn get() -> u32 {
 #[inline(always)]
 pub fn set(value: u32) {
     #[cfg(target_arch = "x86_64")]
+    // SAFETY: TEB+0x68 is this thread's LastErrorValue on x64; the TEB is always mapped.
     unsafe {
         core::arch::asm!("mov gs:[0x68], {value:e}", value = in(reg) value, options(nostack, preserves_flags));
     }
     #[cfg(target_arch = "x86")]
+    // SAFETY: TEB+0x34 is this thread's LastErrorValue on x86; the TEB is always mapped.
     unsafe {
         core::arch::asm!("mov fs:[0x34], {value:e}", value = in(reg) value, options(nostack, preserves_flags));
     }
@@ -46,11 +50,13 @@ mod tests {
     fn direct_cell_matches_windows_and_is_thread_local() {
         let saved = get();
         for value in [0, 5, 0x8000_0001, u32::MAX] {
+            // SAFETY: SetLastError has no preconditions.
             unsafe {
                 SetLastError(value);
             }
             assert_eq!(get(), value);
             set(!value);
+            // SAFETY: GetLastError has no preconditions.
             assert_eq!(unsafe { GetLastError() }, !value);
         }
         use std::sync::atomic::{AtomicBool, Ordering};

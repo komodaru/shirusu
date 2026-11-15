@@ -40,6 +40,7 @@ pub(super) unsafe fn exchange_iat(
     state: &IatSlot,
     install: bool,
 ) -> Result<(), EngineError> {
+    // SAFETY: forwarded from this function's contract; the closure passes its arguments to VirtualProtect unchanged.
     unsafe {
         exchange_iat_with(slot, state, install, |address, size, protection, old| {
             VirtualProtect(address, size, protection, old)
@@ -74,6 +75,7 @@ pub(super) unsafe fn exchange_iat_with(
         } else {
             (state.detour, state.original)
         };
+        // SAFETY: `slot` is aligned (checked above), mapped (caller's contract) and every writer uses atomics.
         changed = unsafe { AtomicUsize::from_ptr(slot) }
             .compare_exchange(expected, value, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
@@ -137,7 +139,9 @@ pub unsafe fn install_hooks(
     for index in 0..installed.plan.entries.len() {
         let entry = &installed.plan.entries[index];
         let rva = entry.iat_rva;
+        // SAFETY: the import parser bounds-checked this IAT slot inside the image.
         let slot = unsafe { module_base.add(rva as usize) }.cast::<usize>();
+        // SAFETY: the slot lies inside the mapped image (bounds-checked by the parser).
         let original = unsafe { slot.read_unaligned() };
         let canonical = resolve_export(&entry.dll_name, entry.api.function)
             .is_some_and(|export| follow_import_thunks(original) == Some(export));
@@ -151,8 +155,10 @@ pub unsafe fn install_hooks(
         // Save the descriptor BEFORE publication, including the failing entry.
         installed.slots.push(state);
         if !canonical
+            // SAFETY: the slot is inside this loaded image and installation is serialized by the caller.
             || unsafe { exchange_iat(slot, installed.slots.last().unwrap(), true) }.is_err()
         {
+            // SAFETY: `installed` holds only slots this function exchanged in this image.
             unsafe {
                 uninstall_pending_hooks(&mut installed);
             }
@@ -195,6 +201,7 @@ pub(super) unsafe fn uninstall_iat_indices(installed: &InstalledHooks) -> Vec<us
 /// # Safety
 /// Same installed-module lifetime contract as `uninstall_pending_hooks`.
 pub unsafe fn uninstall_hooks(installed: &InstalledHooks) -> Vec<u32> {
+    // SAFETY: forwarded from this function's contract.
     unsafe { uninstall_iat_indices(installed) }
         .into_iter()
         .map(|i| installed.slots[i].rva)
@@ -208,6 +215,7 @@ pub unsafe fn uninstall_hooks(installed: &InstalledHooks) -> Vec<u32> {
 /// The installed module and remaining slots must still be mapped at their
 /// original addresses; only a lifecycle owner may modify this installation.
 pub unsafe fn uninstall_pending_hooks(installed: &mut InstalledHooks) -> usize {
+    // SAFETY: forwarded from this function's contract.
     let failed = unsafe { uninstall_iat_indices(installed) };
     retain_failed_indices(&mut installed.slots, &failed);
     installed.slots.len()

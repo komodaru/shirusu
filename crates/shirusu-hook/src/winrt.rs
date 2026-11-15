@@ -664,6 +664,7 @@ pub fn read_hstring_string(hstring: usize) -> Option<HString> {
         // SAFETY: "combase.dll" はヌル終端済みのモジュール名。
         // 解決できなければ 0 を入れて以後は読まない。
         let wide: Vec<u16> = "combase.dll".encode_utf16().chain([0]).collect();
+        // SAFETY: the name is a NUL-terminated UTF-16 string that outlives the call.
         let handle = unsafe { GetModuleHandleW(wide.as_ptr()) };
         if handle.is_null() {
             return 0;

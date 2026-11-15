@@ -88,6 +88,7 @@ fn agent_to_host_round_trip_expands_slot_and_new_thread_records() {
     // 検証付き Host が追加 Ring を回収する (generation 0 を期待値とする)。
     // A72 の一時キーも generation 0 で生成される。
     let base4 = agent.thread_region(4).expect("expanded region base");
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut worker4 = unsafe { DrainWorker::new(base4.clone(), cfg, 0) }.unwrap();
     worker4.set_identity(RingIdentity::new(ProcessInstanceId(1), RingId(4), 0));
     let batch = worker4.drain_all();
@@ -105,6 +106,7 @@ fn agent_to_host_round_trip_expands_slot_and_new_thread_records() {
     for (tid, call) in [(1u64, 100u64), (2, 101), (3, 102)] {
         let base = agent.thread_region(tid).expect("region base");
         let handle_gen = agent.thread_begin(tid).unwrap().generation;
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut worker = unsafe { DrainWorker::new(base.clone(), cfg, handle_gen) }.unwrap();
         let batch = worker.drain_all();
         assert_eq!(batch.events.len(), 1, "ring {tid}");
@@ -168,6 +170,7 @@ fn host_stop_during_expansion_existing_rings_continue() {
     for tid in [1u64, 2, 3] {
         let base = agent.thread_region(tid).expect("region base");
         let handle_gen = agent.thread_begin(tid).unwrap().generation;
+        // SAFETY: the only reader of this Ring (SPSC).
         let mut worker = unsafe { DrainWorker::new(base.clone(), cfg, handle_gen) }.unwrap();
         let batch = worker.drain_all();
         assert_eq!(batch.events.len(), 5, "ring {tid}");

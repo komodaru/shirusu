@@ -210,6 +210,7 @@ fn uninitialized_ring_is_pending_not_an_error() {
     let region = SharedRegion::new(cfg, 0, 0).unwrap();
     // SharedRegion::new は Control を初期化してしまうので、Magic を消して
     // 「まだ Agent が claim していない」状態を作る。
+    // SAFETY: OFF_MAGIC is an aligned u64 word inside the Control region of this live region.
     unsafe {
         let p = region.shm().as_ptr().add(layout::OFF_MAGIC) as *mut u64;
         p.write_unaligned(0);
@@ -243,6 +244,7 @@ fn corrupted_ring_stops_and_marks_integrity_lost() {
     record_file_io(&agent, 11);
     assert_eq!(session.poll_once().unwrap().events, 6);
     // 共有メモリの破損を注入： write cursor をあり得ない値にする
+    // SAFETY: OFF_WRITE_CURSOR is an aligned u64 word inside the Control region of this live mapping.
     unsafe {
         let p = base.as_ptr().add(layout::OFF_WRITE_CURSOR) as *mut u64;
         p.write_unaligned(u64::MAX - 3);
@@ -287,6 +289,7 @@ fn corruption_found_after_release_stops_ring_and_loses_integrity() {
     let read = base.control().load(Word::ReadCursor, Ordering::Acquire);
     assert_eq!(read, 6, "first batch released");
     let cfg = RingConfig::new(64, 4096);
+    // SAFETY: the slot index is reduced modulo the descriptor capacity, so the write stays inside the descriptor region.
     unsafe {
         let desc = base
             .as_ptr()

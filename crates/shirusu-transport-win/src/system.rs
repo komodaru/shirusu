@@ -25,12 +25,14 @@ pub fn windows_version() -> Result<WindowsVersion> {
     }
     type RtlGetVersion = unsafe extern "system" fn(*mut NativeVersion) -> i32;
     let name: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
+    // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the call.
     let module = unsafe { GetModuleHandleW(name.as_ptr()) };
     if module.is_null() {
         return Err(WinError::InvalidArgument(
             "ntdll version provider unavailable",
         ));
     }
+    // SAFETY: `module` is a loaded module handle and the name is a NUL-terminated C string.
     let function = unsafe { GetProcAddress(module, c"RtlGetVersion".as_ptr().cast()) }
         .ok_or(WinError::InvalidArgument("RtlGetVersion unavailable"))?;
     // SAFETY: RtlGetVersion's documented RTL_OSVERSIONINFOW layout and ABI.
@@ -43,6 +45,7 @@ pub fn windows_version() -> Result<WindowsVersion> {
         platform: 0,
         service_pack: [0; 128],
     };
+    // SAFETY: RtlGetVersion has this signature and `version` is a writable NativeVersion.
     let status = unsafe { function(&mut version) };
     if status != 0 {
         return Err(WinError::OsError {

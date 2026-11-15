@@ -1282,9 +1282,11 @@ mod tests {
         let first = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
         assert!(!first.is_null());
         crate::last_error::set(5);
+        // SAFETY: null attributes and a live, NUL-terminated UTF-16 name.
         let second = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
         let error = crate::last_error::get();
         // Close both independently acquired handles before assertions/encoding.
+        // SAFETY: both handles were created above and are closed once.
         unsafe {
             CloseHandle(first);
             if !second.is_null() {

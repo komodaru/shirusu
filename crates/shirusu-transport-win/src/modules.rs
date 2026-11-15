@@ -28,6 +28,7 @@ use crate::{Result, WinError};
 fn last_err(api: &'static str) -> WinError {
     WinError::OsError {
         api,
+        // SAFETY: GetLastError has no preconditions.
         code: unsafe { windows_sys::Win32::Foundation::GetLastError() },
     }
 }
@@ -124,6 +125,7 @@ pub fn enumerate_modules(pid: u32) -> Result<Vec<LoadedModule>> {
                 continue;
             }
             let path = String::from_utf16_lossy(&name_buf[..n as usize]);
+            // SAFETY: MODULEINFO is plain data; all-zero is a valid value.
             let mut info: MODULEINFO = unsafe { std::mem::zeroed() };
             // SAFETY: info は MODULEINFO 分の領域。
             let ok = unsafe {
@@ -175,18 +177,25 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
 
     // Inspect the signer belonging to the successful trust operation BEFORE CLOSE.
     // The provider owns the certificate; neither free it nor query a second PKCS#7.
+    /// # Safety
+    /// `data` must be filled by `trust_data` and its union pointer must refer
+    /// to a live info struct for the whole call.
     unsafe fn verify(data: &mut WINTRUST_DATA) -> bool {
         let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
         let status =
+            // SAFETY: `data` is a filled WINTRUST_DATA whose union pointer refers to a live info struct (the caller's contract).
             unsafe { WinVerifyTrust(std::ptr::null_mut(), &mut action, data as *mut _ as *mut _) };
         let microsoft = if status == 0 {
+            // SAFETY: the verify call above succeeded, so the state handle is open until the CLOSE call below.
             let provider = unsafe { WTHelperProvDataFromStateData(data.hWVTStateData) };
             let signer = if provider.is_null() {
                 std::ptr::null_mut()
             } else {
+                // SAFETY: `provider` is non-null and owned by the open trust state.
                 unsafe { WTHelperGetProvSignerFromChain(provider, 0, 0, 0) }
             };
             if signer.is_null()
+                // SAFETY: `signer` is non-null and owned by the open trust state.
                 || unsafe {
                     (*signer).dwError != 0
                         || (*signer).csCertChain == 0
@@ -195,6 +204,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
             {
                 false
             } else {
+                // SAFETY: the chain pointer was checked non-null above and stays valid while the state is open.
                 let cert = unsafe { &*(*signer).pasCertChain };
                 if cert.pCert.is_null() || cert.dwError != 0 {
                     false
@@ -202,6 +212,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
                     // Compare the complete organization attribute, not a substring
                     // of a display name (which could name an unrelated publisher).
                     let oid = b"2.5.4.10\0";
+                    // SAFETY: `cert.pCert` is non-null and valid while the state is open; the OID is NUL-terminated.
                     let n = unsafe {
                         CertGetNameStringW(
                             cert.pCert,
@@ -216,6 +227,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
                         false
                     } else {
                         let mut name = vec![0u16; n as usize];
+                        // SAFETY: `name` has room for `n` UTF-16 units, the size the previous call asked for.
                         let actual = unsafe {
                             CertGetNameStringW(
                                 cert.pCert,
@@ -236,6 +248,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
             false
         };
         data.dwStateAction = WTD_STATEACTION_CLOSE;
+        // SAFETY: closes the state the first call opened; `data` is unchanged apart from the action.
         unsafe {
             WinVerifyTrust(std::ptr::null_mut(), &mut action, data as *mut _ as *mut _);
         }
@@ -260,6 +273,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
     let mut data = trust_data();
     data.dwUnionChoice = WTD_CHOICE_FILE;
     data.Anonymous.pFile = &mut info;
+    // SAFETY: `data` refers to `info`, which lives until the call returns.
     if unsafe { verify(&mut data) } {
         return true;
     }
@@ -269,6 +283,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
     for algorithm in ["SHA256", "SHA1"] {
         let algorithm: Vec<u16> = algorithm.encode_utf16().chain([0]).collect();
         let mut admin = 0;
+        // SAFETY: `admin` and `algorithm` are live locals; the algorithm name is NUL-terminated.
         if unsafe {
             CryptCATAdminAcquireContext2(
                 &mut admin,
@@ -282,6 +297,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
             continue;
         }
         let mut len = 0;
+        // SAFETY: `file` is an open file handle; a null buffer asks only for the hash length.
         unsafe {
             CryptCATAdminCalcHashFromFileHandle2(
                 admin,
@@ -294,6 +310,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
         let mut matched = false;
         if len > 0 && len <= 4096 {
             let mut hash = vec![0u8; len as usize];
+            // SAFETY: `hash` has room for the `len` bytes the previous call reported.
             if unsafe {
                 CryptCATAdminCalcHashFromFileHandle2(
                     admin,
@@ -307,6 +324,7 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
                 hash.truncate(len as usize);
                 let tag: String = hash.iter().map(|b| format!("{b:02X}")).collect();
                 let tag: Vec<u16> = tag.encode_utf16().chain([0]).collect();
+                // SAFETY: `admin` is an acquired context and `hash` holds `len` bytes.
                 let mut catalog = unsafe {
                     CryptCATAdminEnumCatalogFromHash(
                         admin,
@@ -317,10 +335,13 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
                     )
                 };
                 while catalog != 0 {
+                    // SAFETY: CATALOG_INFO is plain data; all-zero is a valid value.
                     let mut catalog_info: CATALOG_INFO = unsafe { std::mem::zeroed() };
                     catalog_info.cbStruct = std::mem::size_of::<CATALOG_INFO>() as u32;
+                    // SAFETY: `catalog` is a live context from the enumeration and `catalog_info` is writable.
                     if unsafe { CryptCATCatalogInfoFromContext(catalog, &mut catalog_info, 0) } != 0
                     {
+                        // SAFETY: WINTRUST_CATALOG_INFO is plain data; all-zero is a valid value.
                         let mut info: WINTRUST_CATALOG_INFO = unsafe { std::mem::zeroed() };
                         info.cbStruct = std::mem::size_of::<WINTRUST_CATALOG_INFO>() as u32;
                         info.pcwszCatalogFilePath = catalog_info.wszCatalogFile.as_ptr();
@@ -333,21 +354,25 @@ pub fn verify_microsoft_signature(path: &str) -> bool {
                         let mut data = trust_data();
                         data.dwUnionChoice = WTD_CHOICE_CATALOG;
                         data.Anonymous.pCatalog = &mut info;
+                        // SAFETY: `data` refers to `info`, whose string and hash pointers outlive the call.
                         matched = unsafe { verify(&mut data) };
                     }
                     if matched {
+                        // SAFETY: `catalog` is the live context the enumeration returned for `admin`.
                         unsafe {
                             CryptCATAdminReleaseCatalogContext(admin, catalog, 0);
                         }
                         break;
                     }
                     // Enumeration consumes the previous context, including at end.
+                    // SAFETY: `admin` is acquired and `catalog` is the previous context, which this call consumes.
                     catalog = unsafe {
                         CryptCATAdminEnumCatalogFromHash(admin, hash.as_ptr(), len, 0, &mut catalog)
                     };
                 }
             }
         }
+        // SAFETY: `admin` was acquired above and is released exactly once.
         unsafe {
             CryptCATAdminReleaseContext(admin, 0);
         }

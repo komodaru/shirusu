@@ -131,6 +131,7 @@ pub(super) unsafe extern "system-unwind" fn detour_co_create_instance(
             ComPrepare::Passthrough { original } => {
                 // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
                 let orig: CoCreateInstanceFn = unsafe { std::mem::transmute(original) };
+                // SAFETY: passes the caller's own arguments to the original, which has this signature.
                 return unsafe { orig(clsid, unk_outer, cls_context, iid, ppv) };
             }
             ComPrepare::Unavailable => return COM_E_FAIL,
@@ -215,6 +216,7 @@ pub(super) unsafe extern "system-unwind" fn detour_co_get_class_object(
             ComPrepare::Passthrough { original } => {
                 // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
                 let orig: CoGetClassObjectFn = unsafe { std::mem::transmute(original) };
+                // SAFETY: passes the caller's own arguments to the original, which has this signature.
                 return unsafe { orig(clsid, cls_context, server_info, iid, ppv) };
             }
             ComPrepare::Unavailable => return COM_E_FAIL,
@@ -446,7 +448,9 @@ pub(super) unsafe extern "system-unwind" fn detour_ro_activate_instance(
         None,
         out,
         |original| {
+            // SAFETY: `original` is the saved RoActivateInstance entry, which has this signature.
             let original: RoActivateInstanceFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: passes the caller's own arguments to the original, which has this signature.
             unsafe { original(class_id, out) }
         },
     )
@@ -464,7 +468,9 @@ pub(super) unsafe extern "system-unwind" fn detour_ro_get_activation_factory(
         Some(iid),
         out,
         |original| {
+            // SAFETY: `original` is the saved RoGetActivationFactory entry, which has this signature.
             let original: RoGetActivationFactoryFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: passes the caller's own arguments to the original, which has this signature.
             unsafe { original(class_id, iid, out) }
         },
     )

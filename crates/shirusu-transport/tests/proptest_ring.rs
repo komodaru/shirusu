@@ -28,6 +28,7 @@ fn setup(desc: usize, pay: usize) -> (SharedRegion, RingWriter, RingReader) {
     let cfg = RingConfig::new(desc, pay);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe {
         region.writer(
             WriterPolicy {
@@ -37,6 +38,7 @@ fn setup(desc: usize, pay: usize) -> (SharedRegion, RingWriter, RingReader) {
             clock,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let r = unsafe { region.reader() };
     (region, w, r)
 }
@@ -246,6 +248,7 @@ fn run_dst_case(ops: &[DstOp]) -> Result<(), TestCaseError> {
         let cfg = RingConfig::new(8, 256);
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
         let wc: Arc<dyn Clock> = clock.clone();
+        // SAFETY: the only writer of this region (SPSC).
         let w = unsafe {
             region.writer(
                 WriterPolicy {
@@ -255,6 +258,7 @@ fn run_dst_case(ops: &[DstOp]) -> Result<(), TestCaseError> {
                 wc,
             )
         };
+        // SAFETY: the only reader of this region (SPSC).
         let r = unsafe { region.reader() };
         (region, w, r)
     };

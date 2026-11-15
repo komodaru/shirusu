@@ -133,10 +133,11 @@ fn shutdown_status(has_session: bool, drained: bool, unrestored: usize) -> u32 {
 /// `bootstrap` は読み取り可能な AgentBootstrap を指すこと（呼び出しは
 /// 初期化が戻るまで構造体を有効に保つこと）。
 #[no_mangle]
-pub extern "system" fn shirusu_agent_init(bootstrap: *const AgentBootstrap) -> u32 {
+pub unsafe extern "system" fn shirusu_agent_init(bootstrap: *const AgentBootstrap) -> u32 {
     #[cfg(windows)]
     {
-        contain_panic(STATUS_PANICKED, || win::init(bootstrap))
+        // SAFETY: forwarded from this function's contract.
+        contain_panic(STATUS_PANICKED, || unsafe { win::init(bootstrap) })
     }
     #[cfg(not(windows))]
     {
@@ -287,12 +288,16 @@ mod win {
         }
     }
 
-    pub fn init(bootstrap: *const AgentBootstrap) -> u32 {
+    /// # Safety
+    /// `bootstrap` is null or points to a readable and writable Bootstrap of
+    /// this or an older version, valid until this returns.
+    pub unsafe fn init(bootstrap: *const AgentBootstrap) -> u32 {
         if bootstrap.is_null() {
             return STATUS_BAD_BOOTSTRAP;
         }
         // Read only the common prefix before copying the versioned structure:
         // an older Host allocated a smaller Bootstrap.
+        // SAFETY: every Bootstrap version starts with its u32 version field.
         if unsafe { bootstrap.cast::<u32>().read_unaligned() } != BOOTSTRAP_VERSION {
             return STATUS_BAD_BOOTSTRAP;
         }
@@ -549,6 +554,7 @@ mod win {
         // Cold initialization outside DllMain, before any factory can publish
         // an adapter. Failure leaves factory observation available with skips.
         let _ = shirusu_hook::shared_com::initialize();
+        // SAFETY: called from the dedicated initialization thread, outside DllMain, before any factory hook exists (same premise as L01).
         let com_factory_outcome = unsafe { engine::install_com_factory_hooks(&rt) };
         // L14: WinRT アクティベーション関数の Inline Hook を COM Factory
         // の後で設置する。COM Factory と同じく best-effort であり、
@@ -566,6 +572,7 @@ mod win {
         // detailed_mode が決める（prepare のゲート）。
         // SAFETY: 初期化専用スレッドからの呼び出し（L01 と同じ前提）。
         let internal_hook_outcome = if b.detailed_mode != 0 {
+            // SAFETY: called from the dedicated initialization thread (same premise as L01).
             unsafe { engine::install_internal_inline_hooks(&rt) }
         } else {
             engine::InlineInstallOutcome::default()
@@ -814,14 +821,18 @@ mod win {
         fn shutdown_retries_only_failed_slots_and_waits_for_old_flights() {
             // Reserve two pages, but commit only the first. Protection changes
             // on the uncommitted second page deterministically fail.
+            // SAFETY: VirtualAlloc takes only values; failure returns null, checked below.
             let base = unsafe { VirtualAlloc(std::ptr::null(), 8192, MEM_RESERVE, PAGE_READWRITE) };
             assert!(!base.is_null());
             assert_eq!(
+                // SAFETY: commits the first page of the reservation made above.
                 unsafe { VirtualAlloc(base, 4096, MEM_COMMIT, PAGE_READWRITE) },
                 base
             );
             let first = base.cast::<usize>();
+            // SAFETY: the offset stays inside the 8192-byte reservation.
             let second = unsafe { base.cast::<u8>().add(4096) }.cast::<usize>();
+            // SAFETY: `base` is this test's own reservation: `first` is in the committed page, `second` in the page committed before it is touched.
             unsafe { first.write(0xaaaa) };
             let rt = runtime();
             assert!(engine::set_runtime(rt.clone()).is_ok());
@@ -840,7 +851,8 @@ mod win {
             assert_eq!(shutdown(), SHUTDOWN_INCOMPLETE);
             let bootstrap =
                 AgentBootstrap::new(11, shirusu_transport::RingConfig::new(64, 4096), &[(1, 2)]);
-            assert_eq!(init(&bootstrap), STATUS_ALREADY_INITIALIZED);
+            // SAFETY: a live Bootstrap of the current version.
+            assert_eq!(unsafe { init(&bootstrap) }, STATUS_ALREADY_INITIALIZED);
             assert!(!rt.recording_active());
             assert!(engine::runtime().is_some());
             assert_eq!(
@@ -856,20 +868,27 @@ mod win {
                     .collect::<Vec<_>>(),
                 vec![(4096, 0x2222)]
             );
+            // SAFETY: `base` is this test's own reservation: `first` is in the committed page, `second` in the page committed before it is touched.
             assert_eq!(unsafe { first.read() }, 0x1111);
             // Simulate an application changing an already restored slot.
+            // SAFETY: `base` is this test's own reservation: `first` is in the committed page, `second` in the page committed before it is touched.
             unsafe { first.write(0x3333) };
             assert_eq!(
+                // SAFETY: commits the second page of the reservation made above.
                 unsafe { VirtualAlloc(second.cast(), 4096, MEM_COMMIT, PAGE_READWRITE) },
                 second.cast()
             );
+            // SAFETY: `base` is this test's own reservation: `first` is in the committed page, `second` in the page committed before it is touched.
             unsafe { second.write(0xbbbb) };
             assert_eq!(shutdown(), SHUTDOWN_OK);
+            // SAFETY: `base` is this test's own reservation: `first` is in the committed page, `second` in the page committed before it is touched.
             assert_eq!(unsafe { first.read() }, 0x3333);
+            // SAFETY: `base` is this test's own reservation: `first` is in the committed page, `second` in the page committed before it is touched.
             assert_eq!(unsafe { second.read() }, 0x2222);
             assert!(STATE.lock().unwrap().is_none());
             assert!(engine::runtime().is_none());
             assert_eq!(shutdown(), SHUTDOWN_NOT_INITIALIZED);
+            // SAFETY: the reservation belongs to this test and nothing uses it any more.
             assert_ne!(unsafe { VirtualFree(base, 0, MEM_RELEASE) }, 0);
 
             // Successful restoration alone cannot complete a timed-out shutdown.
@@ -936,7 +955,9 @@ mod tests {
     fn old_bootstrap_is_rejected_before_reading_new_fields() {
         for version in [9u32, 10] {
             assert_eq!(
-                super::win::init((&version as *const u32).cast()),
+                // SAFETY: an old Bootstrap is only its version word, and init
+                // reads nothing past it for an old version.
+                unsafe { super::win::init((&version as *const u32).cast()) },
                 STATUS_BAD_BOOTSTRAP
             );
         }

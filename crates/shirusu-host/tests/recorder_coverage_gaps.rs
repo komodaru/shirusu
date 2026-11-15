@@ -480,6 +480,7 @@ fn validator_rejection_stops_the_collector_on_a_later_poll() {
     let payload = vec![0u8; 4];
     agent.record_enter(12, cf.api_id, cf.enter_schema_id(), 1, 0, &payload);
     // 確定済み Descriptor の種別を未定義値へ書き換える（対象の改竄）。
+    // SAFETY: the first descriptor slot lies inside this live mapping.
     unsafe { *base.as_ptr().add(cfg.descriptors_offset()) = 0xee };
     let first = session.poll_once().unwrap();
     assert_eq!(first.events, 1, "the collector copies before validation");

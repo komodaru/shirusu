@@ -19,6 +19,7 @@ fn setup() -> (SharedRegion, shirusu_transport::RingWriter, DrainWorker) {
     let cfg = RingConfig::new(16, 512);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe {
         region.writer(
             WriterPolicy {
@@ -28,6 +29,7 @@ fn setup() -> (SharedRegion, shirusu_transport::RingWriter, DrainWorker) {
             clock,
         )
     };
+    // SAFETY: the only reader of this Ring (SPSC).
     let worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     (region, w, worker)
 }
@@ -53,6 +55,7 @@ fn rewrite_descriptor(region: &SharedRegion, slot: usize, f: impl Fn(&mut EventD
     bytes.copy_from_slice(&region.snapshot()[off..off + 64]);
     let mut d = EventDescriptor::from_bytes(&bytes).unwrap();
     f(&mut d);
+    // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.
     unsafe {
         std::ptr::copy_nonoverlapping(d.to_bytes().as_ptr(), region.shm().as_ptr().add(off), 64);
     }

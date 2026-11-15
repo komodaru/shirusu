@@ -90,6 +90,7 @@ pub fn writer_over(region: &SharedRegion, no_wait: bool) -> RingWriter {
         },
         ..Default::default()
     };
+    // SAFETY: the only writer of this region (SPSC).
     unsafe { region.writer(policy, clock) }
 }
 
@@ -110,6 +111,7 @@ pub fn scenario_basic(count: u64) -> ScenarioReport {
             }
         }
     });
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd: RingReader = unsafe { region.reader() };
     let mut got = 0u64;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -136,6 +138,7 @@ pub fn scenario_host_pause(sync: &SyncPoints) -> ScenarioReport {
     let cfg = RingConfig::new(16, 1024);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer_over(&region, true);
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     sync.pause_host.store(true, Ordering::Relaxed);
     let mut dropped = 0;
@@ -166,6 +169,7 @@ pub fn scenario_notification_loss(sync: &SyncPoints) -> ScenarioReport {
     let cfg = RingConfig::new(64, 8192);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer_over(&region, true);
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     sync.drop_notifications.store(true, Ordering::Relaxed);
     for i in 0..50u64 {
@@ -201,6 +205,7 @@ pub fn scenario_space_available_notify() -> ScenarioReport {
     let (tx, rx) = mpsc::channel();
     let producer = std::thread::spawn(move || {
         let clock: Arc<dyn Clock> = system_clock();
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe {
             r2.writer(
                 WriterPolicy {
@@ -222,6 +227,7 @@ pub fn scenario_space_available_notify() -> ScenarioReport {
     });
     // Host 側の配線: NotifyingDrainWorker が回収と space_available 通知を結ぶ。
     // 回収は検証付き経路 (DrainWorker) を通る (R2)。
+    // SAFETY: the only reader of this Ring (SPSC).
     let worker = unsafe { shirusu_host::DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     let notify = match RingNotify::new() {
         Ok(n) => Arc::new(n),
@@ -318,6 +324,7 @@ pub fn scenario_agent_space_available_handoff() -> ScenarioReport {
     let handle = agent.thread_begin(1).expect("thread_begin");
     let base = agent.thread_region(1).expect("region base");
     let mut host =
+        // SAFETY: the only reader of this Ring (SPSC).
         unsafe { shirusu_host::DrainWorker::new(base.clone(), cfg, handle.generation) }.unwrap();
     let total = 16u64;
     let (tx, rx) = mpsc::channel();
@@ -447,6 +454,7 @@ pub fn scenario_writer_stops_midway() -> ScenarioReport {
         // ここで突然終了する (writer を drop、未公開の作業は存在しない)
     });
     producer.join().unwrap();
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let b = rd.drain_all();
     report(
@@ -506,6 +514,7 @@ pub fn scenario_host_restart_resume() -> ScenarioReport {
         w.write(ev(i, b"before-kill"));
     }
     {
+        // SAFETY: the only reader of this region (SPSC).
         let mut host1 = unsafe { region.reader() };
         let b = host1.drain(25);
         seqs.extend(b.events.iter().map(|e| e.descriptor.sequence));
@@ -514,6 +523,7 @@ pub fn scenario_host_restart_resume() -> ScenarioReport {
     for i in 40..100u64 {
         w.write(ev(i, b"after-kill"));
     }
+    // SAFETY: the only reader of this region (SPSC).
     let mut host2 = unsafe { region.reader() };
     let b2 = host2.drain_all();
     seqs.extend(b2.events.iter().map(|e| e.descriptor.sequence));
@@ -542,6 +552,7 @@ pub fn scenario_producer_killed_mid_publish() -> ScenarioReport {
     let killer = std::thread::spawn(move || {
         // 公開直前の事故を再現: 次スロットの Payload と Descriptor 前半だけ書く
         let base = r2.shm().clone();
+        // SAFETY: both writes stay inside this region's payload and descriptor regions (slot 5 of 8+ slots).
         unsafe {
             let pay_off = r2.config().payload_offset() + 5 * 9;
             std::ptr::copy_nonoverlapping(b"torn-data".as_ptr(), base.as_ptr().add(pay_off), 9);
@@ -553,6 +564,7 @@ pub fn scenario_producer_killed_mid_publish() -> ScenarioReport {
         // ここでスレッド終了 = kill。write_cursor は進んでいない。
     });
     killer.join().unwrap();
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let b = rd.drain_all();
     let mut host = shirusu_host::ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 1);
@@ -583,6 +595,7 @@ pub fn scenario_producer_storm_32_threads() -> ScenarioReport {
                 let cfg = RingConfig::new(256, 32768);
                 let region = SharedRegion::new(cfg, 1, t).unwrap();
                 let mut w = writer_over(&region, true);
+                // SAFETY: the only reader of this region (SPSC).
                 let mut rd = unsafe { region.reader() };
                 let mut got = 0u64;
                 for i in 0..2000u64 {
@@ -627,6 +640,7 @@ pub fn scenario_soak_loss_accounting() -> ScenarioReport {
     let cfg = RingConfig::new(64, 4096);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer_over(&region, true);
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let payload_of = |seq: u64| -> Vec<u8> {
         let len = ((seq - 1) % 17 + 1) as usize;
@@ -759,6 +773,7 @@ pub fn scenario_detach_publish_storm() -> ScenarioReport {
     }
     // Ring には DETACH 前の 10 件だけがある
     let base = agent.thread_region(1).expect("region");
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut rd = unsafe { RingReader::new(base.clone(), RingConfig::new(64, 4096)) }.unwrap();
     let drained = rd.drain_all().events.len();
     // claim の失敗自体も missing を数えるため、確認用の claim の前に値を捕捉する

@@ -230,6 +230,7 @@ pub fn replay_dst(ops: &[DstOp]) -> Result<Vec<u64>, String> {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let wc: Arc<dyn Clock> = clock.clone();
+    // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe {
         region.writer(
             WriterPolicy {
@@ -239,6 +240,7 @@ pub fn replay_dst(ops: &[DstOp]) -> Result<Vec<u64>, String> {
             wc,
         )
     };
+    // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let mut received: Vec<u64> = Vec::new();
     let mut call = 0u64;

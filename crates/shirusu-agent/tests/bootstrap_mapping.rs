@@ -41,6 +41,7 @@ fn agent_with_zero_initial_slots_records_into_registered_mapping() {
         agent.record_enter(7, 1, 1, 1, 0, b"args-bytes"),
         RecordResult::Written(_)
     ));
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
     let batch = reader.drain_all();
     assert!(batch.integrity_error.is_none());

@@ -78,6 +78,7 @@ pub struct ReserveAllocator;
 unsafe impl GlobalAlloc for ReserveAllocator {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded from GlobalAlloc::alloc's contract.
         let p = unsafe { System.alloc(layout) };
         if p.is_null() {
             carve(layout)
@@ -88,6 +89,7 @@ unsafe impl GlobalAlloc for ReserveAllocator {
 
     #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded from GlobalAlloc::alloc_zeroed's contract.
         let p = unsafe { System.alloc_zeroed(layout) };
         if p.is_null() {
             carve(layout)
@@ -99,12 +101,14 @@ unsafe impl GlobalAlloc for ReserveAllocator {
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if !in_reserve(ptr) {
+            // SAFETY: `ptr` is not a reserve block, so System allocated it with `layout`.
             unsafe { System.dealloc(ptr, layout) }
         }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if !in_reserve(ptr) {
+            // SAFETY: `ptr` is not a reserve block, so System allocated it with `layout`.
             let p = unsafe { System.realloc(ptr, layout, new_size) };
             if !p.is_null() {
                 return p;
@@ -113,11 +117,13 @@ unsafe impl GlobalAlloc for ReserveAllocator {
         // SAFETY: the caller guarantees new_size forms a valid layout.
         let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
         let p = if in_reserve(ptr) {
+            // SAFETY: forwarded from GlobalAlloc::realloc's contract (`new_layout` is valid).
             unsafe { self.alloc(new_layout) }
         } else {
             carve(new_layout)
         };
         if !p.is_null() {
+            // SAFETY: both blocks hold at least the copied length and a fresh block never overlaps the old one.
             unsafe {
                 std::ptr::copy_nonoverlapping(ptr, p, layout.size().min(new_size));
                 self.dealloc(ptr, layout);
@@ -139,10 +145,12 @@ mod tests {
         assert_eq!(b as usize % 64, 0);
         assert!(b as usize >= a as usize + 10);
         // Freeing a carved block is a no-op; it is never handed out again.
+        // SAFETY: `a` is a carved block, which dealloc ignores.
         unsafe { ReserveAllocator.dealloc(a, Layout::from_size_align(10, 8).unwrap()) };
         let c = carve_raw(Layout::from_size_align(10, 8).unwrap());
         assert!(c as usize > b as usize);
         // Growing a carved block copies it.
+        // SAFETY: `c` is a carved block of 10 bytes.
         unsafe {
             *c = 7;
             let grown = ReserveAllocator.realloc(c, Layout::from_size_align(10, 8).unwrap(), 4096);

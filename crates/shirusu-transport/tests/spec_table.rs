@@ -23,7 +23,9 @@ fn mk(desc_cap: usize, pay_cap: usize, no_wait: bool) -> (SharedRegion, RingWrit
     if no_wait {
         policy.max_wait = Duration::ZERO;
     }
+    // SAFETY: the only writer of this region (SPSC).
     let w = unsafe { region.writer(policy, clock) };
+    // SAFETY: the only reader of this region (SPSC).
     let r = unsafe { region.reader() };
     (region, w, r)
 }
@@ -124,6 +126,7 @@ fn c03_payload_written_but_unpublished_is_not_read() {
     // 書き手が Payload を書いた直後に停止した状況を、公開前の生状態で再現する:
     // Payload 領域へ直接書くが write_cursor は進めない。
     let base = region.shm().clone();
+    // SAFETY: the first 6 bytes of the payload region lie inside this live mapping (capacity 256).
     unsafe {
         std::ptr::copy_nonoverlapping(
             b"secret".as_ptr(),
@@ -141,6 +144,7 @@ fn c04_crash_just_before_publish_recovers_nothing_uncommitted() {
     // Descriptor スロットへ直接書くが公開しない = 公開直前クラッシュの再現
     let desc = shirusu_transport::EventDescriptor::new(EventKind::CallEnter, 2);
     let off = region.config().descriptors_offset() + 64; // slot 1
+                                                         // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.
     unsafe {
         std::ptr::copy_nonoverlapping(desc.to_bytes().as_ptr(), region.shm().as_ptr().add(off), 64);
     }
@@ -346,6 +350,7 @@ fn c16_thread_and_slot_reuse_no_generation_crosstalk() {
     let region1 = SharedRegion::new(cfg, 1, 100).unwrap();
     {
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+        // SAFETY: the only writer of this region (SPSC).
         let mut w = unsafe { region1.writer(WriterPolicy::default(), clock) };
         w.write(ev(EventKind::CallEnter, 1, b"gen1"));
     }

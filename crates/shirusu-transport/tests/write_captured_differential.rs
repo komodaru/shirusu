@@ -55,7 +55,9 @@ struct Side {
 fn side(cfg: RingConfig, policy: WriterPolicy, ts: &Arc<ManualTimestampSource>) -> Side {
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     let writer = unsafe { region.writer_with_timestamps(policy, clock, ts.clone()) };
+    // SAFETY: the only reader of this region (SPSC).
     let reader = unsafe { region.reader() };
     Side {
         region,

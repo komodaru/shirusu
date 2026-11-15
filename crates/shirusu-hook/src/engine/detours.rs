@@ -51,7 +51,9 @@ macro_rules! nt_detour {
         pub(super) unsafe extern "system-unwind" fn $name($($arg: $ty),*) -> i32 {
             generic_detour_with($api, &[$(($raw) as u64),*], |original| {
                 let original: unsafe extern "system-unwind" fn($($ty),*) -> i32 =
+                    // SAFETY: `original` is the saved entry of this API, which has this signature.
                     unsafe { std::mem::transmute(original) };
+                // SAFETY: passes the caller's own arguments to the original.
                 (unsafe { original($($arg),*) }) as u64
             }) as i32
         }
@@ -376,6 +378,7 @@ fn terminates_caller(api_id: u32, args: &[u64]) -> bool {
     if api_id == crate::api::TERMINATE_THREAD_API_ID {
         // SAFETY: GetThreadId only queries the handle; an invalid one yields 0.
         let target = unsafe { GetThreadId(handle) };
+        // SAFETY: GetCurrentThreadId has no preconditions.
         return target != 0 && target == unsafe { GetCurrentThreadId() };
     }
     if api_id == crate::api::TERMINATE_JOB_OBJECT_API_ID {

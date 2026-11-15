@@ -271,6 +271,7 @@ pub(super) unsafe extern "system-unwind" fn detour_create_file_w(
         Prepare::Passthrough { original } => {
             // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
             let orig: CreateFileWFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: passes the caller's own arguments to the original, which has this signature.
             return unsafe {
                 orig(
                     file_name,
@@ -359,6 +360,7 @@ pub(super) unsafe extern "system-unwind" fn detour_read_file(
         Prepare::Passthrough { original } => {
             // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
             let orig: ReadFileFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: passes the caller's own arguments to the original, which has this signature.
             return unsafe { orig(file, buffer, bytes_to_read, bytes_read, overlapped) };
         }
         Prepare::Unavailable => return 0,
@@ -470,6 +472,7 @@ pub(super) unsafe extern "system-unwind" fn detour_write_file(
         Prepare::Passthrough { original } => {
             // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
             let orig: WriteFileFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: passes the caller's own arguments to the original, which has this signature.
             return unsafe { orig(file, buffer, bytes_to_write, bytes_written, overlapped) };
         }
         Prepare::Unavailable => return 0,
@@ -569,6 +572,7 @@ pub(super) unsafe extern "system-unwind" fn detour_close_handle(object: Handle) 
         Prepare::Passthrough { original } => {
             // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
             let orig: CloseHandleFn = unsafe { std::mem::transmute(original) };
+            // SAFETY: passes the caller's own arguments to the original, which has this signature.
             return unsafe { orig(object) };
         }
         Prepare::Unavailable => return 0,
@@ -632,6 +636,7 @@ pub(super) unsafe extern "system-unwind" fn detour_get_overlapped_result(
             Prepare::Passthrough { original } => {
                 // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
                 let orig: GetOverlappedResultFn = unsafe { std::mem::transmute(original) };
+                // SAFETY: passes the caller's own arguments to the original, which has this signature.
                 return unsafe { orig(file, overlapped, bytes_transferred, wait) };
             }
             Prepare::Unavailable => return 0,
@@ -716,6 +721,7 @@ pub(super) unsafe extern "system-unwind" fn detour_get_queued_completion_status(
             Prepare::Passthrough { original } => {
                 // SAFETY: 終了手順の進行中は記録せず本物を素通しで呼ぶ。
                 let orig: GetQueuedCompletionStatusFn = unsafe { std::mem::transmute(original) };
+                // SAFETY: passes the caller's own arguments to the original, which has this signature.
                 return unsafe {
                     orig(
                         port,
@@ -771,6 +777,7 @@ pub(super) unsafe extern "system-unwind" fn detour_get_queued_completion_status(
     let dequeued = if overlapped.is_null() {
         0u64
     } else {
+        // SAFETY: the original call wrote a valid OVERLAPPED pointer slot that the caller passed (non-null here).
         (unsafe { *overlapped }) as u64
     };
     let transferred =

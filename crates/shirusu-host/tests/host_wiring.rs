@@ -15,6 +15,7 @@ use std::time::Duration;
 
 fn writer(region: &SharedRegion) -> RingWriter {
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
+    // SAFETY: the only writer of this region (SPSC).
     unsafe {
         region.writer(
             WriterPolicy {
@@ -50,6 +51,7 @@ fn space_is_notified_only_while_the_writer_waits() {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer(&region);
+    // SAFETY: the only reader of this Ring (SPSC).
     let inner = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     let mut nw = NotifyingDrainWorker::new(inner, Arc::new(RingNotify::new().unwrap()), &region);
 
@@ -84,6 +86,7 @@ fn wrapper_reports_the_inner_worker_counts() {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer(&region);
+    // SAFETY: the only reader of this Ring (SPSC).
     let inner = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     let mut nw = NotifyingDrainWorker::new(inner, Arc::new(RingNotify::new().unwrap()), &region);
     write(&mut w, EventKind::CallEnter, 1, 0);
@@ -107,6 +110,7 @@ fn aborted_calls_are_counted_each() {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     let mut w = writer(&region);
+    // SAFETY: the only reader of this Ring (SPSC).
     let mut worker = unsafe { DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
     assert_eq!(worker.aborted_call_count(), 0);
     for call in 1..=3 {

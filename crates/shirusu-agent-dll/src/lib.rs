@@ -200,7 +200,7 @@ mod win {
     use shirusu_agent::Agent;
     use shirusu_hook::api::api_table;
     use shirusu_hook::bootstrap::BOOTSTRAP_VERSION;
-    use shirusu_hook::engine::{self, EngineError, InlineHook, InstalledHooks};
+    use shirusu_hook::engine::{self, EngineError, InlineHooks, InstalledHooks};
     use shirusu_hook::runtime::HookRuntime;
     use shirusu_transport::context::HostMonitor;
     use shirusu_transport::expansion::ExpansionDelivery;
@@ -227,16 +227,16 @@ mod win {
     struct DllState {
         installed: InstalledHooks,
         /// L01: Inline Hook の設置状態（解除時にプロローグを戻すため保持）。
-        inline: Vec<InlineHook>,
+        inline: InlineHooks,
         /// L02: COM Factory 関数の Inline Hook の設置状態。
-        com_factories: Vec<InlineHook>,
+        com_factories: InlineHooks,
         /// L14: WinRT アクティベーション関数の Inline Hook の設置状態。
-        winrt_activations: Vec<InlineHook>,
+        winrt_activations: InlineHooks,
         /// L15: 内部 API (Nt*) の Inline Hook の設置状態（詳細調査
         /// モードでのみ設置する）。
-        internal_hooks: Vec<InlineHook>,
+        internal_hooks: InlineHooks,
         /// L16: コールバック検出フック関数の Inline Hook の設置状態。
-        callbacks: Vec<InlineHook>,
+        callbacks: InlineHooks,
     }
     static STATE: Mutex<Option<DllState>> = Mutex::new(None);
     // Serialize complete lifecycle operations, including initialization before
@@ -253,11 +253,11 @@ mod win {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(DllState {
                 installed: pending,
-                inline: Vec::new(),
-                com_factories: Vec::new(),
-                winrt_activations: Vec::new(),
-                internal_hooks: Vec::new(),
-                callbacks: Vec::new(),
+                inline: InlineHooks::default(),
+                com_factories: InlineHooks::default(),
+                winrt_activations: InlineHooks::default(),
+                internal_hooks: InlineHooks::default(),
+                callbacks: InlineHooks::default(),
             });
         }
     }
@@ -713,11 +713,11 @@ mod win {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(DllState {
             installed,
-            inline: inline_outcome.installed,
-            com_factories: com_factory_outcome.installed,
-            winrt_activations: winrt_activation_outcome.installed,
-            internal_hooks: internal_hook_outcome.installed,
-            callbacks: callback_outcome.installed,
+            inline: InlineHooks::Installed(inline_outcome.installed),
+            com_factories: InlineHooks::Installed(com_factory_outcome.installed),
+            winrt_activations: InlineHooks::Installed(winrt_activation_outcome.installed),
+            internal_hooks: InlineHooks::Installed(internal_hook_outcome.installed),
+            callbacks: InlineHooks::Installed(callback_outcome.installed),
         });
         // This is the dedicated remote injection worker, not an application
         // thread. Its return through ExitThread must not become an unmatched
@@ -774,11 +774,11 @@ mod win {
         // only for installed hooks in their original, still-loaded modules.
         let unrestored = unsafe {
             shirusu_hook::shared_com::restore_all()
-                + engine::uninstall_pending_inline_hooks(&mut state.com_factories)
-                + engine::uninstall_pending_inline_hooks(&mut state.winrt_activations)
-                + engine::uninstall_pending_inline_hooks(&mut state.internal_hooks)
-                + engine::uninstall_pending_inline_hooks(&mut state.callbacks)
-                + engine::uninstall_pending_inline_hooks(&mut state.inline)
+                + state.com_factories.restore()
+                + state.winrt_activations.restore()
+                + state.internal_hooks.restore()
+                + state.callbacks.restore()
+                + state.inline.restore()
                 + engine::uninstall_pending_hooks(&mut state.installed)
         };
         if drained && unrestored == 0 {

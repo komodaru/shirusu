@@ -756,7 +756,7 @@ fn installing_process_pseudo_handle_hook_does_not_recurse() {
         assert!(result.skipped.is_empty());
     }
     assert_eq!(unsafe { GetCurrentProcess() } as usize, usize::MAX);
-    assert!(unsafe { uninstall_inline_hooks(&result.installed) }.is_empty());
+    assert!(unsafe { uninstall_inline_hooks(result.installed) }.is_empty());
     assert!(clear_runtime(&rt));
     assert_eq!(unsafe { GetCurrentProcess() } as usize, usize::MAX);
 }
@@ -873,7 +873,7 @@ fn unpublished_trampolines_release_memory_and_budget() {
     };
     for _ in 0..32 {
         let prepared = prepare_inline(&planned, bitness).unwrap();
-        let address = prepared.0.trampoline;
+        let address = prepared.descriptor.trampoline;
         drop(prepared);
         let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         assert_ne!(
@@ -928,7 +928,11 @@ fn retired_trampolines_are_reused_and_never_writable() {
         original_bytes: bytes[..plan.stolen_len].to_vec(),
         plan,
     };
-    let (hook, _, mut allocation) = prepare_inline(&planned, bitness).unwrap();
+    let PreparedInlineHook {
+        descriptor: hook,
+        mut allocation,
+        ..
+    } = prepare_inline(&planned, bitness).unwrap();
     let protection = |address: usize| {
         let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
         assert_ne!(
@@ -951,7 +955,11 @@ fn retired_trampolines_are_reused_and_never_writable() {
         target,
         address: hook.trampoline,
     }]);
-    let (again, patch, allocation) = prepare_inline(&planned, bitness).unwrap();
+    let PreparedInlineHook {
+        descriptor: again,
+        patch,
+        allocation,
+    } = prepare_inline(&planned, bitness).unwrap();
     assert_eq!(again.trampoline, hook.trampoline, "reused");
     assert_eq!(patch, hook.installed_bytes);
     // Not published again: it returns to the pool, not to the allocator.
@@ -1097,7 +1105,7 @@ fn inline_post_write_failures_retain_protection_and_cache_retry_state() {
         unsafe { VirtualProtect(page, 4096, PAGE_EXECUTE_READ, &mut old) },
         0
     );
-    let hook = InlineHook {
+    let hook = InstalledInlineHook {
         api_id: 17,
         target: page as usize,
         trampoline: 0,
@@ -1192,7 +1200,7 @@ fn inline_restore_preserves_a_foreign_patch_without_changing_protection() {
     unsafe {
         std::ptr::write_bytes(page, 0xdd, 4096);
     }
-    let hook = InlineHook {
+    let hook = InstalledInlineHook {
         api_id: 17,
         target: page as usize,
         trampoline: 0,
@@ -1322,7 +1330,7 @@ fn trampoline_survives_uninstall_for_late_passthrough() {
         unsafe {
             std::ptr::copy_nonoverlapping(code.as_ptr(), trampoline as *mut u8, code.len());
         }
-        let hook = InlineHook {
+        let hook = InstalledInlineHook {
             api_id: 17,
             target: target as usize,
             trampoline: trampoline as usize,
@@ -1343,7 +1351,7 @@ fn trampoline_survives_uninstall_for_late_passthrough() {
             unsafe { call_original::<0>(address, &[]) }
         });
         ready_rx.recv().unwrap();
-        assert!(unsafe { uninstall_inline_hooks(&[hook]) }.is_empty());
+        assert!(unsafe { uninstall_inline_hooks(vec![hook]) }.is_empty());
         go_tx.send(()).unwrap();
         assert_eq!(caller.join().unwrap() as u32, 42);
         unsafe {
@@ -1415,7 +1423,7 @@ fn uninstall_refuses_to_rewrite_a_stopped_instruction_pointer() {
         std::thread::yield_now();
     }
     let entered = flags[1].load(Ordering::Acquire) != 0;
-    let hook = InlineHook {
+    let hook = InstalledInlineHook {
         api_id: 17,
         target: address,
         trampoline: 0,
@@ -1427,14 +1435,14 @@ fn uninstall_refuses_to_rewrite_a_stopped_instruction_pointer() {
         restoration: InlineRestoration::default(),
         caller_boundary: false,
     };
-    let mut pending = vec![hook];
-    let unrestored = unsafe { uninstall_pending_inline_hooks(&mut pending) };
-    assert_eq!(pending.len(), 1);
+    let mut pending = InlineHooks::Installed(vec![hook]);
+    let unrestored = unsafe { pending.restore() };
+    assert!(matches!(&pending, InlineHooks::RestorePending(p) if p.len() == 1));
     flags[0].store(1, Ordering::Release);
     worker.join().unwrap();
     assert!(entered, "worker did not enter its native loop");
     assert_eq!(unrestored, 1);
-    assert_eq!(unsafe { uninstall_pending_inline_hooks(&mut pending) }, 0);
+    assert_eq!(unsafe { pending.restore() }, 0);
     assert!(pending.is_empty());
     assert!(
         unsafe { std::slice::from_raw_parts(page.cast::<u8>(), code.len()) }
@@ -1519,7 +1527,7 @@ fn near_relay_preserves_short_function_tail_and_detects_repeat_install() {
     let patched = unsafe { std::slice::from_raw_parts(target as *const u8, code.len()) };
     assert_eq!(&patched[5..], &[0xc3, 0xcc]);
     assert!(is_existing_detour(target, detour, 64, patched));
-    assert!(unsafe { uninstall_inline_hooks(&[hook]) }.is_empty());
+    assert!(unsafe { uninstall_inline_hooks(vec![hook]) }.is_empty());
     assert_eq!(unsafe { call() }, 42);
     assert_eq!(unsafe { original() }, 42);
     unsafe { VirtualFree(target as *mut c_void, 0, MEM_RELEASE) };

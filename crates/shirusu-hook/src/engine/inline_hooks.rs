@@ -19,10 +19,18 @@ use super::*;
 // - 解除時はプロローグを元へ戻し、停止中のスレッドが中にいない
 //   トランポリンはプロセス終了まで保持し、未復元を正直に報告する。
 
-/// Inline Hook 1 件分。解除時にプロローグを復元するために保持する。
-/// トランポリンはプロセス終了まで保持する。
+// 設置状態の型 (レビュー P2): 用意しただけ ([`PreparedInlineHook`]、未公開)
+// → 公開済み ([`InstalledInlineHook`]) → 復元を試みて残ったもの
+// ([`RestorePendingInlineHook`])。どの型にも Drop での自動復元は無い:
+// 解除はスレッドを止めてパッチを書き戻す処理で、Loader Lock 下 (DllMain の
+// 中) や巻き戻し中に Drop から走らせてはならない。解除は
+// [`uninstall_inline_hooks`] / [`InlineHooks::restore`] を明示的に呼ぶ。
+
+/// 公開済みの Inline Hook 1 件分。解除時にプロローグを復元するために保持する。
+/// トランポリンはプロセス終了まで保持する。捨てても復元はしない (上の注記)。
 #[derive(Debug)]
-pub struct InlineHook {
+#[must_use = "an installed hook stays patched until it is restored explicitly"]
+pub struct InstalledInlineHook {
     pub api_id: u32,
     pub target: usize,
     pub trampoline: usize,
@@ -46,7 +54,7 @@ pub struct InlineRestoration {
     pub(super) code_released: std::sync::atomic::AtomicBool,
     pub(super) cache_pending: std::sync::atomic::AtomicBool,
 }
-impl InlineHook {
+impl InstalledInlineHook {
     pub fn maintenance_pending(&self) -> bool {
         use std::sync::atomic::Ordering;
         self.restoration.protection.load(Ordering::Acquire) != 0
@@ -54,11 +62,68 @@ impl InlineHook {
     }
 }
 
+/// 復元を試みて、まだ戻せていない Inline Hook (停止中のスレッドがパッチ範囲に
+/// いた、保護属性やキャッシュの後始末が残った等)。再試行は
+/// [`InlineHooks::restore`]。
+#[derive(Debug)]
+#[must_use = "a hook whose restoration is pending must be retried"]
+pub struct RestorePendingInlineHook(InstalledInlineHook);
+impl RestorePendingInlineHook {
+    pub fn hook(&self) -> &InstalledInlineHook {
+        &self.0
+    }
+}
+
+/// ひとまとまりの Inline Hook の状態 (Agent DLL が種類ごとに 1 つ持つ)。
+#[derive(Debug)]
+pub enum InlineHooks {
+    /// 設置したまま (まだ解除を試みていない)。
+    Installed(Vec<InstalledInlineHook>),
+    /// 解除を試みて残ったもの。空なら全て戻した。
+    RestorePending(Vec<RestorePendingInlineHook>),
+}
+impl Default for InlineHooks {
+    fn default() -> Self {
+        InlineHooks::Installed(Vec::new())
+    }
+}
+impl InlineHooks {
+    /// 解除 (初回) または再試行。戻せなかった件数を返し、状態は
+    /// `RestorePending` (残りだけ) になる。
+    ///
+    /// # Safety
+    /// [`uninstall_inline_hooks`] と同じ前提。
+    pub unsafe fn restore(&mut self) -> usize {
+        let pending = match std::mem::take(self) {
+            // SAFETY: 呼び出し側の前提をそのまま渡す。
+            InlineHooks::Installed(hooks) => unsafe { uninstall_inline_hooks(hooks) },
+            InlineHooks::RestorePending(pending) => {
+                let hooks = pending.into_iter().map(|p| p.0).collect();
+                // SAFETY: 同上 (復元は途中の状態から続けられる)。
+                unsafe { uninstall_inline_hooks(hooks) }
+            }
+        };
+        let left = pending.len();
+        *self = InlineHooks::RestorePending(pending);
+        left
+    }
+    /// 戻し終えていない件数。
+    pub fn len(&self) -> usize {
+        match self {
+            InlineHooks::Installed(hooks) => hooks.len(),
+            InlineHooks::RestorePending(pending) => pending.len(),
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Inline Hook の設置結果。IAT とは別経路のため、API ごとに設置／
 /// 見送りを記録する。呼び出し側は `skipped` を Coverage 欠落へ写す。
 #[derive(Debug, Default)]
 pub struct InlineInstallOutcome {
-    pub installed: Vec<InlineHook>,
+    pub installed: Vec<InstalledInlineHook>,
     /// (api_id, 見送り理由)
     pub skipped: Vec<(u32, &'static str)>,
 }
@@ -442,7 +507,7 @@ pub(super) fn alloc_near(target: usize, size: usize) -> Option<usize> {
 
 /// 対象アドレスへパッチバイト列を書き込む（保護属性を一時変更し、
 /// 命令キャッシュを捨てる）。
-pub(super) fn restore_inline(hook: &InlineHook) -> Result<(), ()> {
+pub(super) fn restore_inline(hook: &InstalledInlineHook) -> Result<(), ()> {
     restore_inline_with_ops(
         hook,
         |address, size, protection, old| unsafe { VirtualProtect(address, size, protection, old) },
@@ -451,7 +516,7 @@ pub(super) fn restore_inline(hook: &InlineHook) -> Result<(), ()> {
 }
 
 pub(super) fn restore_inline_with_ops(
-    hook: &InlineHook,
+    hook: &InstalledInlineHook,
     mut protect: impl FnMut(*const c_void, usize, u32, *mut u32) -> i32,
     mut flush: impl FnMut(*const c_void, usize) -> i32,
 ) -> Result<(), ()> {
@@ -778,8 +843,12 @@ fn page_holds(trampoline: usize, layout: &TrampolineLayout) -> bool {
             .is_none_or(|relay| holds(trampoline + RELAY_OFFSET, relay))
 }
 
-fn inline_hook(p: &PlannedInline, trampoline: usize, layout: &TrampolineLayout) -> InlineHook {
-    InlineHook {
+fn inline_hook(
+    p: &PlannedInline,
+    trampoline: usize,
+    layout: &TrampolineLayout,
+) -> InstalledInlineHook {
+    InstalledInlineHook {
         api_id: p.slot.report_id(),
         target: p.target,
         trampoline,
@@ -793,11 +862,29 @@ fn inline_hook(p: &PlannedInline, trampoline: usize, layout: &TrampolineLayout) 
     }
 }
 
+/// 用意済みで未公開の Inline Hook: トランポリンとパッチのバイト列。
+/// [`install_planned`] がスレッドを止めて公開したときだけ
+/// [`InstalledInlineHook`] になる。公開しなかったトランポリンは
+/// `TrampolineAllocation` の Drop が返す。
+pub(super) struct PreparedInlineHook {
+    /// 公開後の記述子 (公開するまでは誰にも渡さない)。
+    pub(super) descriptor: InstalledInlineHook,
+    pub(super) patch: Vec<u8>,
+    pub(super) allocation: TrampolineAllocation,
+}
+impl PreparedInlineHook {
+    /// 公開できたものだけを設置済みにする。
+    fn into_installed(self) -> InstalledInlineHook {
+        debug_assert!(self.allocation.published);
+        self.descriptor
+    }
+}
+
 /// Prepare the trampoline and patch bytes before suspending any thread.
 pub(super) fn prepare_inline(
     p: &PlannedInline,
     bitness: u32,
-) -> Result<(InlineHook, Vec<u8>, TrampolineAllocation), &'static str> {
+) -> Result<PreparedInlineHook, &'static str> {
     // Reuse a retired trampoline that already holds exactly these bytes.
     let mut reused = None;
     let mut unsuitable = Vec::new();
@@ -819,8 +906,11 @@ pub(super) fn prepare_inline(
             published: false,
             reused_for: Some(p.target),
         };
-        let patch = layout.patch.clone();
-        return Ok((inline_hook(p, address, &layout), patch, allocation));
+        return Ok(PreparedInlineHook {
+            descriptor: inline_hook(p, address, &layout),
+            patch: layout.patch.clone(),
+            allocation,
+        });
     }
 
     let mut allocation = TrampolineAllocation::reserve()?;
@@ -875,8 +965,11 @@ pub(super) fn prepare_inline(
             return Err("flush-failed");
         }
     }
-    let patch = layout.patch.clone();
-    Ok((inline_hook(p, trampoline, &layout), patch, allocation))
+    Ok(PreparedInlineHook {
+        descriptor: inline_hook(p, trampoline, &layout),
+        patch: layout.patch.clone(),
+        allocation,
+    })
 }
 
 /// Allocate/decode before suspension; the stopped interval only inspects IPs,
@@ -885,7 +978,7 @@ pub(super) fn install_planned(
     rt: &HookRuntime,
     plans: &[PlannedInline],
     bitness: u32,
-) -> Vec<Result<InlineHook, &'static str>> {
+) -> Vec<Result<InstalledInlineHook, &'static str>> {
     if plans.is_empty() {
         return Vec::new();
     }
@@ -895,7 +988,12 @@ pub(super) fn install_planned(
     match SuspendedThreads::suspend_all() {
         Ok(suspender) => {
             for ((p, ready), result) in plans.iter().zip(&mut prepared).zip(&mut status) {
-                let Ok((hook, patch, allocation)) = ready else {
+                let Ok(PreparedInlineHook {
+                    descriptor: hook,
+                    patch,
+                    allocation,
+                }) = ready
+                else {
                     continue;
                 };
                 if suspender.any_ip_in_range(p.target, p.target + p.plan.patch_len) {
@@ -933,10 +1031,9 @@ pub(super) fn install_planned(
         .drain(..)
         .zip(status)
         .map(|(p, status)| {
-            let (hook, _, allocation) = p?;
+            let prepared = p?;
             status?;
-            debug_assert!(allocation.published);
-            Ok(hook)
+            Ok(prepared.into_installed())
         })
         .collect()
 }
@@ -1045,7 +1142,7 @@ pub(super) unsafe fn install_inline_hooks_for(
 /// # Safety
 /// `installed` は install_inline_hooks が返したものであり、対象モジュール
 /// がまだロードされていること。
-pub(super) unsafe fn uninstall_inline_indices(installed: &[InlineHook]) -> Vec<usize> {
+pub(super) unsafe fn uninstall_inline_indices(installed: &[InstalledInlineHook]) -> Vec<usize> {
     if installed.is_empty() {
         return Vec::new();
     }
@@ -1079,26 +1176,21 @@ pub(super) unsafe fn uninstall_inline_indices(installed: &[InlineHook]) -> Vec<u
     unrestored
 }
 
-/// Restore Inline hooks and report API IDs that could not be restored.
+/// Restore Inline hooks. Returns the hooks that could not be restored yet;
+/// descriptors of restored hooks are discarded after resuming all stopped
+/// threads (published trampolines stay alive). Index tracking also handles
+/// repeated API IDs correctly.
 ///
 /// # Safety
-/// Installed target modules must still be loaded, as for `uninstall_pending_inline_hooks`.
-pub unsafe fn uninstall_inline_hooks(installed: &[InlineHook]) -> Vec<u32> {
-    unsafe { uninstall_inline_indices(installed) }
+/// All targets must belong to the original loaded modules and this caller
+/// must exclusively own hook installation and restoration.
+pub unsafe fn uninstall_inline_hooks(
+    mut installed: Vec<InstalledInlineHook>,
+) -> Vec<RestorePendingInlineHook> {
+    let failed = unsafe { uninstall_inline_indices(&installed) };
+    retain_failed_indices(&mut installed, &failed);
+    installed
         .into_iter()
-        .map(|i| installed[i].api_id)
+        .map(RestorePendingInlineHook)
         .collect()
-}
-
-/// Retain only failed Inline restores. Published trampolines stay alive; only
-/// restoration descriptors for successful hooks are discarded after resuming
-/// all stopped threads. Index tracking also handles repeated API IDs correctly.
-///
-/// # Safety
-/// All remaining targets must belong to the original loaded modules and this
-/// caller must exclusively own hook installation and restoration.
-pub unsafe fn uninstall_pending_inline_hooks(installed: &mut Vec<InlineHook>) -> usize {
-    let failed = unsafe { uninstall_inline_indices(installed) };
-    retain_failed_indices(installed, &failed);
-    installed.len()
 }

@@ -52,7 +52,7 @@ pub enum ComInterceptOutcome {
 /// `uninstall_inline_hooks` で行う（agent-dll が保持する）。
 #[derive(Debug, Default)]
 pub struct ComFactoryOutcome {
-    pub installed: Vec<InlineHook>,
+    pub installed: Vec<InstalledInlineHook>,
     /// (関数名, 見送り理由)
     pub skipped: Vec<(&'static str, &'static str)>,
 }
@@ -211,7 +211,7 @@ pub unsafe fn install_com_factory_hooks(rt: &HookRuntime) -> ComFactoryOutcome {
 /// `uninstall_inline_hooks` で行う（agent-dll が保持する）。
 #[derive(Debug, Default)]
 pub struct WinRtActivationOutcome {
-    pub installed: Vec<InlineHook>,
+    pub installed: Vec<InstalledInlineHook>,
     /// (関数名, 見送り理由)
     pub skipped: Vec<(&'static str, &'static str)>,
 }
@@ -284,7 +284,7 @@ pub unsafe fn install_winrt_activation_hooks(rt: &HookRuntime) -> WinRtActivatio
 /// `uninstall_inline_hooks` で行う（agent-dll が保持する）。
 #[derive(Debug, Default)]
 pub struct CallbackOutcome {
-    pub installed: Vec<InlineHook>,
+    pub installed: Vec<InstalledInlineHook>,
     /// (関数名, 見送り理由)
     pub skipped: Vec<(&'static str, &'static str)>,
 }

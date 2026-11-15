@@ -556,7 +556,7 @@ pub const WINRT_ACTIVATION_RO_GET_ACTIVATION_FACTORY: usize = 1;
 /// WinRT アクティベーション関数の数。
 pub const WINRT_ACTIVATION_COUNT: usize = 2;
 /// WinRT アクティベーション関数の Inline Hook を報告するときの ID 基準値
-/// （`InlineHook.api_id` 用。COM Factory の予約値とは別の予約値）。
+/// （`InstalledInlineHook.api_id` 用。COM Factory の予約値とは別の予約値）。
 pub const WINRT_ACTIVATION_REPORT_ID_BASE: u32 = 0xC001_0000;
 
 /// WinRT アクティベーション関数 1 件の定義。

@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 /// コールバック検出フックの Inline Hook を報告するときの ID 基準値
-/// （`InlineHook.api_id` 用。COM Factory / WinRT の予約値とは別の予約値）。
+/// （`InstalledInlineHook.api_id` 用。COM Factory / WinRT の予約値とは別の予約値）。
 pub const CALLBACK_HOOK_REPORT_ID_BASE: u32 = 0xC002_0000;
 /// `GWLP_WNDPROC`（`SetWindowLongPtr` の nIndex）。
 pub const GWLP_WNDPROC: i32 = -4;

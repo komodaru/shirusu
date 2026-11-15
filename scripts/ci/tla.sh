@@ -4,8 +4,10 @@
 # その競合を表現できる証跡) の両方を確認する。
 set -euo pipefail
 cd "$(dirname "$0")/../../tla"
-TLA_TOOLS_SHA256="e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f"
-# A cached or downloaded jar runs as CI code: verify it every time.
+TLA_TOOLS_SHA256="7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f"
+# A cached or downloaded jar runs as CI code: verify it every time. The
+# v1.8.0 asset is a rolling pre-release, so its hash changes when upstream
+# re-uploads it (last re-pinned 2026-11-15).
 if [ -f tla2tools.jar ] && [ "$(sha256sum tla2tools.jar | cut -d' ' -f1)" != "$TLA_TOOLS_SHA256" ]; then
   echo "tla2tools.jar sha256 mismatch, re-downloading" >&2
   rm -f tla2tools.jar
@@ -105,3 +107,25 @@ expect_violation AsymmetricHandshakeTimeoutWriter.cfg "Invariant NoPoisonedUse i
 expect_violation AsymmetricHandshakeTimeoutHazard.cfg "Invariant HazardSafe is violated"
 expect_violation AsymmetricHandshakeNoLiveness.cfg "Temporal propert(y|ies) RemoteProgress.* (was|were) violated"
 expect_violation AsymmetricHandshakeNoLockLiveness.cfg "Temporal propert(y|ies) RemoteProgress.* (was|were) violated"
+
+# Runtime / Hazard の同期契約 (レビュー P2): 解放後の参照なし、排出待ちの完了後に
+# 記録なし、最終的に回収される。各安全策を外した変種では反例が必須。
+java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC -lncheck final -workers auto -config RuntimeHazard.cfg RuntimeHazard
+expect_runtime_violation() {
+  local cfg="$1" pattern="$2"
+  if java -cp tla2tools.jar tlc2.TLC -config "$cfg" RuntimeHazard >"$buggy_log" 2>&1; then
+    echo "ERROR: $cfg で違反が検出されなかった" >&2
+    cat "$buggy_log" >&2
+    exit 1
+  fi
+  if ! grep -Eq "$pattern" "$buggy_log"; then
+    echo "ERROR: $cfg で期待した違反 ($pattern) が見つからない" >&2
+    cat "$buggy_log" >&2
+    exit 1
+  fi
+  echo "OK: $cfg で $pattern を検出した"
+}
+expect_runtime_violation RuntimeHazardNoRevisionRecheck.cfg "Invariant HazardSafe is violated"
+expect_runtime_violation RuntimeHazardLightReclaim.cfg "Invariant HazardSafe is violated"
+expect_runtime_violation RuntimeHazardLightWait.cfg "Invariant DrainedQuiet is violated"
+expect_runtime_violation RuntimeHazardNoGateRecheck.cfg "Invariant DrainedQuiet is violated"

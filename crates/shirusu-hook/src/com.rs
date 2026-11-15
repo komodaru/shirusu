@@ -36,7 +36,7 @@ pub const COM_FACTORY_COUNT: usize = 2;
 pub const COM_FACTORY_CO_CREATE_INSTANCE: usize = 0;
 pub const COM_FACTORY_CO_GET_CLASS_OBJECT: usize = 1;
 /// Factory 関数の Inline Hook を報告するときの ID 基準値
-/// （`InlineHook.api_id` 用。API 表の ID とは別の予約値）。
+/// （`InstalledInlineHook.api_id` 用。API 表の ID とは別の予約値）。
 pub const COM_FACTORY_REPORT_ID_BASE: u32 = 0xC000_0000;
 
 /// COM の GUID（16 バイト。メモリ上の配置と同じく data1 LE u32 +

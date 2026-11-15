@@ -1772,63 +1772,199 @@ impl ThreadLiveness {
     }
 }
 
-/// Key of the calling OS thread, usable by another thread to ask later
-/// whether it terminated ([`thread_key_terminated`]). Never 0. Windows: the
-/// thread ID (no call into the Heap or any lock).
-pub fn current_thread_key() -> u64 {
-    #[cfg(windows)]
-    {
-        // SAFETY: no preconditions.
-        u64::from(unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() })
-    }
-    #[cfg(not(windows))]
-    {
-        THREAD_KEY.try_with(|k| k.0).unwrap_or(u64::MAX)
-    }
+/// Identity of an OS thread that another thread can later ask about
+/// ([`ThreadKey::has_terminated`]) without holding a handle to it. Never 0,
+/// so 0 can mean "no holder" where a key is stored in an atomic.
+///
+/// Windows: the thread ID (low 32 bits) and the low 32 bits of its creation
+/// time (high 32 bits). Thread IDs are reused as soon as a thread object is
+/// freed; the creation time tells a later thread with the same ID apart from
+/// the one the key was taken from (review P1-2). Taken once per thread and
+/// cached in TLS, so later calls make no system call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ThreadKey(std::num::NonZeroU64);
+
+/// What a lookup of a [`ThreadKey`] found (pure decision, tested on every
+/// platform).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeyLookup {
+    /// No thread has the ID any more (`OpenThread` failed with
+    /// `ERROR_INVALID_PARAMETER`).
+    NoSuchThread,
+    /// The thread exists but could not be opened or queried (access denied,
+    /// out of handles, ...). Its state is unknown.
+    Unknown,
+    /// The thread with this ID was opened.
+    Opened {
+        /// Its object is signaled: it terminated.
+        signaled: bool,
+        /// Low 32 bits of its creation time, if it could be read.
+        birth: Option<u32>,
+    },
 }
 
-/// Whether the thread that had `key` terminated. Windows: the thread object
-/// is opened by ID; a failed open means no thread has that ID any more. An ID
-/// the OS already gave to a new thread reads as alive (the caller keeps
-/// waiting, as it would for a live holder).
-pub fn thread_key_terminated(key: u64) -> bool {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-        use windows_sys::Win32::System::Threading::{
-            OpenThread, WaitForSingleObject, THREAD_SYNCHRONIZE,
-        };
-        let Ok(id) = u32::try_from(key) else {
-            return false;
-        };
-        // SAFETY: opens a handle with SYNCHRONIZE access only and closes it.
-        unsafe {
-            let handle = OpenThread(THREAD_SYNCHRONIZE, 0, id);
-            if handle.is_null() {
-                return true;
-            }
-            let done = WaitForSingleObject(handle, 0) == WAIT_OBJECT_0;
-            CloseHandle(handle);
-            done
+impl KeyLookup {
+    /// Whether the thread the key was taken from has terminated. Only proof
+    /// counts: an unknown state reads as alive (the caller keeps waiting, as
+    /// it would for a live holder), never as terminated.
+    pub fn terminated(self, key_birth: u32) -> bool {
+        match self {
+            KeyLookup::NoSuchThread => true,
+            KeyLookup::Unknown => false,
+            KeyLookup::Opened { signaled: true, .. } => true,
+            // The ID now belongs to a later thread: the keyed one is gone.
+            KeyLookup::Opened {
+                signaled: false,
+                birth: Some(birth),
+            } => birth != key_birth,
+            KeyLookup::Opened {
+                signaled: false,
+                birth: None,
+            } => false,
         }
     }
+}
+
+impl ThreadKey {
+    /// The calling thread's key. `None` only while the thread is being torn
+    /// down (its TLS is gone) or, on Windows, when its creation time cannot
+    /// be read; the caller must then not record a holder it cannot check.
+    pub fn current() -> Option<Self> {
+        CURRENT_THREAD_KEY
+            .try_with(|k| {
+                if let Some(key) = k.get() {
+                    return Some(key);
+                }
+                let key = Self::take()?;
+                k.set(Some(key));
+                Some(key)
+            })
+            .ok()
+            .flatten()
+    }
+
+    #[cfg(windows)]
+    fn take() -> Option<Self> {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, GetCurrentThreadId};
+        // SAFETY: no preconditions; the pseudo handle names the caller.
+        let (id, birth) = unsafe { (GetCurrentThreadId(), thread_birth(GetCurrentThread())?) };
+        Self::from_parts(id, birth)
+    }
+
     #[cfg(not(windows))]
-    {
-        !LIVE_THREAD_KEYS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&key)
+    fn take() -> Option<Self> {
+        THREAD_KEY
+            .try_with(|k| Self::from_parts(k.0, 0))
+            .ok()
+            .flatten()
+    }
+
+    /// Key from a thread ID and the low bits of its creation time. `None`
+    /// for ID 0, which no thread has.
+    pub fn from_parts(id: u32, birth: u32) -> Option<Self> {
+        if id == 0 {
+            return None;
+        }
+        std::num::NonZeroU64::new(u64::from(id) | (u64::from(birth) << 32)).map(Self)
+    }
+    pub fn id(self) -> u32 {
+        self.0.get() as u32
+    }
+    pub fn birth(self) -> u32 {
+        (self.0.get() >> 32) as u32
+    }
+    /// For storing in an atomic (0 is never a key).
+    pub fn to_bits(self) -> u64 {
+        self.0.get()
+    }
+    pub fn from_bits(bits: u64) -> Option<Self> {
+        std::num::NonZeroU64::new(bits).map(Self)
+    }
+
+    /// Looks the key's thread up (Windows: `OpenThread` by ID).
+    pub fn lookup(self) -> KeyLookup {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{
+                CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0,
+            };
+            use windows_sys::Win32::System::Threading::{
+                OpenThread, WaitForSingleObject, THREAD_QUERY_LIMITED_INFORMATION,
+                THREAD_SYNCHRONIZE,
+            };
+            // SAFETY: opens a handle with SYNCHRONIZE and limited query
+            // access only, and closes it before returning.
+            unsafe {
+                let handle = OpenThread(
+                    THREAD_SYNCHRONIZE | THREAD_QUERY_LIMITED_INFORMATION,
+                    0,
+                    self.id(),
+                );
+                if handle.is_null() {
+                    return match GetLastError() {
+                        ERROR_INVALID_PARAMETER => KeyLookup::NoSuchThread,
+                        _ => KeyLookup::Unknown,
+                    };
+                }
+                let signaled = WaitForSingleObject(handle, 0) == WAIT_OBJECT_0;
+                let birth = thread_birth(handle);
+                CloseHandle(handle);
+                KeyLookup::Opened { signaled, birth }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            // Keys are never reused here: a missing key is a finished thread.
+            let live = LIVE_THREAD_KEYS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&self.id());
+            if live {
+                KeyLookup::Opened {
+                    signaled: false,
+                    birth: Some(self.birth()),
+                }
+            } else {
+                KeyLookup::NoSuchThread
+            }
+        }
+    }
+
+    /// Whether the thread the key was taken from has terminated. `true` is
+    /// final. Unknown states (access denied) read as alive.
+    pub fn has_terminated(self) -> bool {
+        self.lookup().terminated(self.birth())
     }
 }
 
+thread_local! {
+    static CURRENT_THREAD_KEY: std::cell::Cell<Option<ThreadKey>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Low 32 bits of a thread's creation time (`GetThreadTimes`).
+#[cfg(windows)]
+unsafe fn thread_birth(handle: windows_sys::Win32::Foundation::HANDLE) -> Option<u32> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetThreadTimes;
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: handle is a valid thread handle with query access (caller).
+    let ok = unsafe { GetThreadTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) };
+    (ok != 0).then_some(created.dwLowDateTime)
+}
+
 #[cfg(not(windows))]
-static LIVE_THREAD_KEYS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+static LIVE_THREAD_KEYS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
 #[cfg(not(windows))]
-static NEXT_THREAD_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static NEXT_THREAD_KEY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 #[cfg(not(windows))]
-struct ThreadKey(u64);
+struct PortableThreadId(u32);
 #[cfg(not(windows))]
-impl ThreadKey {
+impl PortableThreadId {
     fn new() -> Self {
         let key = NEXT_THREAD_KEY.fetch_add(1, Ordering::Relaxed);
         LIVE_THREAD_KEYS
@@ -1839,7 +1975,7 @@ impl ThreadKey {
     }
 }
 #[cfg(not(windows))]
-impl Drop for ThreadKey {
+impl Drop for PortableThreadId {
     fn drop(&mut self) {
         LIVE_THREAD_KEYS
             .lock()
@@ -1849,7 +1985,7 @@ impl Drop for ThreadKey {
 }
 #[cfg(not(windows))]
 thread_local! {
-    static THREAD_KEY: ThreadKey = ThreadKey::new();
+    static THREAD_KEY: PortableThreadId = PortableThreadId::new();
 }
 
 impl Drop for ThreadLiveness {
@@ -2037,6 +2173,93 @@ mod tests {
 #[cfg(test)]
 mod portable_tests {
     use super::*;
+
+    /// P1-2: a lookup counts as termination only on proof. Every
+    /// combination of the lookup outcome is listed (no catch-all).
+    #[test]
+    fn key_lookup_decides_termination_only_on_proof() {
+        let k = 0x1234_5678;
+        let table = [
+            (KeyLookup::NoSuchThread, true),
+            // Access denied and friends: the thread may well be alive.
+            (KeyLookup::Unknown, false),
+            (
+                KeyLookup::Opened {
+                    signaled: true,
+                    birth: Some(k),
+                },
+                true,
+            ),
+            (
+                KeyLookup::Opened {
+                    signaled: true,
+                    birth: None,
+                },
+                true,
+            ),
+            (
+                KeyLookup::Opened {
+                    signaled: false,
+                    birth: Some(k),
+                },
+                false,
+            ),
+            // Same ID, later thread: the keyed thread is gone.
+            (
+                KeyLookup::Opened {
+                    signaled: false,
+                    birth: Some(k ^ 1),
+                },
+                true,
+            ),
+            (
+                KeyLookup::Opened {
+                    signaled: false,
+                    birth: None,
+                },
+                false,
+            ),
+        ];
+        for (lookup, terminated) in table {
+            assert_eq!(lookup.terminated(k), terminated, "{lookup:?}");
+        }
+    }
+
+    #[test]
+    fn thread_key_round_trips_and_is_never_zero() {
+        assert_eq!(ThreadKey::from_parts(0, 5), None);
+        let key = ThreadKey::from_parts(8, 0xdead_beef).unwrap();
+        assert_eq!((key.id(), key.birth()), (8, 0xdead_beef));
+        assert_eq!(ThreadKey::from_bits(key.to_bits()), Some(key));
+        assert_eq!(ThreadKey::from_bits(0), None);
+    }
+
+    /// The calling thread is alive; a thread that finished is terminated;
+    /// the key is stable within a thread.
+    #[test]
+    fn thread_key_tracks_real_threads() {
+        let me = ThreadKey::current().unwrap();
+        assert_eq!(ThreadKey::current(), Some(me));
+        assert!(!me.has_terminated());
+        let other = std::thread::spawn(|| ThreadKey::current().unwrap())
+            .join()
+            .unwrap();
+        assert_ne!(other, me);
+        // Windows: the thread object may linger until its last handle closes;
+        // it is signaled (or gone) either way once join returned.
+        assert!(other.has_terminated());
+    }
+
+    /// Windows: a key whose ID is a live thread's but whose creation time is
+    /// not (the ID was reused) reads as terminated.
+    #[cfg(windows)]
+    #[test]
+    fn reused_thread_id_reads_as_terminated() {
+        let me = ThreadKey::current().unwrap();
+        let forged = ThreadKey::from_parts(me.id(), me.birth() ^ 1).unwrap();
+        assert!(forged.has_terminated());
+        assert!(!me.has_terminated());
+    }
     #[test]
     fn positive_waits_round_up_without_using_infinite() {
         assert_eq!(wait_timeout_millis(Duration::ZERO), 0);

@@ -62,7 +62,13 @@ impl Drop for ExclusiveGuard<'_> {
 }
 
 use shirusu_transport::ring::RingWriter;
-use shirusu_transport_win::ThreadLiveness;
+use shirusu_transport_win::{ThreadKey, ThreadLiveness};
+
+/// Lock word of a holder whose [`ThreadKey`] could not be taken. Such a
+/// holder is always waited for (it reads as alive), never declared dead.
+/// Not a real key: Windows thread IDs are multiples of 4, so no thread has
+/// ID `u32::MAX`, and the portable IDs are a small counter.
+const UNCHECKABLE_HOLDER: u64 = u64::MAX;
 
 thread_local! {
     /// Its address identifies the calling OS thread while it lives.
@@ -269,7 +275,10 @@ impl WriterCell {
     /// setting it) so the fast path stays closed. A live holder is waited
     /// for, however long it takes, as in the owner_busy wait.
     fn lock_exclusive(&self) -> Option<ExclusiveGuard<'_>> {
-        let me = shirusu_transport_win::current_thread_key();
+        // A thread whose key cannot be taken (TLS torn down, or its creation
+        // time unreadable) holds the lock as `UNCHECKABLE_HOLDER`: waiters
+        // treat it as alive instead of guessing from a bare thread ID.
+        let me = ThreadKey::current().map_or(UNCHECKABLE_HOLDER, ThreadKey::to_bits);
         let mut spins = 0u32;
         loop {
             match self
@@ -281,7 +290,9 @@ impl WriterCell {
                 Err(holder) => {
                     spins = spins.wrapping_add(1);
                     if spins.is_multiple_of(SPINS_PER_LIVENESS_CHECK)
-                        && shirusu_transport_win::thread_key_terminated(holder)
+                        && ThreadKey::from_bits(holder)
+                            .filter(|_| holder != UNCHECKABLE_HOLDER)
+                            .is_some_and(ThreadKey::has_terminated)
                         && self.exclusive.load(Ordering::Acquire) == holder
                     {
                         // The holder (owner or not) died inside the writer:

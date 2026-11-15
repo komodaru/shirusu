@@ -1,15 +1,15 @@
 error[E0382]: use of moved value: `handle`
- --> tests/ui/owned_handle_is_not_copy.rs:9:11
+ --> tests/ui/windows/owned_handle_is_not_copy.rs:9:11
   |
 7 |     let handle = unsafe { OwnedHandle::from_raw(4) }.unwrap();
-  |         ------ move occurs because `handle` has type `OwnedHandle`, which does not implement the `Copy` trait
+  |         ------ move occurs because `handle` has type `shirusu_transport_win::OwnedHandle`, which does not implement the `Copy` trait
 8 |     close(handle);
   |           ------ value moved here
 9 |     close(handle);
   |           ^^^^^^ value used here after move
   |
 note: consider changing this parameter type in function `close` to borrow instead if owning the value isn't necessary
- --> tests/ui/owned_handle_is_not_copy.rs:4:13
+ --> tests/ui/windows/owned_handle_is_not_copy.rs:4:13
   |
 4 | fn close(_: OwnedHandle) {}
   |    -----    ^^^^^^^^^^^ this parameter takes ownership of the value

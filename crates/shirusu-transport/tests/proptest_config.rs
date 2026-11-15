@@ -96,7 +96,11 @@ fn wrapping_capacities_no_longer_give_a_small_region() {
 /// 上限内でも確保できない大きさは abort ではなく Err になる。
 #[test]
 fn unallocatable_region_is_an_error_not_an_abort() {
-    let cfg = RingConfig::try_new(2, 1usize << 60).unwrap();
+    // 上限ちょうど (64 bit では 2^63 付近、32 bit では 2 GiB 付近) は
+    // 連続して確保できない。
+    let payload = isize::MAX as usize - CACHE_LINE - CONTROL_SIZE - 2 * DESCRIPTOR_SIZE;
+    let cfg = RingConfig::try_new(2, payload).unwrap();
+    assert_eq!(cfg.required_len(), isize::MAX as usize - CACHE_LINE);
     assert!(matches!(
         SharedRegion::new(cfg, 1, 1),
         Err(ShmError::AllocFailed { .. })

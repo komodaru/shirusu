@@ -7,11 +7,11 @@ import subprocess
 import tempfile
 root = Path(__file__).resolve().parents[2]
 cases = [
-    ('com_factory_address', 'crates/shirusu-hook/src/com.rs',
+    ('com_factory_address', 'crates/shirusu-api-catalog/src/com.rs',
      [('("output_address", Ty::U64, ValueKind::Pointer)', '("output_address", Ty::U64, ValueKind::Scalar)')],
      'shirusu-probe', 'com_factory', 'relocated_com_factories'),
     ('wide_abi', 'crates/shirusu-hook/src/engine_generated.inc',
-     [('unsafe { original() }\n    })\n', '(unsafe { original() }) as u32 as u64\n    })\n')],
+     [('unsafe { original() }\n    }\n    generated_detour(86,', '(unsafe { original() }) as u32 as u64\n    }\n    generated_detour(86,')],
      'shirusu-hook', 'generated_abi', 'generated_abi_preserves_wide'),
     ('float_bits', 'crates/shirusu-hook/src/engine_generated.inc',
      [('a4.to_bits() as u64', 'a4 as u64')],

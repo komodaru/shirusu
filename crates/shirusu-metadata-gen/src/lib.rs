@@ -1108,7 +1108,7 @@ pub fn emit_engine_inc(generated: &Generated, winmd_version: &str) -> String {
             params.join(", ")
         ));
         out.push_str(&format!(
-            "    unsafe fn invoke(original: usize, {args_name}: &[u64]) -> u64 {{\n        let original: unsafe extern \"{abi}\" fn({}) -> {ret} = unsafe {{ std::mem::transmute(original) }};\n        {raw_return}\n    }}\n",
+            "    unsafe fn invoke(original: usize, {args_name}: &[u64]) -> u64 {{\n        // SAFETY: generated_detour passes the original entry of this API, whose ABI is this signature.\n        let original: unsafe extern \"{abi}\" fn({}) -> {ret} = unsafe {{ std::mem::transmute(original) }};\n        // SAFETY: the Detour's own arguments, restored to their native types, go to the original.\n        {raw_return}\n    }}\n",
             types.join(", ")
         ));
         let invoke = format!(

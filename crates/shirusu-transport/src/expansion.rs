@@ -59,10 +59,27 @@ pub enum DeliveredMapping {
     /// 同一プロセスの Host が作った領域。実体は Arc で共有されるので、
     /// Host が先に手放しても Agent の利用中は解放されない。
     InProcess(Shm),
-    /// 受け取り側プロセスで有効な File Mapping ハンドル値 (Windows
-    /// プロセス間)。`shirusu_transport_win::HandleValue` と同じ数値表現で、
-    /// Agent は `SharedMapping::from_handle_value` で自分の写像を作る。
-    Handle(usize),
+    /// 受け取り側プロセスで有効な File Mapping ハンドル (Windows
+    /// プロセス間)。Agent は所有権を引き受けて自分の写像を作る。
+    Handle(DeliveredHandle),
+}
+
+/// 配送されるハンドル値。作るには、値が「この配送を登録するプロセスで
+/// 有効な File Mapping ハンドルで、登録する側がそれを所有する (ほかに
+/// 閉じる者がいない)」ことを約束する (`unsafe fn new`)。安全な登録 API が
+/// 任意の数を閉じたり写像したりしないための型 (レビュー P1-4)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeliveredHandle(usize);
+impl DeliveredHandle {
+    /// # Safety
+    /// `raw` は、この配送を登録するプロセスで有効な File Mapping ハンドルで、
+    /// 登録する側に所有権が移ること (配送は 1 回だけ登録する)。
+    pub const unsafe fn new(raw: usize) -> Self {
+        Self(raw)
+    }
+    pub const fn raw(self) -> usize {
+        self.0
+    }
 }
 
 /// Host → Agent の管理スレッド。新しい Mapping の情報。

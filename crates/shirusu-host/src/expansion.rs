@@ -10,7 +10,7 @@
 //! `target_pid` へ Mapping を duplicate したハンドル値を配送し、Agent は
 //! 自分の写像を作る (Host は自分の写像を保持し続け、そこから回収する)。
 
-use shirusu_transport::expansion::DeliveredMapping;
+use shirusu_transport::expansion::{DeliveredHandle, DeliveredMapping};
 use shirusu_transport::expansion::{
     ExpansionDeliverer, ExpansionDelivery, ExpansionRequest, EXPANDED_SLOT_GENERATION,
 };
@@ -146,7 +146,9 @@ impl ExpansionService {
             None => None,
         };
         let delivered = match handle_value {
-            Some(h) => DeliveredMapping::Handle(h),
+            // SAFETY: 値は target_pid へ複製したハンドルで、そのプロセスの
+            // Agent だけがこの配送を登録する (所有権は Agent へ移る)。
+            Some(h) => DeliveredMapping::Handle(unsafe { DeliveredHandle::new(h.raw()) }),
             None => DeliveredMapping::InProcess(mapping.shm().clone()),
         };
         // 保持: Host は自分の写像から回収する (プロセス内の Agent は実体を

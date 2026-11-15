@@ -1,0 +1,11 @@
+error[E0597]: `owner` does not live long enough
+  --> tests/ui/borrowed_handle_outlives_owner.rs:8:20
+   |
+ 7 |         let owner = unsafe { OwnedHandle::from_raw(4) }.unwrap();
+   |             ----- binding `owner` declared here
+ 8 |         borrowed = owner.borrow();
+   |                    ^^^^^ borrowed value does not live long enough
+ 9 |     }
+   |     - `owner` dropped here while still borrowed
+10 |     let _ = borrowed.raw();
+   |             -------- borrow later used here

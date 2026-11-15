@@ -96,9 +96,13 @@ fn main() {
                 .expect("--len");
             let cfg = RingConfig::new(4096, 1024 * 1024);
             assert_eq!(len, cfg.required_len(), "mapping len mismatch");
-            let mapping =
-                unsafe { SharedMapping::from_handle_value(handle.parse().expect("handle"), len) }
-                    .expect("map view");
+            // SAFETY: 親が継承可能にして渡した、このプロセスで有効な Mapping。
+            // 継承した値は子の所有で、閉じても親のハンドルは残る。
+            let mapping = SharedMapping::from_owned(
+                unsafe { inherited(handle.parse().expect("handle")) },
+                len,
+            )
+            .expect("map view");
             let clock: Arc<dyn Clock> = shirusu_transport::clock::system_clock();
             let mut w = unsafe {
                 shirusu_transport::RingWriter::new(
@@ -119,11 +123,12 @@ fn main() {
                 }
             }
             if let Some(eh) = arg(&args, "--event-handle") {
-                let event = unsafe {
-                    EventObject::from_handle_value(eh.parse().expect("event handle"), true)
-                };
+                // SAFETY: 同上 (継承したイベント)。
+                let event = EventObject::from_owned(
+                    unsafe { inherited(eh.parse().expect("event handle")) },
+                    true,
+                );
                 let _ = event.set(); // data_ready
-                std::mem::forget(event); // 親のイベントを閉じない
             }
             println!("producer mapping: wrote {count} events");
             return;
@@ -168,7 +173,11 @@ fn agent_from_mapping(
     let agent = Agent::new(pool.clone(), cfg, Arc::new(HostMonitor::always_alive()));
     let delivery = ExpansionDelivery {
         len,
-        mapping: shirusu_transport::expansion::DeliveredMapping::Handle(mapping_handle),
+        // SAFETY: 親が継承可能にして渡した、このプロセスで有効な Mapping。
+        // 登録はこの 1 回だけ。
+        mapping: shirusu_transport::expansion::DeliveredMapping::Handle(unsafe {
+            shirusu_transport::expansion::DeliveredHandle::new(mapping_handle)
+        }),
         generation: EXPANDED_SLOT_GENERATION,
     };
     let slot_index = agent
@@ -204,11 +213,11 @@ fn agent_stress(args: &[String]) {
     let (agent, _pool) = agent_from_mapping(args);
 
     // SAFETY: いずれも Host (supervisor) が継承可能にして渡した、この
-    // プロセスで有効なイベントハンドル。所有は持たない (forget する)。
+    // プロセスで有効なイベントハンドル (継承した値は子の所有)。
     let data_ready = ProcessNotify {
-        data_ready: unsafe { EventObject::from_handle_value(parse("--data-ready"), true) },
+        data_ready: EventObject::from_owned(unsafe { inherited(parse("--data-ready")) }, true),
     };
-    let phase_done = unsafe { EventObject::from_handle_value(parse("--phase-done"), true) };
+    let phase_done = EventObject::from_owned(unsafe { inherited(parse("--phase-done")) }, true);
 
     let handle = agent.thread_begin(1).expect("thread_begin");
     assert_eq!(
@@ -244,9 +253,6 @@ fn agent_stress(args: &[String]) {
     }
     assert!(agent.thread_detach(1), "thread_detach");
     let _ = phase_done.set();
-
-    std::mem::forget(data_ready);
-    std::mem::forget(phase_done);
     println!(
         "producer agent-stress: recorded={count} dropped_retries={dropped_retries} \
          degraded_retries={degraded_retries} elapsed={:?}",
@@ -281,12 +287,12 @@ fn agent_path(args: &[String]) {
     let (agent, pool) = agent_from_mapping(args);
 
     // SAFETY: いずれも Host (supervisor) が継承可能にして渡した、この
-    // プロセスで有効なイベントハンドル。所有は持たない (forget する)。
+    // プロセスで有効なイベントハンドル (継承した値は子の所有)。
     let data_ready = ProcessNotify {
-        data_ready: unsafe { EventObject::from_handle_value(parse("--data-ready"), true) },
+        data_ready: EventObject::from_owned(unsafe { inherited(parse("--data-ready")) }, true),
     };
-    let phase_done = unsafe { EventObject::from_handle_value(parse("--phase-done"), true) };
-    let reclaim_ok = unsafe { EventObject::from_handle_value(parse("--reclaim-ok"), true) };
+    let phase_done = EventObject::from_owned(unsafe { inherited(parse("--phase-done")) }, true);
+    let reclaim_ok = EventObject::from_owned(unsafe { inherited(parse("--reclaim-ok")) }, true);
 
     let record_range = |agent: &Agent, thread_id: u64, from: u64, count: u64| {
         for i in from..from + count {
@@ -342,12 +348,19 @@ fn agent_path(args: &[String]) {
     record_range(&agent, 2, count1, count2);
     assert!(agent.thread_detach(2), "thread_detach phase 2");
     let _ = phase_done.set();
-
-    std::mem::forget(data_ready);
-    std::mem::forget(phase_done);
-    std::mem::forget(reclaim_ok);
     println!(
         "producer agent-path: phase1={count1} phase2={count2} slot={} gen {}->{} ",
         h1.index, h1.generation, h2.generation
     );
+}
+
+/// 継承したハンドル値を引き受ける。
+///
+/// # Safety
+/// `raw` は親が継承可能にして渡した、このプロセスで有効なハンドルで、
+/// このプロセスでは 1 回だけ引き受けること。
+#[cfg(windows)]
+unsafe fn inherited(raw: usize) -> shirusu_transport_win::OwnedHandle {
+    // SAFETY: 呼び出し側の約束をそのまま渡す。
+    unsafe { shirusu_transport_win::OwnedHandle::from_raw(raw) }.expect("non-zero handle")
 }

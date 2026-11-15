@@ -46,8 +46,68 @@ impl std::fmt::Display for WinError {
 impl std::error::Error for WinError {}
 pub type Result<T> = std::result::Result<T, WinError>;
 
-/// OS ハンドルの数値表現（プロセス間受け渡し用）。共有メモリに置く値ではない。
-pub type HandleValue = usize;
+/// このプロセスが所有するハンドル。Drop で一度だけ閉じる (Windows 以外は
+/// 何もしない)。複製も Copy もできないので、二重に閉じることも、閉じた
+/// 後に使うこともない (レビュー P1-4)。
+#[derive(Debug, PartialEq, Eq)]
+pub struct OwnedHandle {
+    raw: usize,
+}
+// SAFETY: カーネルオブジェクトのハンドルはどのスレッドからも使え、閉じられる。
+unsafe impl Send for OwnedHandle {}
+// SAFETY: &OwnedHandle で行う操作 (待機・照会・複製) はスレッドセーフ。
+unsafe impl Sync for OwnedHandle {}
+impl OwnedHandle {
+    /// 受け取ったハンドル値の所有権を引き受ける。0 は None。
+    ///
+    /// # Safety
+    /// `raw` はこのプロセスで有効なハンドルで、ほかの誰も閉じないこと
+    /// (継承や DuplicateHandle でこのプロセスへ渡された値など)。
+    pub unsafe fn from_raw(raw: usize) -> Option<Self> {
+        (raw != 0).then_some(Self { raw })
+    }
+    pub fn borrow(&self) -> BorrowedHandle<'_> {
+        BorrowedHandle {
+            raw: self.raw,
+            _owner: std::marker::PhantomData,
+        }
+    }
+}
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            // SAFETY: 所有するハンドルを一度だけ閉じる。
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.raw as _) };
+        }
+    }
+}
+
+/// 借りたハンドル。持ち主 ([`OwnedHandle`] など) より長く生きられない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BorrowedHandle<'a> {
+    raw: usize,
+    _owner: std::marker::PhantomData<&'a OwnedHandle>,
+}
+impl BorrowedHandle<'_> {
+    /// 数値 (継承ハンドルをコマンドラインで子へ伝えるときなど)。
+    pub fn raw(self) -> usize {
+        self.raw
+    }
+}
+
+/// 別のプロセスで有効なハンドル値。このプロセスでは使えない (閉じるには
+/// [`close_remote_handle`])。受け取った側は [`OwnedHandle::from_raw`] で
+/// 引き受ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RemoteHandle {
+    raw: usize,
+}
+impl RemoteHandle {
+    pub fn raw(self) -> usize {
+        self.raw
+    }
+}
 
 /// Peak memory counters of a process (review 2026-11-14 V3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -58,10 +118,10 @@ pub struct ProcessPeakMemory {
 }
 
 /// 起動したプロセスのハンドル一式（CREATE_SUSPENDED 起動用）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct SpawnedProcess {
-    pub process: HandleValue,
-    pub thread: HandleValue,
+    pub process: OwnedHandle,
+    pub thread: OwnedHandle,
     pub pid: u32,
 }
 
@@ -103,11 +163,28 @@ mod imp {
             code: unsafe { GetLastError() },
         }
     }
-    pub(super) fn h(v: HandleValue) -> HANDLE {
-        v as HANDLE
+    pub(super) fn h(v: BorrowedHandle<'_>) -> HANDLE {
+        v.raw() as HANDLE
     }
-    pub(super) fn hv(h: HANDLE) -> HandleValue {
-        h as HandleValue
+    /// 作ったばかりのハンドルを所有する (null でないことは呼び出し側が確認済み)。
+    pub(super) fn owned(handle: HANDLE) -> OwnedHandle {
+        OwnedHandle {
+            raw: handle as usize,
+        }
+    }
+    /// このプロセスの疑似ハンドル (閉じる必要も、閉じられることもない)。
+    #[cfg(test)]
+    pub(super) fn current_process() -> BorrowedHandle<'static> {
+        BorrowedHandle {
+            // SAFETY: no preconditions.
+            raw: unsafe { GetCurrentProcess() } as usize,
+            _owner: std::marker::PhantomData,
+        }
+    }
+    pub(super) fn remote(handle: HANDLE) -> RemoteHandle {
+        RemoteHandle {
+            raw: handle as usize,
+        }
     }
 
     /// 現在のユーザーの SID だけに GENERIC_ALL を許可する DACL 付き
@@ -254,13 +331,9 @@ mod imp {
     }
 
     pub struct SharedMapping {
-        handle: HANDLE,
+        handle: OwnedHandle,
         shm: Shm,
     }
-    // SAFETY: handle はカーネルオブジェクトで、どのスレッドからも閉じられる。
-    unsafe impl Send for SharedMapping {}
-    // SAFETY: &self の操作 (DuplicateHandle / SetHandleInformation) はスレッドセーフ。
-    unsafe impl Sync for SharedMapping {}
     impl SharedMapping {
         pub fn create(len: usize) -> Result<Self> {
             if len < shirusu_transport::layout::CONTROL_SIZE {
@@ -280,14 +353,7 @@ mod imp {
             if handle.is_null() {
                 return Err(last_err("CreateFileMappingW"));
             }
-            match map_view(handle, len, "MapViewOfFile") {
-                Ok(shm) => Ok(Self { handle, shm }),
-                Err(e) => {
-                    // SAFETY: 作ったばかりのハンドルを閉じる。
-                    unsafe { CloseHandle(handle) };
-                    Err(e)
-                }
-            }
+            Self::from_owned(owned(handle), len)
         }
         /// アクセス制御付きで作る。仕様: 共有メモリのセクションには、Host と対象
         /// プロセス以外から開けないアクセス制御を付ける。DACL は現在のユーザーの
@@ -313,28 +379,20 @@ mod imp {
             if handle.is_null() {
                 return Err(last_err("CreateFileMappingW(restricted)"));
             }
-            match map_view(handle, len, "MapViewOfFile(restricted)") {
-                Ok(shm) => Ok(Self { handle, shm }),
-                Err(e) => {
-                    // SAFETY: 作ったばかりのハンドルを閉じる。
-                    unsafe { CloseHandle(handle) };
-                    Err(e)
-                }
-            }
+            Self::from_owned(owned(handle), len)
         }
-        ///
-        /// # Safety
-        /// `handle_value` は有効な File Mapping ハンドルで、`len` はその大きさ以下であること。
-        pub unsafe fn from_handle_value(handle_value: HandleValue, len: usize) -> Result<Self> {
-            let handle = h(handle_value);
-            let shm = map_view(handle, len, "MapViewOfFile(from handle)")?;
+        /// 所有するハンドルから `len` バイトのビューを作る。File Mapping で
+        /// ない、または `len` より小さいハンドルは MapViewOfFile が拒む。
+        /// 失敗したらハンドルは閉じる。
+        pub fn from_owned(handle: OwnedHandle, len: usize) -> Result<Self> {
+            let shm = map_view(h(handle.borrow()), len, "MapViewOfFile")?;
             Ok(Self { handle, shm })
         }
-        pub fn handle_value(&self) -> HandleValue {
-            hv(self.handle)
+        pub fn as_handle(&self) -> BorrowedHandle<'_> {
+            self.handle.borrow()
         }
         /// 対象プロセスへ DuplicateHandle で渡す。
-        pub fn duplicate_to_process(&self, target_pid: u32) -> Result<HandleValue> {
+        pub fn duplicate_to_process(&self, target_pid: u32) -> Result<RemoteHandle> {
             let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
             if target.is_null() {
                 return Err(last_err("OpenProcess"));
@@ -343,7 +401,7 @@ mod imp {
             let ok = unsafe {
                 DuplicateHandle(
                     GetCurrentProcess(),
-                    self.handle,
+                    h(self.handle.borrow()),
                     target,
                     &mut dup,
                     0,
@@ -355,12 +413,16 @@ mod imp {
             if ok == 0 {
                 return Err(last_err("DuplicateHandle"));
             }
-            Ok(hv(dup))
+            Ok(remote(dup))
         }
         /// 継承可能なハンドルにする（CreateProcess で子へ渡す E2E 用）。
         pub fn make_inheritable(&self) -> Result<()> {
             let ok = unsafe {
-                SetHandleInformation(self.handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+                SetHandleInformation(
+                    h(self.handle.borrow()),
+                    HANDLE_FLAG_INHERIT,
+                    HANDLE_FLAG_INHERIT,
+                )
             };
             if ok == 0 {
                 return Err(last_err("SetHandleInformation"));
@@ -379,25 +441,12 @@ mod imp {
             self.shm.is_empty()
         }
     }
-    impl Drop for SharedMapping {
-        fn drop(&mut self) {
-            // SAFETY: 自分が所有するハンドルを一度だけ閉じる (ビューは Shm が保つ)。
-            unsafe {
-                CloseHandle(self.handle);
-            }
-        }
-    }
-
+    /// カーネルのイベント操作（SetEvent / WaitForSingleObject）はスレッド
+    /// セーフなため、`&EventObject` を複数スレッドで共有できる。
     pub struct EventObject {
-        handle: HANDLE,
+        handle: OwnedHandle,
         auto_reset: bool,
     }
-    unsafe impl Send for EventObject {}
-    /// `EventObject` の共有: カーネルのイベント操作（SetEvent /
-    /// WaitForSingleObject）はスレッドセーフなため、`&EventObject` を複数
-    /// スレッドで共有できる。`make_inheritable` は共有を開始する前に 1 回
-    /// だけ呼ぶこと。ハンドル自体は呼び出し中ずっと有効であること。
-    unsafe impl Sync for EventObject {}
     impl EventObject {
         pub fn new(auto_reset: bool, initially_signaled: bool) -> Result<Self> {
             let handle = unsafe {
@@ -411,25 +460,25 @@ mod imp {
             if handle.is_null() {
                 return Err(last_err("CreateEventW"));
             }
-            Ok(Self { handle, auto_reset })
-        }
-        /// # Safety
-        /// `value` は有効な Event ハンドルであること。
-        pub unsafe fn from_handle_value(value: HandleValue, auto_reset: bool) -> Self {
-            Self {
-                handle: h(value),
+            Ok(Self {
+                handle: owned(handle),
                 auto_reset,
-            }
+            })
         }
-        pub fn handle_value(&self) -> HandleValue {
-            hv(self.handle)
+        /// 所有するハンドルを Event として使う。Event でないハンドルへの
+        /// 操作は OS が失敗させる。
+        pub fn from_owned(handle: OwnedHandle, auto_reset: bool) -> Self {
+            Self { handle, auto_reset }
+        }
+        pub fn as_handle(&self) -> BorrowedHandle<'_> {
+            self.handle.borrow()
         }
         pub fn is_auto_reset(&self) -> bool {
             self.auto_reset
         }
         /// 対象プロセスへ DuplicateHandle で渡す（Host→Agent の space_available
         /// 受け渡し。A68）。返した値は対象プロセス側のハンドル値。
-        pub fn duplicate_to_process(&self, target_pid: u32) -> Result<HandleValue> {
+        pub fn duplicate_to_process(&self, target_pid: u32) -> Result<RemoteHandle> {
             let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
             if target.is_null() {
                 return Err(last_err("OpenProcess"));
@@ -438,7 +487,7 @@ mod imp {
             let ok = unsafe {
                 DuplicateHandle(
                     GetCurrentProcess(),
-                    self.handle,
+                    h(self.handle.borrow()),
                     target,
                     &mut dup,
                     0,
@@ -450,11 +499,15 @@ mod imp {
             if ok == 0 {
                 return Err(last_err("DuplicateHandle"));
             }
-            Ok(hv(dup))
+            Ok(remote(dup))
         }
         pub fn make_inheritable(&self) -> Result<()> {
             let ok = unsafe {
-                SetHandleInformation(self.handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+                SetHandleInformation(
+                    h(self.handle.borrow()),
+                    HANDLE_FLAG_INHERIT,
+                    HANDLE_FLAG_INHERIT,
+                )
             };
             if ok == 0 {
                 return Err(last_err("SetHandleInformation(event)"));
@@ -462,7 +515,7 @@ mod imp {
             Ok(())
         }
         pub fn set(&self) -> Result<()> {
-            if unsafe { SetEvent(self.handle) } == 0 {
+            if unsafe { SetEvent(h(self.handle.borrow())) } == 0 {
                 return Err(last_err("SetEvent"));
             }
             Ok(())
@@ -481,7 +534,7 @@ mod imp {
                     return signaled;
                 }
             }
-            unsafe { WaitForSingleObject(self.handle, ms) == 0 }
+            unsafe { WaitForSingleObject(h(self.handle.borrow()), ms) == 0 }
         }
 
         /// `timeout` まで高分解能タイマーと一緒に待つ。タイマーを作れ
@@ -508,7 +561,7 @@ mod imp {
             // SAFETY: valid timer handle, no completion routine.
             let armed = unsafe { SetWaitableTimer(timer, &due, 0, None, std::ptr::null(), 0) } != 0;
             let result = if armed {
-                let handles = [self.handle, timer];
+                let handles = [h(self.handle.borrow()), timer];
                 // The timer bounds the wait; INFINITE is never reached unless
                 // the timer itself fails, guarded by a generous fallback.
                 let fallback = super::wait_timeout_millis(timeout) + 16;
@@ -523,17 +576,10 @@ mod imp {
             result
         }
     }
-    impl Drop for EventObject {
-        fn drop(&mut self) {
-            if !self.handle.is_null() {
-                unsafe { CloseHandle(self.handle) };
-            }
-        }
-    }
 
     /// 継承ハンドル付きで子プロセスを起動する（E2E 用）。
     /// 呼び手が対象ハンドルへ make_inheritable 済みであること。
-    pub fn spawn_inheriting(cmdline: &str) -> Result<HandleValue> {
+    pub fn spawn_inheriting(cmdline: &str) -> Result<OwnedHandle> {
         use windows_sys::Win32::System::Threading::{
             CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
         };
@@ -561,12 +607,12 @@ mod imp {
         unsafe {
             CloseHandle(pi.hThread);
         }
-        Ok(pi.hProcess as HandleValue)
+        Ok(owned(pi.hProcess))
     }
-    pub fn wait_process(process_handle_value: HandleValue, timeout: Duration) -> Option<u32> {
-        use windows_sys::Win32::Foundation::CloseHandle as CH;
+    /// 終了を `timeout` まで待ち、終了コードを返す。ハンドルは閉じない。
+    pub fn wait_process(process: BorrowedHandle<'_>, timeout: Duration) -> Option<u32> {
         use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-        let handle = h(process_handle_value);
+        let handle = h(process);
         let ms = super::wait_timeout_millis(timeout);
         let r = unsafe { WaitForSingleObject(handle, ms) };
         if r != 0 {
@@ -575,7 +621,6 @@ mod imp {
         let mut code: u32 = 0;
         unsafe {
             GetExitCodeProcess(handle, &mut code);
-            CH(handle);
         }
         Some(code)
     }
@@ -609,14 +654,14 @@ mod imp {
             return Err(last_err("CreateProcessW(suspended)"));
         }
         Ok(SpawnedProcess {
-            process: hv(pi.hProcess),
-            thread: hv(pi.hThread),
+            process: owned(pi.hProcess),
+            thread: owned(pi.hThread),
             pid: pi.dwProcessId,
         })
     }
 
     /// 停止中のメインスレッドを再開する。戻り値は直前のサスペンド数。
-    pub fn resume_main_thread(thread: HandleValue) -> Result<u32> {
+    pub fn resume_main_thread(thread: BorrowedHandle<'_>) -> Result<u32> {
         use windows_sys::Win32::System::Threading::ResumeThread;
         let prev = unsafe { ResumeThread(h(thread)) };
         if prev == u32::MAX {
@@ -626,7 +671,7 @@ mod imp {
     }
 
     /// DLL 注入に必要な権限（スレッド作成・VM 操作・複製）でプロセスを開く。
-    pub fn open_process_for_injection(pid: u32) -> Result<HandleValue> {
+    pub fn open_process_for_injection(pid: u32) -> Result<OwnedHandle> {
         use windows_sys::Win32::System::Threading::{
             PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION, PROCESS_SYNCHRONIZE,
             PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
@@ -642,11 +687,11 @@ mod imp {
         if handle.is_null() {
             return Err(last_err("OpenProcess(inject)"));
         }
-        Ok(hv(handle))
+        Ok(owned(handle))
     }
 
     /// プロセスが終了済みかどうか（待たない確認）。
-    pub fn process_exited(process: HandleValue) -> Result<bool> {
+    pub fn process_exited(process: BorrowedHandle<'_>) -> Result<bool> {
         use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
         match unsafe { WaitForSingleObject(h(process), 0) } {
             WAIT_OBJECT_0 => Ok(true),
@@ -658,7 +703,7 @@ mod imp {
     /// Read an exited process's status without consuming its handle. Waiting
     /// first distinguishes a live process from one that actually exited with 259
     /// (STILL_ACTIVE).
-    pub fn process_exit_code(process: HandleValue) -> Result<Option<u32>> {
+    pub fn process_exit_code(process: BorrowedHandle<'_>) -> Result<Option<u32>> {
         use windows_sys::Win32::System::Threading::GetExitCodeProcess;
         if !process_exited(process)? {
             return Ok(None);
@@ -671,16 +716,19 @@ mod imp {
     }
 
     /// Peak working set and peak private commit (bytes) of a process, from
-    /// `GetProcessMemoryInfo`. `process` 0 means this process. The counters
-    /// stay readable after the process exits while a handle is open.
-    pub fn process_peak_memory(process: HandleValue) -> Result<ProcessPeakMemory> {
+    /// `GetProcessMemoryInfo`. The counters stay readable after the process
+    /// exits while a handle is open.
+    pub fn process_peak_memory(process: BorrowedHandle<'_>) -> Result<ProcessPeakMemory> {
+        peak_memory_of(h(process))
+    }
+    /// [`process_peak_memory`] of this process.
+    pub fn current_process_peak_memory() -> Result<ProcessPeakMemory> {
+        // SAFETY: no preconditions; the pseudo handle names this process.
+        peak_memory_of(unsafe { GetCurrentProcess() })
+    }
+    fn peak_memory_of(handle: HANDLE) -> Result<ProcessPeakMemory> {
         use windows_sys::Win32::System::ProcessStatus::{
             GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
-        };
-        let handle = if process == 0 {
-            unsafe { GetCurrentProcess() }
-        } else {
-            h(process)
         };
         let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
         counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
@@ -693,7 +741,7 @@ mod imp {
         })
     }
 
-    pub fn process_creation_time(process: HandleValue) -> Result<u64> {
+    pub fn process_creation_time(process: BorrowedHandle<'_>) -> Result<u64> {
         use windows_sys::Win32::Foundation::FILETIME;
         use windows_sys::Win32::System::Threading::GetProcessTimes;
         let mut times: [FILETIME; 4] = unsafe { std::mem::zeroed() };
@@ -712,18 +760,12 @@ mod imp {
         Ok((u64::from(times[0].dwHighDateTime) << 32) | u64::from(times[0].dwLowDateTime))
     }
 
-    pub fn close_handle_value(v: HandleValue) {
-        if v != 0 {
-            unsafe { CloseHandle(h(v)) };
-        }
-    }
-
     /// 任意のハンドルを対象プロセスへ複製する（Host プロセスへの
     /// ハンドルを生存確認用に渡すなど、型付き API が無いものの受け渡し）。
     pub fn duplicate_handle_to_process(
-        handle_value: HandleValue,
+        handle: BorrowedHandle<'_>,
         target_pid: u32,
-    ) -> Result<HandleValue> {
+    ) -> Result<RemoteHandle> {
         let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
         if target.is_null() {
             return Err(last_err("OpenProcess"));
@@ -732,7 +774,7 @@ mod imp {
         let ok = unsafe {
             DuplicateHandle(
                 GetCurrentProcess(),
-                h(handle_value),
+                h(handle),
                 target,
                 &mut dup,
                 0,
@@ -744,13 +786,13 @@ mod imp {
         if ok == 0 {
             return Err(last_err("DuplicateHandle"));
         }
-        Ok(hv(dup))
+        Ok(remote(dup))
     }
 
     /// Give `target_pid` a handle to the current (Host) process that can only
     /// wait for its exit. The Agent uses it for liveness checks; it must not
     /// receive VM write, thread creation or handle duplication rights.
-    pub fn duplicate_self_synchronize_to_process(target_pid: u32) -> Result<HandleValue> {
+    pub fn duplicate_self_synchronize_to_process(target_pid: u32) -> Result<RemoteHandle> {
         use windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
         let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
         if target.is_null() {
@@ -772,16 +814,16 @@ mod imp {
         if ok == 0 {
             return Err(last_err("DuplicateHandle(host liveness)"));
         }
-        Ok(hv(dup))
+        Ok(remote(dup))
     }
 
     /// Close a handle that this process duplicated into `target_pid`
     /// (`DUPLICATE_CLOSE_SOURCE`). Only for handles the target has not been
     /// told about: the target could otherwise already have closed and reused
     /// the value.
-    pub fn close_remote_handle(target_pid: u32, value: HandleValue) -> Result<()> {
+    pub fn close_remote_handle(target_pid: u32, value: RemoteHandle) -> Result<()> {
         use windows_sys::Win32::Foundation::DUPLICATE_CLOSE_SOURCE;
-        if value == 0 {
+        if value.raw == 0 {
             return Ok(());
         }
         let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
@@ -791,7 +833,7 @@ mod imp {
         let ok = unsafe {
             DuplicateHandle(
                 target,
-                value as HANDLE,
+                value.raw as HANDLE,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 0,
@@ -807,7 +849,7 @@ mod imp {
     }
 
     pub fn write_process_memory(
-        process: HandleValue,
+        process: BorrowedHandle<'_>,
         dest: usize,
         src: *const u8,
         len: usize,
@@ -831,7 +873,7 @@ mod imp {
 
     /// 対象プロセスのメモリを読む (Bootstrap の初期化結果の読み戻し等)。
     pub fn read_process_memory(
-        process: HandleValue,
+        process: BorrowedHandle<'_>,
         src: usize,
         dest: *mut u8,
         len: usize,
@@ -855,12 +897,12 @@ mod imp {
 
     /// 対象プロセスで `start(param)` をリモートスレッドで実行し、戻り値
     /// （スレッド終了コード）を返す。30 秒で打ち切る。
-    pub fn remote_call(process: HandleValue, start: usize, param: usize) -> Result<u32> {
+    pub fn remote_call(process: BorrowedHandle<'_>, start: usize, param: usize) -> Result<u32> {
         remote_call_with_timeout(process, start, param, Duration::from_secs(30))
     }
 
     fn remote_call_with_timeout(
-        process: HandleValue,
+        process: BorrowedHandle<'_>,
         start: usize,
         param: usize,
         timeout: Duration,
@@ -906,14 +948,14 @@ mod imp {
     /// 前提： 対象と同一ビットネス（自プロセスの kernel32 の
     /// LoadLibraryW アドレスが対象でも有効。同一ブート・同一
     /// ビットネスの system DLL はプロセス間で同じベースを持つ）。
-    pub fn remote_load_library(process: HandleValue, dll_path: &str) -> Result<()> {
+    pub fn remote_load_library(process: BorrowedHandle<'_>, dll_path: &str) -> Result<()> {
         remote_load_library_with_call(process, dll_path, remote_call)
     }
 
     fn remote_load_library_with_call(
-        process: HandleValue,
+        process: BorrowedHandle<'_>,
         dll_path: &str,
-        call: impl FnOnce(HandleValue, usize, usize) -> Result<u32>,
+        call: impl FnOnce(BorrowedHandle<'_>, usize, usize) -> Result<u32>,
     ) -> Result<()> {
         use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
         use windows_sys::Win32::System::Memory::{
@@ -1036,7 +1078,7 @@ mod imp {
     }
 
     /// 対象プロセス内にメモリを確保する（Bootstrap の受け渡し用）。
-    pub fn remote_alloc(process: HandleValue, len: usize) -> Result<usize> {
+    pub fn remote_alloc(process: BorrowedHandle<'_>, len: usize) -> Result<usize> {
         use windows_sys::Win32::System::Memory::{
             VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
         };
@@ -1056,7 +1098,7 @@ mod imp {
     }
 
     /// `remote_alloc` で確保したメモリを解放する。
-    pub fn remote_free(process: HandleValue, addr: usize) {
+    pub fn remote_free(process: BorrowedHandle<'_>, addr: usize) {
         use windows_sys::Win32::System::Memory::{VirtualFreeEx, MEM_RELEASE};
         if addr != 0 {
             unsafe { VirtualFreeEx(h(process), addr as *mut c_void, 0, MEM_RELEASE) };
@@ -1065,7 +1107,7 @@ mod imp {
 
     /// プロセスを終了させる。起動に失敗した対象の後始末専用
     /// （他人のプロセスに使わないこと）。
-    pub fn terminate_process(process: HandleValue, exit_code: u32) -> Result<()> {
+    pub fn terminate_process(process: BorrowedHandle<'_>, exit_code: u32) -> Result<()> {
         use windows_sys::Win32::System::Threading::TerminateProcess;
         let ok = unsafe { TerminateProcess(h(process), exit_code) };
         if ok == 0 {
@@ -1085,13 +1127,14 @@ mod imp {
             static OBSERVED: AtomicU32 = AtomicU32::new(u32::MAX);
 
             unsafe extern "system" fn delayed_read(parameter: *mut c_void) -> u32 {
-                let waited = unsafe { WaitForSingleObject(h(GATE.load(Ordering::SeqCst)), 5_000) };
+                let waited =
+                    unsafe { WaitForSingleObject(GATE.load(Ordering::SeqCst) as HANDLE, 5_000) };
                 if waited == 0 {
                     let mut first = [0u8; 2];
                     // ReadProcessMemory reports a freed allocation without
                     // deliberately crashing the test process on an invalid read.
                     if read_process_memory(
-                        unsafe { hv(GetCurrentProcess()) },
+                        current_process(),
                         parameter as usize,
                         first.as_mut_ptr(),
                         first.len(),
@@ -1101,16 +1144,16 @@ mod imp {
                         OBSERVED.store(u16::from_le_bytes(first) as u32, Ordering::SeqCst);
                     }
                 }
-                unsafe { SetEvent(h(DONE.load(Ordering::SeqCst))) };
+                unsafe { SetEvent(DONE.load(Ordering::SeqCst) as HANDLE) };
                 1
             }
 
-            let process = unsafe { hv(GetCurrentProcess()) };
+            let process = current_process();
             let gate = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
             let done = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
             assert!(!gate.is_null() && !done.is_null());
-            GATE.store(hv(gate), Ordering::SeqCst);
-            DONE.store(hv(done), Ordering::SeqCst);
+            GATE.store(gate as usize, Ordering::SeqCst);
+            DONE.store(done as usize, Ordering::SeqCst);
             let mut parameter = 0;
             let result = remote_load_library_with_call(process, "Q-test.dll", |process, _, ptr| {
                 parameter = ptr;
@@ -1164,15 +1207,11 @@ mod imp {
         pub fn create_restricted(_len: usize) -> Result<Self> {
             Err(WinError::Unsupported)
         }
-        /// # Safety
-        /// スタブでは常に Unsupported を返すため、実際には何もしない。
-        pub unsafe fn from_handle_value(_handle_value: HandleValue, _len: usize) -> Result<Self> {
+        /// スタブ: ハンドルからの写像は Windows の概念のため Unsupported。
+        pub fn from_owned(_handle: OwnedHandle, _len: usize) -> Result<Self> {
             Err(WinError::Unsupported)
         }
-        pub fn handle_value(&self) -> HandleValue {
-            0
-        }
-        pub fn duplicate_to_process(&self, _target_pid: u32) -> Result<HandleValue> {
+        pub fn duplicate_to_process(&self, _target_pid: u32) -> Result<RemoteHandle> {
             Err(WinError::Unsupported)
         }
         pub fn make_inheritable(&self) -> Result<()> {
@@ -1204,23 +1243,19 @@ mod imp {
                 condvar: std::sync::Condvar::new(),
             })
         }
-        /// # Safety
         /// スタブではハンドルを使わない。
-        pub unsafe fn from_handle_value(_value: HandleValue, auto_reset: bool) -> Self {
+        pub fn from_owned(_handle: OwnedHandle, auto_reset: bool) -> Self {
             Self {
                 auto_reset,
                 state: std::sync::Mutex::new(false),
                 condvar: std::sync::Condvar::new(),
             }
         }
-        pub fn handle_value(&self) -> HandleValue {
-            0
-        }
         pub fn is_auto_reset(&self) -> bool {
             self.auto_reset
         }
         /// スタブ: プロセス間ハンドル受け渡しは Windows の概念のため Unsupported。
-        pub fn duplicate_to_process(&self, _target_pid: u32) -> Result<HandleValue> {
+        pub fn duplicate_to_process(&self, _target_pid: u32) -> Result<RemoteHandle> {
             Err(WinError::Unsupported)
         }
         pub fn make_inheritable(&self) -> Result<()> {
@@ -1247,39 +1282,38 @@ mod imp {
             }
         }
     }
-    pub fn spawn_inheriting(_cmdline: &str) -> Result<HandleValue> {
+    pub fn spawn_inheriting(_cmdline: &str) -> Result<OwnedHandle> {
         Err(WinError::Unsupported)
     }
-    pub fn wait_process(_h: HandleValue, _t: Duration) -> Option<u32> {
+    pub fn wait_process(_h: BorrowedHandle<'_>, _t: Duration) -> Option<u32> {
         None
     }
     pub fn spawn_suspended(_cmdline: &str) -> Result<SpawnedProcess> {
         Err(WinError::Unsupported)
     }
-    pub fn resume_main_thread(_thread: HandleValue) -> Result<u32> {
+    pub fn resume_main_thread(_thread: BorrowedHandle<'_>) -> Result<u32> {
         Err(WinError::Unsupported)
     }
-    pub fn open_process_for_injection(_pid: u32) -> Result<HandleValue> {
+    pub fn open_process_for_injection(_pid: u32) -> Result<OwnedHandle> {
         Err(WinError::Unsupported)
     }
-    pub fn process_exited(_process: HandleValue) -> Result<bool> {
+    pub fn process_exited(_process: BorrowedHandle<'_>) -> Result<bool> {
         Err(WinError::Unsupported)
     }
-    pub fn close_handle_value(_v: HandleValue) {}
     pub fn duplicate_handle_to_process(
-        _handle_value: HandleValue,
+        _handle: BorrowedHandle<'_>,
         _target_pid: u32,
-    ) -> Result<HandleValue> {
+    ) -> Result<RemoteHandle> {
         Err(WinError::Unsupported)
     }
-    pub fn duplicate_self_synchronize_to_process(_target_pid: u32) -> Result<HandleValue> {
+    pub fn duplicate_self_synchronize_to_process(_target_pid: u32) -> Result<RemoteHandle> {
         Err(WinError::Unsupported)
     }
-    pub fn close_remote_handle(_target_pid: u32, _value: HandleValue) -> Result<()> {
+    pub fn close_remote_handle(_target_pid: u32, _value: RemoteHandle) -> Result<()> {
         Err(WinError::Unsupported)
     }
     pub fn write_process_memory(
-        _process: HandleValue,
+        _process: BorrowedHandle<'_>,
         _dest: usize,
         _src: *const u8,
         _len: usize,
@@ -1287,17 +1321,17 @@ mod imp {
         Err(WinError::Unsupported)
     }
     pub fn read_process_memory(
-        _process: HandleValue,
+        _process: BorrowedHandle<'_>,
         _src: usize,
         _dest: *mut u8,
         _len: usize,
     ) -> Result<()> {
         Err(WinError::Unsupported)
     }
-    pub fn remote_call(_process: HandleValue, _start: usize, _param: usize) -> Result<u32> {
+    pub fn remote_call(_process: BorrowedHandle<'_>, _start: usize, _param: usize) -> Result<u32> {
         Err(WinError::Unsupported)
     }
-    pub fn remote_load_library(_process: HandleValue, _dll_path: &str) -> Result<()> {
+    pub fn remote_load_library(_process: BorrowedHandle<'_>, _dll_path: &str) -> Result<()> {
         Err(WinError::Unsupported)
     }
     pub fn module_base(_pid: u32, _module_path: &str) -> Result<usize> {
@@ -1307,26 +1341,29 @@ mod imp {
     pub fn enumerate_processes() -> Result<Vec<(u32, u32)>> {
         Err(WinError::Unsupported)
     }
-    pub fn remote_alloc(_process: HandleValue, _len: usize) -> Result<usize> {
+    pub fn remote_alloc(_process: BorrowedHandle<'_>, _len: usize) -> Result<usize> {
         Err(WinError::Unsupported)
     }
-    pub fn remote_free(_process: HandleValue, _addr: usize) {}
-    pub fn terminate_process(_process: HandleValue, _exit_code: u32) -> Result<()> {
+    pub fn remote_free(_process: BorrowedHandle<'_>, _addr: usize) {}
+    pub fn terminate_process(_process: BorrowedHandle<'_>, _exit_code: u32) -> Result<()> {
         Err(WinError::Unsupported)
     }
-    pub fn process_exit_code(_process: HandleValue) -> Result<Option<u32>> {
+    pub fn process_exit_code(_process: BorrowedHandle<'_>) -> Result<Option<u32>> {
         Err(WinError::Unsupported)
     }
-    pub fn process_creation_time(_process: HandleValue) -> Result<u64> {
+    pub fn process_creation_time(_process: BorrowedHandle<'_>) -> Result<u64> {
         Err(WinError::Unsupported)
     }
-    pub fn process_peak_memory(_process: HandleValue) -> Result<ProcessPeakMemory> {
+    pub fn process_peak_memory(_process: BorrowedHandle<'_>) -> Result<ProcessPeakMemory> {
+        Err(WinError::Unsupported)
+    }
+    pub fn current_process_peak_memory() -> Result<ProcessPeakMemory> {
         Err(WinError::Unsupported)
     }
 }
 
 pub use imp::{
-    close_handle_value, close_remote_handle, duplicate_handle_to_process,
+    close_remote_handle, current_process_peak_memory, duplicate_handle_to_process,
     duplicate_self_synchronize_to_process, enumerate_processes, module_base,
     open_process_for_injection, process_creation_time, process_exit_code, process_exited,
     process_peak_memory, read_process_memory, remote_alloc, remote_call, remote_free,
@@ -1480,9 +1517,9 @@ impl RingNotify {
     }
     /// Host→Agent の受け渡し: `space_available` イベントを対象プロセスへ
     /// DuplicateHandle で渡す（A68）。返した値は対象プロセス側のハンドル値で、
-    /// Agent は `EventObject::from_handle_value` で取り込む。Windows 以外は
+    /// Agent は `EventObject::from_owned` で取り込む。Windows 以外は
     /// Unsupported（スタブにプロセス間の実体が無いため）。
-    pub fn duplicate_space_to_process(&self, target_pid: u32) -> Result<HandleValue> {
+    pub fn duplicate_space_to_process(&self, target_pid: u32) -> Result<RemoteHandle> {
         self.space_available.duplicate_to_process(target_pid)
     }
 }
@@ -2056,57 +2093,57 @@ mod tests {
         // Missing PROCESS_SYNCHRONIZE used to make WAIT_FAILED look like
         // "still running", hanging child-tree capture after the child exited.
         let own = open_process_for_injection(std::process::id()).unwrap();
-        assert!(!process_exited(own).unwrap());
-        close_handle_value(own);
+        assert!(!process_exited(own.borrow()).unwrap());
+        drop(own);
         let child = spawn_suspended("cmd.exe /C exit 0").unwrap();
         let handle = open_process_for_injection(child.pid).unwrap();
-        resume_main_thread(child.thread).unwrap();
-        assert_eq!(wait_process(child.process, Duration::from_secs(5)), Some(0));
-        close_handle_value(child.thread);
-        assert!(process_exited(handle).unwrap());
-        close_handle_value(handle);
-        assert!(
-            process_exited(0).is_err(),
-            "invalid handle must not mean alive"
+        resume_main_thread(child.thread.borrow()).unwrap();
+        assert_eq!(
+            wait_process(child.process.borrow(), Duration::from_secs(5)),
+            Some(0)
         );
+        drop(child);
+        assert!(process_exited(handle.borrow()).unwrap());
+        // 0 はハンドルとして引き受けられない (無効なハンドルを生存と取り違えない)。
+        assert!(unsafe { OwnedHandle::from_raw(0) }.is_none());
     }
 
     #[test]
     fn host_liveness_handle_only_allows_waiting() {
-        let handle = duplicate_self_synchronize_to_process(std::process::id()).unwrap();
-        assert!(!process_exited(handle).unwrap());
+        let remote = duplicate_self_synchronize_to_process(std::process::id()).unwrap();
+        // SAFETY: 複製先はこのプロセス自身なので、値はここで有効で、ほかに
+        // 閉じる者はいない。
+        let handle = unsafe { OwnedHandle::from_raw(remote.raw()) }.unwrap();
+        assert!(!process_exited(handle.borrow()).unwrap());
         let value = 0u8;
         assert!(
-            write_process_memory(handle, &value as *const u8 as usize, &value, 1).is_err(),
+            write_process_memory(handle.borrow(), &value as *const u8 as usize, &value, 1).is_err(),
             "liveness handle must not grant PROCESS_VM_WRITE"
         );
         assert!(
-            remote_alloc(handle, 4096).is_err(),
+            remote_alloc(handle.borrow(), 4096).is_err(),
             "liveness handle must not grant PROCESS_VM_OPERATION"
         );
-        close_handle_value(handle);
     }
 
     #[test]
     fn exit_status_preserves_live_nonzero_and_still_active_codes() {
         let own = open_process_for_injection(std::process::id()).unwrap();
-        assert_eq!(process_exit_code(own).unwrap(), None);
-        close_handle_value(own);
+        assert_eq!(process_exit_code(own.borrow()).unwrap(), None);
+        drop(own);
         for code in [0, 37, 259] {
             let child = spawn_suspended(&format!("cmd.exe /C exit {code}")).unwrap();
             let handle = open_process_for_injection(child.pid).unwrap();
-            resume_main_thread(child.thread).unwrap();
+            resume_main_thread(child.thread.borrow()).unwrap();
             assert_eq!(
-                wait_process(child.process, Duration::from_secs(5)),
+                wait_process(child.process.borrow(), Duration::from_secs(5)),
                 Some(code)
             );
-            close_handle_value(child.thread);
-            assert_eq!(process_exit_code(handle).unwrap(), Some(code));
+            drop(child);
+            assert_eq!(process_exit_code(handle.borrow()).unwrap(), Some(code));
             // Querying the status must not close the borrowed handle.
-            assert_eq!(process_exit_code(handle).unwrap(), Some(code));
-            close_handle_value(handle);
+            assert_eq!(process_exit_code(handle.borrow()).unwrap(), Some(code));
         }
-        assert!(process_exit_code(0).is_err());
     }
 
     #[test]
@@ -2130,7 +2167,26 @@ mod tests {
         let m = SharedMapping::create(2048).unwrap();
         let pid = std::process::id();
         let dup = m.duplicate_to_process(pid).unwrap();
-        assert!(dup != 0);
+        assert_ne!(dup.raw(), 0);
+        // SAFETY: 複製先はこのプロセスで、値はほかに誰も閉じない。
+        let owned = unsafe { OwnedHandle::from_raw(dup.raw()) }.unwrap();
+        let again = SharedMapping::from_owned(owned, 2048).unwrap();
+        assert!(
+            SharedMapping::from_owned(
+                // SAFETY: 同上 (もう 1 本複製する)。
+                unsafe { OwnedHandle::from_raw(m.duplicate_to_process(pid).unwrap().raw()) }
+                    .unwrap(),
+                1 << 20
+            )
+            .is_err(),
+            "a view larger than the section is refused"
+        );
+        again.shm().control().store(
+            shirusu_transport::Word::WriteCursor,
+            7,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        assert_eq!(m.shm().copy_out(0..1).unwrap()[0], 7);
     }
     #[test]
     fn restricted_mapping_roundtrip() {
@@ -2150,8 +2206,12 @@ mod tests {
         // EventObject で、元の EventObject の SetEvent を観測できること。
         let e = EventObject::new(true, false).unwrap();
         let dup_value = e.duplicate_to_process(std::process::id()).unwrap();
-        assert_ne!(dup_value, 0);
-        let dup = unsafe { EventObject::from_handle_value(dup_value, true) };
+        assert_ne!(dup_value.raw(), 0);
+        // SAFETY: 複製先はこのプロセスで、値はほかに誰も閉じない。
+        let dup = EventObject::from_owned(
+            unsafe { OwnedHandle::from_raw(dup_value.raw()) }.unwrap(),
+            true,
+        );
         assert!(!dup.wait_timeout(Duration::from_millis(1)));
         e.set().unwrap();
         assert!(dup.wait_timeout(Duration::from_millis(100)));
@@ -2166,7 +2226,7 @@ mod tests {
         let dup = notify
             .duplicate_space_to_process(std::process::id())
             .unwrap();
-        assert_ne!(dup, 0);
+        assert_ne!(dup.raw(), 0);
     }
 }
 
@@ -2477,11 +2537,12 @@ mod portable_tests {
             SharedMapping::create_restricted(4096),
             Err(WinError::Unsupported)
         ));
+        // スタブでは閉じない値なので、任意の数を引き受けてよい。
+        let fake = || unsafe { OwnedHandle::from_raw(123) }.unwrap();
         assert!(matches!(
-            unsafe { SharedMapping::from_handle_value(0, 64) },
+            SharedMapping::from_owned(fake(), 4096),
             Err(WinError::Unsupported)
         ));
-        assert_eq!(m.handle_value(), 0);
         assert!(!m.is_empty());
         assert!(matches!(
             m.duplicate_to_process(1),
@@ -2498,10 +2559,13 @@ mod portable_tests {
             spawn_inheriting("true"),
             Err(WinError::Unsupported)
         ));
-        assert_eq!(wait_process(0, Duration::from_millis(1)), None);
-        // ハンドル値から作ったスタブイベントは独立した新しいイベントとして動く
-        let stub = unsafe { EventObject::from_handle_value(123, true) };
-        assert_eq!(stub.handle_value(), 0);
+        let handle = fake();
+        assert_eq!(
+            wait_process(handle.borrow(), Duration::from_millis(1)),
+            None
+        );
+        // ハンドルから作ったスタブイベントは独立した新しいイベントとして動く
+        let stub = EventObject::from_owned(fake(), true);
         assert!(!stub.wait_timeout(Duration::from_millis(1)));
         stub.set().unwrap();
         assert!(stub.wait_timeout(Duration::from_millis(10)));

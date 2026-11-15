@@ -34,7 +34,8 @@ pub use clock::{
 };
 pub use descriptor::{CaptureState, EventDescriptor, EventKind};
 pub use expansion::{
-    DeliveredMapping, ExpansionDelivery, ExpansionRequest, EXPANDED_SLOT_GENERATION,
+    DeliveredHandle, DeliveredMapping, ExpansionDelivery, ExpansionRequest,
+    EXPANDED_SLOT_GENERATION,
 };
 pub use layout::{ConfigError, LossCounters, RingConfig};
 pub use ring::{

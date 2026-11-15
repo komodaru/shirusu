@@ -92,7 +92,8 @@ const TARGET_PROCESS_ID: u64 = 1;
 
 pub struct LaunchedCapture {
     session: Option<CaptureSession>,
-    process: win::HandleValue,
+    /// 対象プロセス。`finish` が閉じたら None。
+    process: Option<win::OwnedHandle>,
     pid: u32,
     /// 対象プロセス内での `shirusu_agent_shutdown` のアドレス。
     /// 解決できなかった（旧 DLL 等）場合は None で、finish は
@@ -134,12 +135,14 @@ impl LaunchedCapture {
         cfg: LaunchConfig,
     ) -> Result<Self, SessionError> {
         let spawned = win::spawn_suspended(cmdline)?;
-        let injected = match inject_and_init(&cfg, spawned.process, spawned.pid) {
+        // 失敗の後始末は対象を終わらせるだけ (ハンドルは spawned と共に閉じる)。
+        let abort = |spawned: win::SpawnedProcess| {
+            let _ = win::terminate_process(spawned.process.borrow(), 1);
+        };
+        let injected = match inject_and_init(&cfg, spawned.process.borrow(), spawned.pid) {
             Ok(i) => i,
             Err(e) => {
-                let _ = win::terminate_process(spawned.process, 1);
-                win::close_handle_value(spawned.thread);
-                win::close_handle_value(spawned.process);
+                abort(spawned);
                 return Err(e);
             }
         };
@@ -152,24 +155,25 @@ impl LaunchedCapture {
         let (session, shutdown_addr, data_ready) = match finalize_session(trace_path, injected) {
             Ok(v) => v,
             Err(e) => {
-                let _ = win::terminate_process(spawned.process, 1);
-                win::close_handle_value(spawned.thread);
-                win::close_handle_value(spawned.process);
+                abort(spawned);
                 return Err(e);
             }
         };
-        if let Err(e) = win::resume_main_thread(spawned.thread) {
-            let _ = win::terminate_process(spawned.process, 1);
-            win::close_handle_value(spawned.thread);
-            win::close_handle_value(spawned.process);
+        if let Err(e) = win::resume_main_thread(spawned.thread.borrow()) {
+            abort(spawned);
             return Err(e.into());
         }
-        win::close_handle_value(spawned.thread);
-        let module_scan = start_module_scan(spawned.pid, pre_modules);
+        let win::SpawnedProcess {
+            process,
+            thread,
+            pid,
+        } = spawned;
+        drop(thread);
+        let module_scan = start_module_scan(pid, pre_modules);
         Ok(Self {
             session: Some(session),
-            process: spawned.process,
-            pid: spawned.pid,
+            process: Some(process),
+            pid,
             shutdown_addr,
             shutdown_outcome: None,
             module_scan,
@@ -187,13 +191,13 @@ impl LaunchedCapture {
         cfg: LaunchConfig,
     ) -> Result<Self, SessionError> {
         let process = win::open_process_for_injection(pid)?;
-        match inject_and_init(&cfg, process, pid) {
+        match inject_and_init(&cfg, process.borrow(), pid) {
             Ok(injected) => {
                 let shutdown_addr = injected.shutdown_addr;
                 match finalize_session(trace_path, injected) {
                     Ok((session, shutdown_addr, data_ready)) => Ok(Self {
                         session: Some(session),
-                        process,
+                        process: Some(process),
                         pid,
                         shutdown_addr,
                         shutdown_outcome: None,
@@ -202,8 +206,7 @@ impl LaunchedCapture {
                         exit_observed: None,
                     }),
                     Err(e) => {
-                        let rollback = rollback_initialized_agent(process, shutdown_addr);
-                        win::close_handle_value(process);
+                        let rollback = rollback_initialized_agent(process.borrow(), shutdown_addr);
                         Err(SessionError::PostInitialization {
                             source: Box::new(e),
                             rollback,
@@ -211,10 +214,7 @@ impl LaunchedCapture {
                     }
                 }
             }
-            Err(e) => {
-                win::close_handle_value(process);
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
@@ -222,7 +222,11 @@ impl LaunchedCapture {
         self.pid
     }
     pub fn target_exited(&self) -> Result<bool, SessionError> {
-        Ok(win::process_exited(self.process)?)
+        let process = self
+            .process
+            .as_ref()
+            .ok_or(win::WinError::InvalidArgument("capture already finished"))?;
+        Ok(win::process_exited(process.borrow())?)
     }
     pub fn session(&mut self) -> &mut CaptureSession {
         self.session.as_mut().expect("session present")
@@ -296,7 +300,10 @@ impl LaunchedCapture {
         if let Some(outcome) = &self.shutdown_outcome {
             return outcome.clone();
         }
-        let outcome = rollback_initialized_agent(self.process, self.shutdown_addr);
+        let outcome = match &self.process {
+            Some(process) => rollback_initialized_agent(process.borrow(), self.shutdown_addr),
+            None => ShutdownOutcome::CallFailed("target handle already closed".into()),
+        };
         self.shutdown_outcome = Some(outcome.clone());
         outcome
     }
@@ -356,26 +363,28 @@ impl LaunchedCapture {
         session.update_modules(modules)?;
         session.set_shutdown_outcome(outcome);
         let mut summary = session.stop()?;
-        summary.target_exit_code = win::process_exit_code(self.process)?;
-        summary.target_peak_memory = win::process_peak_memory(self.process).ok();
+        let process = self
+            .process
+            .take()
+            .ok_or(win::WinError::InvalidArgument("capture already finished"))?;
+        summary.target_exit_code = win::process_exit_code(process.borrow())?;
+        summary.target_peak_memory = win::process_peak_memory(process.borrow()).ok();
         summary.host_ms_after_target_exit = self
             .exit_observed
             .map(|at| at.elapsed().as_secs_f64() * 1000.0);
-        win::close_handle_value(self.process);
-        self.process = 0;
         Ok(summary)
     }
 }
 
 /// Peak memory of this (Host) process, where it can be read (V3).
 pub fn host_peak_memory() -> Option<shirusu_transport_win::ProcessPeakMemory> {
-    win::process_peak_memory(0).ok()
+    win::current_process_peak_memory().ok()
 }
 
 /// Only called after successful initialization. Never terminate an attached
 /// application, and never describe an unconfirmed rollback as restored.
 fn rollback_initialized_agent(
-    process: win::HandleValue,
+    process: win::BorrowedHandle<'_>,
     shutdown_addr: Option<usize>,
 ) -> ShutdownOutcome {
     match win::process_exited(process) {
@@ -393,7 +402,7 @@ impl Drop for LaunchedCapture {
         // Error propagation, unwinding and explicit abandonment all retain
         // ownership until shutdown has been attempted. Never terminate the app
         // or invent Finalization for a discarded capture.
-        if self.process != 0 && self.shutdown_outcome.is_none() {
+        if self.process.is_some() && self.shutdown_outcome.is_none() {
             let outcome = self.shutdown_once();
             if !matches!(
                 outcome,
@@ -412,9 +421,8 @@ impl Drop for LaunchedCapture {
         if let Some(scan) = self.module_scan.take() {
             let _ = scan.join();
         }
-        if self.process != 0 {
-            win::close_handle_value(self.process);
-        }
+        // The process handle closes with self, after the scan.
+        drop(self.process.take());
     }
 }
 
@@ -458,21 +466,18 @@ pub struct TreeCapture {
 }
 
 struct AncestorProcess {
-    handle: win::HandleValue,
+    /// Held only to pin the PID; closed on drop.
+    _handle: win::OwnedHandle,
     created: u64,
-}
-
-impl Drop for AncestorProcess {
-    fn drop(&mut self) {
-        win::close_handle_value(self.handle);
-    }
 }
 
 fn pin_process(pid: u32) -> Result<AncestorProcess, SessionError> {
     let handle = win::open_process_for_injection(pid)?;
-    let mut pinned = AncestorProcess { handle, created: 0 };
-    pinned.created = win::process_creation_time(handle)?;
-    Ok(pinned)
+    let created = win::process_creation_time(handle.borrow())?;
+    Ok(AncestorProcess {
+        _handle: handle,
+        created,
+    })
 }
 
 /// プロセス一覧の取得失敗を連続で許容する回数。
@@ -705,7 +710,7 @@ struct BootstrapResult {
 /// 返す直前（設置失敗の詳細）に書き戻すため、リモートスレッドの
 /// 完了後には確定している。
 fn read_bootstrap_result(
-    process: win::HandleValue,
+    process: win::BorrowedHandle<'_>,
     remote: usize,
     evidence_capacity: u32,
 ) -> Option<BootstrapResult> {
@@ -785,7 +790,7 @@ fn read_bootstrap_result(
 /// (v15)。Coverage の件数が範囲外で [`read_bootstrap_result`] が結果全体を
 /// 捨てる場合でも、Host 側の照合は省かない（review N6）。読めなければ None。
 fn read_catalog_report(
-    process: win::HandleValue,
+    process: win::BorrowedHandle<'_>,
     remote: usize,
 ) -> Option<(shirusu_api_catalog::fingerprint::CatalogFingerprint, usize)> {
     let mut buf = AgentBootstrap::default();
@@ -871,7 +876,7 @@ struct InjectedTarget {
 /// Closed in the target when dropped, unless released to the Agent.
 struct RemoteHandles {
     pid: u32,
-    values: Vec<win::HandleValue>,
+    values: Vec<win::RemoteHandle>,
 }
 
 impl RemoteHandles {
@@ -882,7 +887,7 @@ impl RemoteHandles {
         }
     }
 
-    fn keep(&mut self, value: win::HandleValue) -> win::HandleValue {
+    fn keep(&mut self, value: win::RemoteHandle) -> win::RemoteHandle {
         self.values.push(value);
         value
     }
@@ -900,9 +905,15 @@ impl Drop for RemoteHandles {
     }
 }
 
+/// Bootstrap の u64 欄へ載せるハンドル値 (usize は 64 bit 以下)。
+fn raw_u64(handle: win::RemoteHandle) -> u64 {
+    const _: () = assert!(usize::BITS <= u64::BITS);
+    handle.raw() as u64
+}
+
 fn inject_and_init(
     cfg: &LaunchConfig,
-    process: win::HandleValue,
+    process: win::BorrowedHandle<'_>,
     pid: u32,
 ) -> Result<InjectedTarget, SessionError> {
     // The Host parses this file and the target loads the same absolute path.
@@ -982,16 +993,16 @@ fn inject_and_init(
             expected_generation: EXPANDED_SLOT_GENERATION,
         };
         rings.push((mapping, ring_notify, spec));
-        pairs.push((mapping_dup as u64, space_dup as u64));
+        pairs.push((raw_u64(mapping_dup), raw_u64(space_dup)));
     }
     let data_dup = remote_handles.keep(notify.data_ready.duplicate_to_process(pid)?);
     let init_dup = remote_handles.keep(init_done.duplicate_to_process(pid)?);
 
     let mut bootstrap =
         AgentBootstrap::new(cfg.session.session_id, cfg.session.ring_config, &pairs);
-    bootstrap.data_ready_handle = data_dup as u64;
-    bootstrap.init_done_handle = init_dup as u64;
-    bootstrap.host_process_handle = host_dup as u64;
+    bootstrap.data_ready_handle = raw_u64(data_dup);
+    bootstrap.init_done_handle = raw_u64(init_dup);
+    bootstrap.host_process_handle = raw_u64(host_dup);
     // L11: セッションの --order=global を Agent DLL へ伝える (Bootstrap v4)。
     bootstrap.order_global = u32::from(cfg.session.order_global);
     // L23: Runtime 独自の API の記録可否を Agent DLL へ伝える (Bootstrap v5)。
@@ -1331,7 +1342,7 @@ mod tests {
         ] {
             let mut capture = LaunchedCapture {
                 session: None,
-                process: 0,
+                process: None,
                 pid: 123,
                 shutdown_addr: Some(usize::MAX),
                 shutdown_outcome: Some(outcome.clone()),

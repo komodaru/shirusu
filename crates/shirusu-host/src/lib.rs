@@ -1058,7 +1058,7 @@ impl NotifyingDrainWorker {
     pub fn duplicate_space_to_process(
         &self,
         target_pid: u32,
-    ) -> shirusu_transport_win::Result<shirusu_transport_win::HandleValue> {
+    ) -> shirusu_transport_win::Result<shirusu_transport_win::RemoteHandle> {
         self.notify.duplicate_space_to_process(target_pid)
     }
     pub fn drain_once(&mut self, max: usize) -> DrainBatch {

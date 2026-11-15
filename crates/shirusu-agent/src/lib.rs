@@ -44,7 +44,7 @@ use shirusu_transport::ring::{
 use shirusu_transport::shm::{Control, Shm, Word};
 use shirusu_transport::slot::{SlotHandle, SlotPool};
 use shirusu_transport::RingConfig;
-use shirusu_transport_win::{EventClock, EventObject, HandleValue, RingNotify, SharedMapping};
+use shirusu_transport_win::{EventClock, EventObject, OwnedHandle, RingNotify, SharedMapping};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
@@ -410,24 +410,19 @@ impl Agent {
         Some(clock)
     }
     /// Host からその Ring の `space_available` ハンドルを受け取る
-    /// （A68、プロセス間経路）。`handle_value` はこのプロセスで有効な
-    /// Event ハンドルであること（Host が
-    /// `NotifyingDrainWorker::duplicate_space_to_process` で渡した値、
-    /// または継承で受け取った値）。`space_available` は auto-reset 前提。
-    ///
-    /// # Safety
-    /// 無効なハンドル値を渡すと、Windows では待機が失敗するか未定義動作に
-    /// なる。Linux スタブではハンドル値に実体が無いため、つながっていない
-    /// 新しいイベントが作られるだけ（プロセス間受け渡しの実証は Windows
-    /// 実機＋GHA の `duplicate_event_to_self_process_signals_across_handle`
-    /// が担う）。
-    pub unsafe fn attach_space_available(
+    /// （A68、プロセス間経路）。`handle` は Host が
+    /// `NotifyingDrainWorker::duplicate_space_to_process` で渡したか継承で
+    /// 受け取った auto-reset の Event。Linux スタブではハンドルに実体が無く、
+    /// つながっていない新しいイベントが作られるだけ（プロセス間受け渡しの
+    /// 実証は Windows 実機＋GHA の
+    /// `duplicate_event_to_self_process_signals_across_handle` が担う）。
+    pub fn attach_space_available(
         &self,
         thread_id: u64,
-        handle_value: HandleValue,
+        handle: OwnedHandle,
     ) -> Option<Arc<EventClock>> {
         let notify = Arc::new(RingNotify {
-            space_available: EventObject::from_handle_value(handle_value, true),
+            space_available: EventObject::from_owned(handle, true),
         });
         self.attach_space_available_notify(thread_id, notify)
     }
@@ -618,9 +613,12 @@ impl Agent {
                 // Windows プロセス間: duplicate されたハンドルから自分の写像を
                 // 作る。スタブでは Unsupported で失敗する。ビューは Shm が保つ
                 // ので、ハンドルは写像を作った後に閉じてよい。
-                // SAFETY: handle は Host が duplicate して渡した有効な
-                // File Mapping ハンドルであること (呼び出し側の契約)。
-                match unsafe { SharedMapping::from_handle_value(handle, delivery.len) } {
+                // SAFETY: DeliveredHandle を作った側が、値はこのプロセスで
+                // 有効な File Mapping ハンドルで所有権はここへ移ると約束した。
+                let Some(owned) = (unsafe { OwnedHandle::from_raw(handle.raw()) }) else {
+                    return Err(());
+                };
+                match SharedMapping::from_owned(owned, delivery.len) {
                     Ok(mapping) => mapping.shm().clone(),
                     Err(_) => return Err(()),
                 }
@@ -1661,7 +1659,9 @@ mod tests {
         // の実証は Windows 実機の duplicate テストが担う）。それでも Agent は
         // EventClock で書けること。
         let a = agent(2);
-        let clock = unsafe { a.attach_space_available(1, 0) };
+        // SAFETY: スタブはハンドルを使わず閉じもしない。
+        let fake = unsafe { OwnedHandle::from_raw(123) }.unwrap();
+        let clock = a.attach_space_available(1, fake);
         assert!(clock.is_some());
         assert!(a.space_available_attached(1));
         assert!(matches!(

@@ -7,7 +7,7 @@
 
 use shirusu_agent::{Agent, ExpansionManager, RecordResult};
 use shirusu_transport::context::HostMonitor;
-use shirusu_transport::expansion::DeliveredMapping;
+use shirusu_transport::expansion::{DeliveredHandle, DeliveredMapping};
 use shirusu_transport::expansion::{ExpansionDelivery, ExpansionRequest, EXPANDED_SLOT_GENERATION};
 use shirusu_transport::ring::WriterPolicy;
 use shirusu_transport::slot::{SlotPool, SLOT_MEMORY_BYTES};
@@ -307,7 +307,8 @@ fn delivery_with_handle_value_unsupported_on_stub() {
         .unwrap()
         .send(ExpansionDelivery {
             len: rig.cfg.required_len(),
-            mapping: DeliveredMapping::Handle(0),
+            // SAFETY: 0 はどのプロセスのハンドルでもなく、Agent は引き受けを拒む。
+            mapping: DeliveredMapping::Handle(unsafe { DeliveredHandle::new(0) }),
             generation: EXPANDED_SLOT_GENERATION,
         })
         .unwrap();

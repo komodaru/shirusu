@@ -212,6 +212,18 @@ mod win {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
+    /// Bootstrap の u64 欄にあるハンドル値を引き受ける (0 や usize に入らない
+    /// 値は None)。
+    ///
+    /// # Safety
+    /// 値が 0 でなければ、Host がこのプロセスへ複製したハンドルで、ほかに
+    /// 閉じる者がいないこと (1 回だけ呼ぶ)。
+    unsafe fn adopt_handle(raw: u64) -> Option<shirusu_transport_win::OwnedHandle> {
+        let raw = usize::try_from(raw).ok()?;
+        // SAFETY: 呼び出し側の約束をそのまま渡す。
+        unsafe { shirusu_transport_win::OwnedHandle::from_raw(raw) }
+    }
+
     struct DllState {
         installed: InstalledHooks,
         /// L01: Inline Hook の設置状態（解除時にプロローグを戻すため保持）。
@@ -356,12 +368,13 @@ mod win {
         }
         // Host 生存確認： Bootstrap で渡された Host プロセスへのハンドルが
         // シグナル状態（= Host 終了）になったら記録を止める。
-        let host_monitor = if b.host_process_handle != 0 {
-            let hv = b.host_process_handle as usize;
+        // SAFETY: Host がこのプロセスへ複製して渡したプロセスハンドルで、
+        // ここ以外に閉じる者はいない。
+        let host_monitor = if let Some(host) = unsafe { adopt_handle(b.host_process_handle) } {
             Arc::new(HostMonitor::new(move || {
-                // SAFETY: hv は Host が複製して渡した、このプロセスで有効な
-                // プロセスハンドル。WAIT_TIMEOUT (0x102) の間は生存。
-                unsafe { WaitForSingleObject(hv as HANDLE, 0) == 0x102 }
+                // WAIT_TIMEOUT (0x102) の間は生存。
+                // SAFETY: host が所有する有効なハンドル (閉包と共に生きる)。
+                unsafe { WaitForSingleObject(host.borrow().raw() as HANDLE, 0) == 0x102 }
             }))
         } else {
             Arc::new(HostMonitor::always_alive())
@@ -400,31 +413,31 @@ mod win {
             None => agent,
         };
         for &mapping in b.mapping_handles.iter().take(b.ring_count as usize) {
+            let Ok(mapping) = usize::try_from(mapping) else {
+                return STATUS_MAPPING_FAILED;
+            };
+            // SAFETY: Host がこのプロセスへ複製した File Mapping ハンドルで、
+            // 配送は 1 回だけ登録する (所有権は Agent へ移る)。
+            let handle = unsafe { shirusu_transport::expansion::DeliveredHandle::new(mapping) };
             let delivery = ExpansionDelivery {
                 len: config.required_len(),
-                mapping: shirusu_transport::expansion::DeliveredMapping::Handle(mapping as usize),
+                mapping: shirusu_transport::expansion::DeliveredMapping::Handle(handle),
                 generation: EXPANDED_SLOT_GENERATION,
             };
             if agent.register_slot_mapping(delivery).is_none() {
                 return STATUS_MAPPING_FAILED;
             }
         }
-        let data_ready = if b.data_ready_handle != 0 {
-            Some(ProcessNotify {
-                // SAFETY: Host が複製して渡した、このプロセスで有効なイベント。
-                data_ready: unsafe {
-                    EventObject::from_handle_value(b.data_ready_handle as usize, true)
-                },
-            })
-        } else {
-            None
-        };
+        // SAFETY: Host が複製して渡した、このプロセスで有効なイベント。
+        let data_ready = unsafe { adopt_handle(b.data_ready_handle) }.map(|h| ProcessNotify {
+            data_ready: EventObject::from_owned(h, true),
+        });
         let mut space_notifies = Vec::with_capacity(b.ring_count as usize);
         for &h in b.space_handles.iter().take(b.ring_count as usize) {
-            let notify = if h != 0 {
+            // SAFETY: 同上（auto-reset イベント）。
+            let notify = if let Some(h) = unsafe { adopt_handle(h) } {
                 RingNotify {
-                    // SAFETY: 同上（auto-reset イベント）。
-                    space_available: unsafe { EventObject::from_handle_value(h as usize, true) },
+                    space_available: EventObject::from_owned(h, true),
                 }
             } else {
                 // 結線なしの Ring はダミーで埋めて index の対応を保つ
@@ -710,11 +723,11 @@ mod win {
         // thread. Its return through ExitThread must not become an unmatched
         // application call or block replay of an otherwise complete trace.
         shirusu_hook::runtime::ReentrancyGuard::mark_thread_exiting();
-        if b.init_done_handle != 0 {
-            // SAFETY: Host がこのプロセスへ複製して渡したイベント。この値は
-            // Host 側のハンドルとは別物なので、立てた後に閉じる（閉じずに
-            // いると attach のたびに 1 つ漏れる。2026-11-14 レビュー P3-9）。
-            let ev = unsafe { EventObject::from_handle_value(b.init_done_handle as usize, true) };
+        // SAFETY: Host がこのプロセスへ複製して渡したイベント。この値は
+        // Host 側のハンドルとは別物なので、立てた後に閉じる（閉じずに
+        // いると attach のたびに 1 つ漏れる。2026-11-14 レビュー P3-9）。
+        if let Some(h) = unsafe { adopt_handle(b.init_done_handle) } {
+            let ev = EventObject::from_owned(h, true);
             let _ = ev.set();
             drop(ev);
         }

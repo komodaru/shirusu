@@ -133,10 +133,10 @@ fn cross_arch() -> ScenarioReport {
     let cmdline = format!(
         "\"{}\" --mapping {} --len {} --count {} --event-handle {}",
         producer_path,
-        mapping.handle_value(),
+        mapping.as_handle().raw(),
         len,
         count,
-        notify.data_ready.handle_value()
+        notify.data_ready.as_handle().raw()
     );
     let proc = match spawn_inheriting(&cmdline) {
         Ok(p) => p,
@@ -153,7 +153,7 @@ fn cross_arch() -> ScenarioReport {
         unsafe { shirusu_transport::ring::RingReader::new(mapping.shm().clone(), cfg) }.unwrap();
     let mut got: Vec<u64> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    let mut exit_code = wait_process(proc, Duration::from_millis(10));
+    let mut exit_code = wait_process(proc.borrow(), Duration::from_millis(10));
     while (got.len() as u64) < count {
         let b = rd.drain(4096);
         for e in b.events {
@@ -165,7 +165,7 @@ fn cross_arch() -> ScenarioReport {
             break;
         }
         if exit_code.is_none() {
-            exit_code = wait_process(proc, Duration::from_millis(2));
+            exit_code = wait_process(proc.borrow(), Duration::from_millis(2));
         } else {
             // producer 終了済みで、これ以上増えないなら打ち切る
             let wc = rd.write_cursor();
@@ -253,13 +253,13 @@ fn production_path() -> ScenarioReport {
     let cmdline = format!(
         "\"{}\" --agent-path --mapping {} --len {} --count1 {} --count2 {} --data-ready {} --phase-done {} --reclaim-ok {}",
         producer_path,
-        mapping.handle_value(),
+        mapping.as_handle().raw(),
         len,
         count1,
         count2,
-        notify.data_ready.handle_value(),
-        phase_done.handle_value(),
-        reclaim_ok.handle_value(),
+        notify.data_ready.as_handle().raw(),
+        phase_done.as_handle().raw(),
+        reclaim_ok.as_handle().raw(),
     );
     let proc = match spawn_inheriting(&cmdline) {
         Ok(p) => p,
@@ -345,7 +345,7 @@ fn production_path() -> ScenarioReport {
     let (got1, keys1, lost1) = match drain_phase(0, 0, count1, &notify) {
         Ok(v) => v,
         Err(e) => {
-            let _ = wait_process(proc, Duration::from_secs(5));
+            let _ = wait_process(proc.borrow(), Duration::from_secs(5));
             return fail(format!("phase 1: {e}"));
         }
     };
@@ -366,14 +366,14 @@ fn production_path() -> ScenarioReport {
     let (got2, keys2, lost2) = match drain_phase(1, count1, count2, &notify) {
         Ok(v) => v,
         Err(e) => {
-            let _ = wait_process(proc, Duration::from_secs(5));
+            let _ = wait_process(proc.borrow(), Duration::from_secs(5));
             return fail(format!("phase 2: {e}"));
         }
     };
     if !phase_done.wait_timeout(Duration::from_secs(30)) {
         return fail("phase 2: producer did not signal detach".to_string());
     }
-    let exit_code = wait_process(proc, Duration::from_secs(30));
+    let exit_code = wait_process(proc.borrow(), Duration::from_secs(30));
     let passed = exit_code == Some(0) && !lost2 && keys2 as u64 == count2;
     ScenarioReport {
         name,
@@ -456,11 +456,11 @@ fn memory_order_stress() -> ScenarioReport {
     let cmdline = format!(
         "\"{}\" --agent-stress --mapping {} --len {} --count {} --data-ready {} --phase-done {}",
         producer_path,
-        mapping.handle_value(),
+        mapping.as_handle().raw(),
         len,
         COUNT,
-        notify.data_ready.handle_value(),
-        phase_done.handle_value(),
+        notify.data_ready.as_handle().raw(),
+        phase_done.as_handle().raw(),
     );
     let proc = match spawn_inheriting(&cmdline) {
         Ok(p) => p,
@@ -480,7 +480,7 @@ fn memory_order_stress() -> ScenarioReport {
         }
     }
     if !notify.data_ready.wait_timeout(Duration::from_secs(30)) {
-        let _ = wait_process(proc, Duration::from_secs(5));
+        let _ = wait_process(proc.borrow(), Duration::from_secs(5));
         return fail("data_ready was never signaled".to_string());
     }
     // SAFETY: この Ring を読むのはこの Worker だけ (単一 Reader)。
@@ -503,7 +503,7 @@ fn memory_order_stress() -> ScenarioReport {
         Duration::from_secs(120),
     );
     if !reached {
-        let _ = wait_process(proc, Duration::from_secs(5));
+        let _ = wait_process(proc.borrow(), Duration::from_secs(5));
         let shared_generation = shirusu_host::ring_generation(base.control());
         return fail(format!(
             "drain timed out: got {}/{} integrity_lost={} stopped={} shared_generation={} last_loss={:?}",
@@ -520,7 +520,7 @@ fn memory_order_stress() -> ScenarioReport {
     if !phase_done.wait_timeout(Duration::from_secs(30)) {
         return fail("producer did not signal detach".to_string());
     }
-    let exit_code = wait_process(proc, Duration::from_secs(30));
+    let exit_code = wait_process(proc.borrow(), Duration::from_secs(30));
     if exit_code != Some(0) {
         return fail(format!("producer exit={exit_code:?}"));
     }

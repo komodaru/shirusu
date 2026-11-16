@@ -145,9 +145,11 @@ impl MemoryReader for ProcessMemory {
         if buf.is_empty() {
             return true;
         }
-        if addr == 0 {
+        // 32-bit では 4 GiB 以上のアドレスを切り詰めず、末尾が折り返す範囲も
+        // 読まない (レビュー 2026-11-16 P2)。
+        let Some(addr) = usable_range(addr, buf.len()) else {
             return false;
-        }
+        };
         let mut read: usize = 0;
         // SAFETY: 自プロセスへの失敗可能な読み取り。対象範囲が
         // アクセス不能でも違反にはならず 0 が返る (P0-3)。
@@ -155,7 +157,7 @@ impl MemoryReader for ProcessMemory {
         let ok = unsafe {
             ReadProcessMemory(
                 GetCurrentProcess(),
-                addr as usize as *const c_void,
+                addr as *const c_void,
                 buf.as_mut_ptr() as *mut c_void,
                 buf.len(),
                 &mut read,
@@ -163,6 +165,14 @@ impl MemoryReader for ProcessMemory {
         };
         ok != 0 && read == buf.len()
     }
+}
+
+/// 読める範囲の先頭: NULL、このプロセスのアドレス幅に収まらない値、末尾が
+/// 折り返す範囲は None。
+pub(crate) fn usable_range(addr: u64, len: usize) -> Option<usize> {
+    let start = usize::try_from(addr).ok().filter(|&a| a != 0)?;
+    start.checked_add(len)?;
+    Some(start)
 }
 
 // Submodules share this module's imports through `use super::*`.
@@ -188,3 +198,29 @@ include!("engine_generated.inc");
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod usable_range_props {
+    use super::usable_range;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// NULL・幅に収まらない値・末尾の折り返しは読まない。読む範囲は
+        /// 元のアドレスそのもの (32-bit で切り詰めない)。
+        #[test]
+        fn usable_range_never_truncates_or_wraps(addr in any::<u64>(), len in 0usize..4096) {
+            match usable_range(addr, len) {
+                Some(start) => {
+                    prop_assert_eq!(start as u64, addr);
+                    prop_assert!(addr != 0);
+                    prop_assert!(start.checked_add(len).is_some());
+                }
+                None => prop_assert!(
+                    addr == 0
+                        || usize::try_from(addr).is_err()
+                        || usize::try_from(addr).ok().and_then(|a| a.checked_add(len)).is_none()
+                ),
+            }
+        }
+    }
+}

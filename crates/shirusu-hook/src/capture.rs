@@ -66,7 +66,10 @@ impl MapMemory {
 impl MemoryReader for MapMemory {
     fn read_exact(&self, addr: u64, buf: &mut [u8]) -> bool {
         for (i, slot) in buf.iter_mut().enumerate() {
-            match self.bytes.get(&(addr + i as u64)) {
+            let Some(at) = guest_offset(addr, i as u64) else {
+                return false;
+            };
+            match self.bytes.get(&at) {
                 Some(b) => *slot = *b,
                 None => return false,
             }
@@ -108,7 +111,10 @@ pub fn read_utf16_string(mem: &dyn MemoryReader, addr: u64) -> CapturedValue {
     // 境界を越えない限りまとめて読んでも前半を失わない。
     let mut buf = [0u8; STRING_READ_CHUNK];
     loop {
-        let chunk_addr = addr + (units.len() as u64) * 2;
+        // 折り返すアドレスは読めない (P2: unchecked な加算で panic しない)。
+        let Some(chunk_addr) = guest_offset(addr, (units.len() as u64) * 2) else {
+            return cap(TypedValue::Str16(units), ValueCapture::Truncated);
+        };
         let to_page_end = PAGE_SIZE - (chunk_addr % PAGE_SIZE);
         // 奇数アドレスでページ末尾に 1 バイトだけ残る場合は 1 unit を読む。
         let len = ((to_page_end as usize).min(STRING_READ_CHUNK) & !1).max(2);
@@ -132,7 +138,10 @@ pub fn read_utf16_string(mem: &dyn MemoryReader, addr: u64) -> CapturedValue {
         let mut salvaged_any = false;
         for i in 0..(len as u64 / 2) {
             let mut b2 = [0u8; 2];
-            if !mem.read_exact(chunk_addr + i * 2, &mut b2) {
+            let Some(at) = guest_offset(chunk_addr, i * 2) else {
+                break;
+            };
+            if !mem.read_exact(at, &mut b2) {
                 break;
             }
             salvaged_any = true;
@@ -180,7 +189,9 @@ pub fn read_buffer(mem: &dyn MemoryReader, addr: u64, len: usize) -> CapturedVal
     // 全体が読めない場合は 1 バイトずつ可能な範囲まで拾い、部分取得として残す
     let mut got = 0usize;
     let mut one = [0u8; 1];
-    while got < want && mem.read_exact(addr + got as u64, &mut one) {
+    while got < want
+        && guest_offset(addr, got as u64).is_some_and(|at| mem.read_exact(at, &mut one))
+    {
         out[got] = one[0];
         got += 1;
     }
@@ -264,7 +275,7 @@ pub fn read_overlapped_transferred(
     bytes_addr: u64,
     overlapped_addr: u64,
 ) -> Option<u32> {
-    read_overlapped_transferred_with_width(mem, bytes_addr, overlapped_addr, size_of::<usize>())
+    read_overlapped_transferred_with_width(mem, bytes_addr, overlapped_addr, PointerWidth::NATIVE)
 }
 
 /// ポインタ幅を指定する版（レビュー #6 P0-2）。InternalHigh の
@@ -274,7 +285,7 @@ pub fn read_overlapped_transferred_with_width(
     mem: &dyn MemoryReader,
     bytes_addr: u64,
     overlapped_addr: u64,
-    pointer_width: usize,
+    pointer_width: PointerWidth,
 ) -> Option<u32> {
     if bytes_addr != 0 {
         if let Some(n) = mem.read_u32(bytes_addr) {
@@ -353,6 +364,41 @@ pub fn get_queued_completion_status_leave(
 pub const ERROR_IO_PENDING: u32 = 997;
 pub const ERROR_IO_INCOMPLETE: u32 = 996;
 
+/// 対象プロセスのポインタ幅。x86 と x64 だけ (他の幅は書けない)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerWidth {
+    Bits32,
+    Bits64,
+}
+impl PointerWidth {
+    /// このプロセスの幅。
+    pub const NATIVE: Self = match size_of::<usize>() {
+        4 => Self::Bits32,
+        8 => Self::Bits64,
+        _ => panic!("shirusu supports 32-bit and 64-bit targets only"),
+    };
+    pub const fn bytes(self) -> usize {
+        match self {
+            Self::Bits32 => 4,
+            Self::Bits64 => 8,
+        }
+    }
+    const fn bytes_u64(self) -> u64 {
+        match self {
+            Self::Bits32 => 4,
+            Self::Bits64 => 8,
+        }
+    }
+}
+
+/// 対象アプリから受け取ったアドレスに構造体内のオフセットを足す。
+/// 折り返すアドレスは読めないものとして None (レビュー 2026-11-16 P2:
+/// `u64::MAX - 7` の OVERLAPPED で Detour が panic した)。
+#[inline]
+pub fn guest_offset(addr: u64, offset: u64) -> Option<u64> {
+    addr.checked_add(offset)
+}
+
 /// OVERLAPPED.InternalHigh（転送済みバイト数）の先頭からのオフセット。
 ///
 /// OVERLAPPED = { Internal: ULONG_PTR, InternalHigh: ULONG_PTR, Offset,
@@ -361,8 +407,8 @@ pub const ERROR_IO_INCOMPLETE: u32 = 996;
 /// x86 では 4。旧実装は 8 固定であり、x86 ではオフセット 8 以降の
 /// Offset フィールド（ファイル位置）を転送バイト数として誤読して
 /// いた（レビュー #6 P0-2）。
-pub fn overlapped_internal_high_offset(pointer_width: usize) -> u64 {
-    pointer_width as u64
+pub fn overlapped_internal_high_offset(pointer_width: PointerWidth) -> u64 {
+    pointer_width.bytes_u64()
 }
 
 /// 完了待ちの非同期 I/O 操作（F27）。ReadFile / WriteFile の Detour が
@@ -430,7 +476,7 @@ pub fn read_overlapped_signature(
     mem: &dyn MemoryReader,
     overlapped_addr: u64,
 ) -> Option<OverlappedSignature> {
-    read_overlapped_signature_with_width(mem, overlapped_addr, size_of::<usize>())
+    read_overlapped_signature_with_width(mem, overlapped_addr, PointerWidth::NATIVE)
 }
 
 /// ポインタ幅を指定する版。Offset は Internal と InternalHigh の後
@@ -438,12 +484,13 @@ pub fn read_overlapped_signature(
 pub fn read_overlapped_signature_with_width(
     mem: &dyn MemoryReader,
     overlapped_addr: u64,
-    pointer_width: usize,
+    pointer_width: PointerWidth,
 ) -> Option<OverlappedSignature> {
-    if overlapped_addr == 0 || !matches!(pointer_width, 4 | 8) {
+    if overlapped_addr == 0 {
         return None;
     }
-    let at = overlapped_addr + 2 * pointer_width as u64;
+    let at = guest_offset(overlapped_addr, 2 * pointer_width.bytes_u64())?;
+    let pointer_width = pointer_width.bytes();
     let mut b = [0u8; 16];
     let len = 8 + pointer_width;
     if !mem.read_exact(at, &mut b[..len]) {
@@ -591,7 +638,7 @@ impl OverlappedRegistry {
 /// 操作は leave 時点で既に値が入っている。読めなければ None。
 /// レイアウトは自プロセスのポインタ幅（`size_of::<usize>()`）で決める。
 pub fn read_overlapped_internal_high(mem: &dyn MemoryReader, overlapped_addr: u64) -> Option<u64> {
-    read_overlapped_internal_high_with_width(mem, overlapped_addr, size_of::<usize>())
+    read_overlapped_internal_high_with_width(mem, overlapped_addr, PointerWidth::NATIVE)
 }
 
 /// ポインタ幅を指定する版（レビュー #6 P0-2）。オフセット = 幅 =
@@ -600,16 +647,17 @@ pub fn read_overlapped_internal_high(mem: &dyn MemoryReader, overlapped_addr: u6
 pub fn read_overlapped_internal_high_with_width(
     mem: &dyn MemoryReader,
     overlapped_addr: u64,
-    pointer_width: usize,
+    pointer_width: PointerWidth,
 ) -> Option<u64> {
-    if overlapped_addr == 0 || !matches!(pointer_width, 4 | 8) {
+    if overlapped_addr == 0 {
         return None;
     }
+    let at = guest_offset(
+        overlapped_addr,
+        overlapped_internal_high_offset(pointer_width),
+    )?;
     let mut b = [0u8; 8];
-    if mem.read_exact(
-        overlapped_addr + overlapped_internal_high_offset(pointer_width),
-        &mut b[..pointer_width],
-    ) {
+    if mem.read_exact(at, &mut b[..pointer_width.bytes()]) {
         Some(u64::from_le_bytes(b))
     } else {
         None
@@ -1148,7 +1196,7 @@ mod tests {
         mem.write_u32(0x114, 0x2);
         mem.write(0x118, &0x1234_5678_9abcu64.to_le_bytes());
         assert_eq!(
-            read_overlapped_signature_with_width(&mem, 0x100, 8),
+            read_overlapped_signature_with_width(&mem, 0x100, PointerWidth::Bits64),
             Some(OverlappedSignature {
                 offset: 0x2_0000_0010,
                 event: 0x1234_5678_9abc,
@@ -1160,14 +1208,16 @@ mod tests {
         mem.write_u32(0x208, 0x30);
         mem.write_u32(0x210, 0x77);
         assert_eq!(
-            read_overlapped_signature_with_width(&mem, 0x200, 4),
+            read_overlapped_signature_with_width(&mem, 0x200, PointerWidth::Bits32),
             Some(OverlappedSignature {
                 offset: 0x30,
                 event: 0x77,
             })
         );
-        assert_eq!(read_overlapped_signature_with_width(&mem, 0, 4), None);
-        assert_eq!(read_overlapped_signature_with_width(&mem, 0x200, 2), None);
+        assert_eq!(
+            read_overlapped_signature_with_width(&mem, 0, PointerWidth::Bits32),
+            None
+        );
     }
 
     #[test]
@@ -1521,13 +1571,13 @@ mod tests {
         for oversized in [u32::MAX as u64 + 1, u64::MAX] {
             mem.write(0x1008, &oversized.to_le_bytes());
             assert_eq!(
-                read_overlapped_transferred_with_width(&mem, 0, 0x1000, 8),
+                read_overlapped_transferred_with_width(&mem, 0, 0x1000, PointerWidth::Bits64),
                 None
             );
         }
         mem.write(0x1008, &(u32::MAX as u64).to_le_bytes());
         assert_eq!(
-            read_overlapped_transferred_with_width(&mem, 0, 0x1000, 8),
+            read_overlapped_transferred_with_width(&mem, 0, 0x1000, PointerWidth::Bits64),
             Some(u32::MAX)
         );
     }
@@ -1670,11 +1720,11 @@ mod tests {
         m.write_u32(0x1008, 0xDEAD_BEEF); // Offset (転送量ではない)
         m.write_u32(0x100C, 0); // OffsetHigh
         assert_eq!(
-            read_overlapped_internal_high_with_width(&m, 0x1000, 4),
+            read_overlapped_internal_high_with_width(&m, 0x1000, PointerWidth::Bits32),
             Some(77)
         );
         assert_eq!(
-            read_overlapped_transferred_with_width(&m, 0, 0x1000, 4),
+            read_overlapped_transferred_with_width(&m, 0, 0x1000, PointerWidth::Bits32),
             Some(77)
         );
         // 旧実装 (オフセット 8・幅 8 固定) はこの Fixture で Offset を
@@ -1682,7 +1732,7 @@ mod tests {
         // lpNumberOfBytesTransferred があればそちらが優先 (幅に依らない)。
         m.write_u32(0x5000, 99);
         assert_eq!(
-            read_overlapped_transferred_with_width(&m, 0x5000, 0x1000, 4),
+            read_overlapped_transferred_with_width(&m, 0x5000, 0x1000, PointerWidth::Bits32),
             Some(99)
         );
     }
@@ -1694,24 +1744,19 @@ mod tests {
         m.write(0x1000, &0x1111_2222_3333_4444u64.to_le_bytes()); // Internal
         m.write(0x1008, &123_456u64.to_le_bytes()); // InternalHigh
         assert_eq!(
-            read_overlapped_internal_high_with_width(&m, 0x1000, 8),
+            read_overlapped_internal_high_with_width(&m, 0x1000, PointerWidth::Bits64),
             Some(123_456)
         );
         assert_eq!(
-            read_overlapped_transferred_with_width(&m, 0, 0x1000, 8),
+            read_overlapped_transferred_with_width(&m, 0, 0x1000, PointerWidth::Bits64),
             Some(123_456)
         );
         // Only a 64-bit process can interpret this x64 fixture natively.
         if cfg!(target_pointer_width = "64") {
             assert_eq!(read_overlapped_internal_high(&m, 0x1000), Some(123_456));
         }
-        assert_eq!(overlapped_internal_high_offset(4), 4);
-        assert_eq!(overlapped_internal_high_offset(8), 8);
-        // 4 / 8 以外の幅は受理しない
-        assert_eq!(
-            read_overlapped_internal_high_with_width(&m, 0x1000, 2),
-            None
-        );
+        assert_eq!(overlapped_internal_high_offset(PointerWidth::Bits32), 4);
+        assert_eq!(overlapped_internal_high_offset(PointerWidth::Bits64), 8);
     }
 
     #[test]
@@ -2075,5 +2120,75 @@ mod tests {
             last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
         };
         let _ = generic_enter(&api, &[0x1000]);
+    }
+}
+
+/// レビュー 2026-11-16 P2: 対象アプリから受け取ったアドレスがどんな値でも、
+/// 記録処理は panic しない (overflow 検査ありのテストビルドで確かめる)。
+#[cfg(test)]
+mod guest_address_props {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// どのアドレスでも読める記憶 (内容はアドレスの下位バイト、0 は避ける)。
+    struct Everywhere;
+    impl MemoryReader for Everywhere {
+        fn read_exact(&self, addr: u64, buf: &mut [u8]) -> bool {
+            for (i, b) in buf.iter_mut().enumerate() {
+                let Some(at) = guest_offset(addr, i as u64) else {
+                    return false;
+                };
+                *b = (at as u8) | 1;
+            }
+            true
+        }
+    }
+
+    fn near_top() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            (0u64..64).prop_map(|d| u64::MAX - d),
+            (0u64..64).prop_map(|d| u64::from(u32::MAX) - d),
+            any::<u64>(),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn readers_never_panic_on_any_address(addr in near_top(), bytes in near_top(), len in 0usize..64) {
+            for width in [PointerWidth::Bits32, PointerWidth::Bits64] {
+                let sig = read_overlapped_signature_with_width(&Everywhere, addr, width);
+                let high = read_overlapped_internal_high_with_width(&Everywhere, addr, width);
+                let _ = read_overlapped_transferred_with_width(&Everywhere, bytes, addr, width);
+                // 読む最後のバイトが折り返すなら読めない (折り返した先を読まない)。
+                let w = width.bytes() as u64;
+                if addr != 0 && addr.checked_add(2 * w + 8 + w - 1).is_none() {
+                    prop_assert_eq!(sig, None);
+                }
+                if addr != 0 && addr.checked_add(2 * w - 1).is_none() {
+                    prop_assert_eq!(high, None);
+                }
+            }
+            let _ = read_utf16_string(&Everywhere, addr);
+            let _ = read_buffer(&Everywhere, addr, len);
+        }
+
+        #[test]
+        fn guest_offset_is_checked_add(addr in near_top(), off in 0u64..1 << 20) {
+            prop_assert_eq!(guest_offset(addr, off), addr.checked_add(off));
+        }
+    }
+
+    /// レビューの例: x64 で `u64::MAX - 7` の OVERLAPPED。
+    #[test]
+    fn overlapped_at_the_top_of_the_address_space_is_unreadable() {
+        let addr = u64::MAX - 7;
+        assert_eq!(
+            read_overlapped_signature_with_width(&Everywhere, addr, PointerWidth::Bits64),
+            None
+        );
+        assert_eq!(
+            read_overlapped_internal_high_with_width(&Everywhere, addr, PointerWidth::Bits64),
+            None
+        );
     }
 }

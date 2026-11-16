@@ -99,13 +99,27 @@ impl BorrowedHandle<'_> {
 /// 別のプロセスで有効なハンドル値。このプロセスでは使えない (閉じるには
 /// [`close_remote_handle`])。受け取った側は [`OwnedHandle::from_raw`] で
 /// 引き受ける。
+///
+/// HANDLE 値はプロセスごとの Handle Table で解釈されるので、値は複製先の
+/// プロセス ID と組で持つ (レビュー 2026-11-16 P2)。閉じる操作は持っている
+/// ID のプロセスにしか向かず、別プロセスの値と取り違える引数を書けない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RemoteHandle {
     raw: usize,
+    target_pid: u32,
 }
 impl RemoteHandle {
     pub fn raw(self) -> usize {
         self.raw
+    }
+    /// この値を解釈するプロセス。
+    pub fn target_pid(self) -> u32 {
+        self.target_pid
+    }
+    /// `pid` のプロセス向けの値なら数値を返す (Bootstrap など、特定の
+    /// プロセスへ数値で渡す場所はここを通す)。
+    pub fn raw_for(self, pid: u32) -> Option<usize> {
+        (self.target_pid == pid).then_some(self.raw)
     }
 }
 
@@ -182,9 +196,10 @@ mod imp {
             _owner: std::marker::PhantomData,
         }
     }
-    pub(super) fn remote(handle: HANDLE) -> RemoteHandle {
+    pub(super) fn remote(handle: HANDLE, target_pid: u32) -> RemoteHandle {
         RemoteHandle {
             raw: handle as usize,
+            target_pid,
         }
     }
 
@@ -430,7 +445,7 @@ mod imp {
             if ok == 0 {
                 return Err(last_err("DuplicateHandle"));
             }
-            Ok(remote(dup))
+            Ok(remote(dup, target_pid))
         }
         /// 継承可能なハンドルにする（CreateProcess で子へ渡す E2E 用）。
         pub fn make_inheritable(&self) -> Result<()> {
@@ -521,7 +536,7 @@ mod imp {
             if ok == 0 {
                 return Err(last_err("DuplicateHandle"));
             }
-            Ok(remote(dup))
+            Ok(remote(dup, target_pid))
         }
         pub fn make_inheritable(&self) -> Result<()> {
             // SAFETY: `self.handle` is an open handle owned by this event.
@@ -831,7 +846,7 @@ mod imp {
         if ok == 0 {
             return Err(last_err("DuplicateHandle"));
         }
-        Ok(remote(dup))
+        Ok(remote(dup, target_pid))
     }
 
     /// Give `target_pid` a handle to the current (Host) process that can only
@@ -862,18 +877,19 @@ mod imp {
         if ok == 0 {
             return Err(last_err("DuplicateHandle(host liveness)"));
         }
-        Ok(remote(dup))
+        Ok(remote(dup, target_pid))
     }
 
     /// Close a handle that this process duplicated into `target_pid`
     /// (`DUPLICATE_CLOSE_SOURCE`). Only for handles the target has not been
     /// told about: the target could otherwise already have closed and reused
     /// the value.
-    pub fn close_remote_handle(target_pid: u32, value: RemoteHandle) -> Result<()> {
+    pub fn close_remote_handle(value: RemoteHandle) -> Result<()> {
         use windows_sys::Win32::Foundation::DUPLICATE_CLOSE_SOURCE;
         if value.raw == 0 {
             return Ok(());
         }
+        let target_pid = value.target_pid;
         // SAFETY: OpenProcess takes only values; failure returns null, checked below.
         let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
         if target.is_null() {
@@ -1392,7 +1408,8 @@ mod imp {
     pub fn duplicate_self_synchronize_to_process(_target_pid: u32) -> Result<RemoteHandle> {
         Err(WinError::Unsupported)
     }
-    pub fn close_remote_handle(_target_pid: u32, _value: RemoteHandle) -> Result<()> {
+    pub fn close_remote_handle(value: RemoteHandle) -> Result<()> {
+        let _ = value;
         Err(WinError::Unsupported)
     }
     pub fn write_process_memory(
@@ -2262,6 +2279,9 @@ mod tests {
         let pid = std::process::id();
         let dup = m.duplicate_to_process(pid).unwrap();
         assert_ne!(dup.raw(), 0);
+        assert_eq!(dup.target_pid(), pid);
+        assert_eq!(dup.raw_for(pid), Some(dup.raw()));
+        assert_eq!(dup.raw_for(pid ^ 4), None);
         // SAFETY: 複製先はこのプロセスで、値はほかに誰も閉じない。
         let owned = unsafe { OwnedHandle::from_raw(dup.raw()) }.unwrap();
         let again = SharedMapping::from_owned(owned, 2048).unwrap();
@@ -2517,6 +2537,17 @@ mod portable_tests {
         {
             assert!(matches!(list, Err(WinError::Unsupported)));
         }
+    }
+    /// レビュー 2026-11-16 P2: 値は複製先のプロセスでしか数値にならない。
+    #[test]
+    fn remote_handle_belongs_to_its_target_process() {
+        let h = RemoteHandle {
+            raw: 0x44,
+            target_pid: 7,
+        };
+        assert_eq!(h.target_pid(), 7);
+        assert_eq!(h.raw_for(7), Some(0x44));
+        assert_eq!(h.raw_for(8), None);
     }
     #[test]
     fn notify_space_only_when_writer_waiting() {

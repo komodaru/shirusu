@@ -887,9 +887,11 @@ impl RemoteHandles {
         }
     }
 
-    fn keep(&mut self, value: win::RemoteHandle) -> win::RemoteHandle {
+    /// 対象プロセスへ渡す値を預かり、Bootstrap の u64 欄へ載せる数値を返す。
+    /// 別のプロセス向けの値は載せない (レビュー 2026-11-16 P2)。
+    fn keep(&mut self, value: win::RemoteHandle) -> Result<u64, SessionError> {
         self.values.push(value);
-        value
+        bootstrap_value(value, self.pid)
     }
 
     fn release(&mut self) {
@@ -900,15 +902,21 @@ impl RemoteHandles {
 impl Drop for RemoteHandles {
     fn drop(&mut self) {
         for &value in &self.values {
-            let _ = win::close_remote_handle(self.pid, value);
+            let _ = win::close_remote_handle(value);
         }
     }
 }
 
-/// Bootstrap の u64 欄へ載せるハンドル値 (usize は 64 bit 以下)。
-fn raw_u64(handle: win::RemoteHandle) -> u64 {
+/// Bootstrap の u64 欄へ載せるハンドル値 (usize は 64 bit 以下)。`pid` の
+/// プロセス向けに複製した値だけを通す。
+fn bootstrap_value(handle: win::RemoteHandle, pid: u32) -> Result<u64, SessionError> {
     const _: () = assert!(usize::BITS <= u64::BITS);
-    handle.raw() as u64
+    handle.raw_for(pid).map(|raw| raw as u64).ok_or_else(|| {
+        SessionError::Injection(format!(
+            "handle duplicated for process {} cannot go to process {pid}",
+            handle.target_pid()
+        ))
+    })
 }
 
 fn inject_and_init(
@@ -977,15 +985,16 @@ fn inject_and_init(
     // Until the Agent has seen the Bootstrap, every handle duplicated into
     // the target is ours to close on failure (2026-11-14 review P3-9).
     let mut remote_handles = RemoteHandles::new(pid);
-    let host_dup = remote_handles.keep(win::duplicate_self_synchronize_to_process(pid)?);
+    let host_dup = remote_handles.keep(win::duplicate_self_synchronize_to_process(pid)?)?;
 
     let mut rings = Vec::with_capacity(cfg.ring_count);
     let mut pairs: Vec<(u64, u64)> = Vec::with_capacity(cfg.ring_count);
     for i in 0..cfg.ring_count {
         let mapping = win::SharedMapping::create(ring_len)?;
         let ring_notify = std::sync::Arc::new(win::RingNotify::new()?);
-        let mapping_dup = remote_handles.keep(mapping.duplicate_to_process(pid)?);
-        let space_dup = remote_handles.keep(ring_notify.space_available.duplicate_to_process(pid)?);
+        let mapping_dup = remote_handles.keep(mapping.duplicate_to_process(pid)?)?;
+        let space_dup =
+            remote_handles.keep(ring_notify.space_available.duplicate_to_process(pid)?)?;
         let spec = RingSpec {
             process_id: TARGET_PROCESS_ID,
             raw_pid: pid,
@@ -993,16 +1002,16 @@ fn inject_and_init(
             expected_generation: EXPANDED_SLOT_GENERATION,
         };
         rings.push((mapping, ring_notify, spec));
-        pairs.push((raw_u64(mapping_dup), raw_u64(space_dup)));
+        pairs.push((mapping_dup, space_dup));
     }
-    let data_dup = remote_handles.keep(notify.data_ready.duplicate_to_process(pid)?);
-    let init_dup = remote_handles.keep(init_done.duplicate_to_process(pid)?);
+    let data_dup = remote_handles.keep(notify.data_ready.duplicate_to_process(pid)?)?;
+    let init_dup = remote_handles.keep(init_done.duplicate_to_process(pid)?)?;
 
     let mut bootstrap =
         AgentBootstrap::new(cfg.session.session_id, cfg.session.ring_config, &pairs);
-    bootstrap.data_ready_handle = raw_u64(data_dup);
-    bootstrap.init_done_handle = raw_u64(init_dup);
-    bootstrap.host_process_handle = raw_u64(host_dup);
+    bootstrap.data_ready_handle = data_dup;
+    bootstrap.init_done_handle = init_dup;
+    bootstrap.host_process_handle = host_dup;
     // L11: セッションの --order=global を Agent DLL へ伝える (Bootstrap v4)。
     bootstrap.order_global = u32::from(cfg.session.order_global);
     // L23: Runtime 独自の API の記録可否を Agent DLL へ伝える (Bootstrap v5)。

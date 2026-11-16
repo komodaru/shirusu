@@ -42,5 +42,8 @@ pub use ring::{
     DrainBatch, EventInput, LoaderLockProbe, LoaderLockState, OverflowState, ReceivedEvent,
     RingReader, RingWriter, SharedRegion, WriteOutcome, WriterPolicy,
 };
-pub use shm::{Backing, Control, Shm, ShmError, Word};
+pub use shm::{
+    Backing, ConsumerControl, ConsumerWord, Control, ProducerControl, ProducerWord, Shm, ShmError,
+    UninitializedRing, Word,
+};
 pub use slot::{SlotHandle, SlotPool, SlotState};

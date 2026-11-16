@@ -13,6 +13,14 @@
 //!   アクセスは書けない。
 //! - 共有領域を `&[u8]` として公開しない。中身が欲しいときは
 //!   [`Shm::snapshot`] / [`Shm::copy_out`] で所有データ (`Vec<u8>`) に写す。
+//!   どちらも生コピーなので `unsafe` (同時に書く者がいないことを約束する)。
+//!   `copy_out` は Control に掛かる範囲を拒む。Control は原子読みの
+//!   [`Control::snapshot`] でしか写さない (レビュー 2026-11-16 P0)。
+//! - Control の書き込みは役割で分ける (レビュー 2026-11-16 P1):
+//!   [`Control`] は読み取り専用、[`ProducerControl`] は書き手の語
+//!   ([`ProducerWord`])、[`ConsumerControl`] は読み手の語
+//!   ([`ConsumerWord`])、Meta 行の初期化は [`UninitializedRing::publish`]
+//!   だけ。
 
 use std::ops::Range;
 use std::ptr::NonNull;
@@ -187,16 +195,23 @@ impl Shm {
         Arc::ptr_eq(&self.keep, &other.keep)
     }
 
-    /// `range` のバイトを所有データへ写す。範囲外は None。
+    /// `range` のバイトを所有データへ生コピーで写す。範囲外と、Control
+    /// (先頭 [`CONTROL_SIZE`] バイト) に掛かる範囲は None。Control は
+    /// 原子操作でしか触れないので [`Control::snapshot`] を使う。
     ///
-    /// 書き手が同時に書いている範囲を写すと、その部分は書きかけの値になり
-    /// うる (共有メモリの読み手は写した値を検証してから使う)。
-    pub fn copy_out(&self, range: Range<usize>) -> Option<Vec<u8>> {
-        if range.start > range.end || range.end > self.len {
+    /// # Safety
+    /// 写している間、`range` へ他のスレッドが書き込まないこと。Ring では
+    /// 読み手が確定済み (書き手が書き終えて Cursor を Release で公開し、
+    /// 読み手が Acquire で読んだ) の範囲だけを写せばこれを満たす。
+    /// レビュー 2026-11-16 P0: 旧版は safe で、`Control` の原子書き込みや
+    /// 書き手の生コピーと同時に呼べた (safe Rust 同士のデータ競合)。
+    pub unsafe fn copy_out(&self, range: Range<usize>) -> Option<Vec<u8>> {
+        if range.start < CONTROL_SIZE || range.start > range.end || range.end > self.len {
             return None;
         }
         let mut out = vec![0u8; range.end - range.start];
-        // SAFETY: 範囲は領域内。写し先は新しい Vec で重ならない。参照は作らない。
+        // SAFETY: 範囲は Control より後ろの領域内。写し先は新しい Vec で
+        // 重ならない。参照は作らず、同時の書き込みが無いことは呼び出し側の約束。
         unsafe {
             std::ptr::copy_nonoverlapping(
                 self.base.as_ptr().add(range.start),
@@ -207,20 +222,112 @@ impl Shm {
         Some(out)
     }
 
-    /// 領域全体の写し。Control は原子読みで写す。
-    pub fn snapshot(&self) -> Vec<u8> {
-        let mut out = self
-            .copy_out(CONTROL_SIZE..self.len)
-            .map(|rest| {
-                let mut v = Vec::with_capacity(self.len);
-                v.resize(CONTROL_SIZE, 0);
-                v.extend_from_slice(&rest);
-                v
-            })
-            .unwrap_or_default();
-        out[..CONTROL_SIZE].copy_from_slice(&self.control().snapshot());
+    /// 領域全体の写し。Control は語ごとの原子読みで、残りは生コピーで写す。
+    ///
+    /// # Safety
+    /// 写している間、Control より後ろ (Descriptor / Payload) へ他のスレッドが
+    /// 書き込まないこと (書き手が止まっているテスト・検証器の像づくり)。
+    pub unsafe fn snapshot(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.len);
+        out.extend_from_slice(&self.control().snapshot());
+        // SAFETY: 呼び出し側の約束をそのまま渡す。範囲は Control の直後から末尾。
+        if let Some(rest) = unsafe { self.copy_out(CONTROL_SIZE..self.len) } {
+            out.extend_from_slice(&rest);
+        }
         out
     }
+
+    /// 書き手 (Producer) 側の Control。
+    ///
+    /// # Safety
+    /// 呼び出し側はこの Ring の書き手側 (Writer、または書き手を持つ Agent)
+    /// であること。Producer の語 (WriteCursor / PayloadWritePosition など) は
+    /// 読み手が生コピーする範囲を決めるので、SPSC の規約 (確定した範囲だけを
+    /// 公開する) から外れた値を書くと、読み手のコピーと書き手の書き込みが同じ
+    /// バイトで重なる。
+    pub unsafe fn producer_control(&self) -> ProducerControl<'_> {
+        ProducerControl {
+            ctl: self.control(),
+        }
+    }
+
+    /// 読み手 (Consumer) 側の Control。
+    ///
+    /// # Safety
+    /// 呼び出し側はこの Ring の読み手側 (Host の回収経路) であること。
+    /// ReadCursor / PayloadReadPosition は書き手が上書きしてよい範囲を決める
+    /// ので、まだ写していない位置まで進めると、書き手の書き込みと読み手の
+    /// コピーが同じバイトで重なる。
+    pub unsafe fn consumer_control(&self) -> ConsumerControl<'_> {
+        ConsumerControl {
+            ctl: self.control(),
+        }
+    }
+}
+
+/// 生成直後で、まだ誰も使っていない Ring 領域 (レビュー 2026-11-16 P1)。
+/// Control の初期化 (Magic・版数・容量・Generation・Owner) はこの型を
+/// 消費する [`UninitializedRing::publish`] でしかできない。稼働中の Ring の
+/// Control を初期化し直すコードは書けない。
+pub struct UninitializedRing {
+    shm: Shm,
+    cfg: RingConfig,
+}
+
+impl UninitializedRing {
+    /// ゼロ初期化したヒープ領域 (誰とも共有していない)。
+    pub fn alloc(cfg: RingConfig) -> Result<Self, ShmError> {
+        let shm = Shm::alloc_zeroed(cfg.required_len())?;
+        Ok(Self { shm, cfg })
+    }
+
+    /// 既存の領域を、これから初期化する Ring として扱う。
+    ///
+    /// # Safety
+    /// `shm` の Ring をいま読み書きしている者がいないこと (新しく作った、
+    /// あるいは前の書き手と読み手が手放した Mapping)。
+    pub unsafe fn from_shm(shm: Shm, cfg: RingConfig) -> Result<Self, ShmError> {
+        shm.check_fits(cfg)?;
+        Ok(Self { shm, cfg })
+    }
+
+    pub fn config(&self) -> RingConfig {
+        self.cfg
+    }
+
+    /// Magic 以外の Control を書く (公開前の段階を観測するテスト用)。
+    /// 何度呼んでもよく、公開は [`UninitializedRing::publish`] が行う。
+    pub fn prepare(&self, generation: u64, owner_thread_id: u64) {
+        init_fields(self.shm.control(), self.cfg, generation, owner_thread_id);
+    }
+
+    /// Control を初期化して公開する。
+    ///
+    /// 公開順序 (レビュー第5回 #4): Magic は**最後**に `Release` で書く。
+    /// それ以外の全フィールド (ゼロクリア・版数・容量・Generation・Owner) を
+    /// 先に書き終えてから Magic を公開することで、Magic を `Acquire` で読んだ
+    /// Host は初期化済みの全フィールドを見る。
+    pub fn publish(self, generation: u64, owner_thread_id: u64) -> Shm {
+        init_control(self.shm.control(), self.cfg, generation, owner_thread_id);
+        self.shm
+    }
+}
+
+fn init_control(ctl: Control<'_>, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
+    init_fields(ctl, cfg, generation, owner_thread_id);
+    ctl.at(Word::Magic).store(MAGIC, Ordering::Release);
+}
+
+fn init_fields(ctl: Control<'_>, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
+    for w in ctl.words {
+        w.store(0, Ordering::Relaxed);
+    }
+    let set = |w: Word, v: u64| ctl.at(w).store(v, Ordering::Relaxed);
+    set(Word::LayoutVersion, LAYOUT_VERSION);
+    set(Word::DescriptorCapacity, cfg.descriptor_capacity_u64());
+    set(Word::PayloadCapacity, cfg.payload_capacity_u64());
+    set(Word::Generation, generation);
+    set(Word::OwnerThreadId, owner_thread_id);
 }
 
 /// Control 領域の語。閉じた集合で、オフセットはここでしか決まらない。
@@ -327,50 +434,34 @@ const _: () = {
     }
 };
 
-/// Control 領域への借用。語は [`Word`] でしか指せない。
+/// Control 領域への読み取り専用の借用。語は [`Word`] でしか指せない。
+/// 書き込みは役割ごとの [`ProducerControl`] / [`ConsumerControl`] と、
+/// 初期化は [`UninitializedRing`] にしかない (レビュー 2026-11-16 P1)。
 #[derive(Clone, Copy)]
 pub struct Control<'a> {
     words: &'a [AtomicU64; CONTROL_WORDS],
 }
 
 impl<'a> Control<'a> {
-    /// プロセス内の原子語の配列を Control として使う (テスト・モデル用)。
+    /// プロセス内の原子語の配列を Control として読む (テスト・モデル用)。
     pub fn from_words(words: &'a [AtomicU64; CONTROL_WORDS]) -> Self {
         Self { words }
     }
 
+    /// クレート内専用 (役割を持つ型と初期化、壊れた Control を作るテスト)。
     #[inline(always)]
-    fn at(self, w: Word) -> &'a AtomicU64 {
+    pub(crate) fn at(self, w: Word) -> &'a AtomicU64 {
         &self.words[w.index()]
     }
     #[inline(always)]
     pub fn load(self, w: Word, order: Ordering) -> u64 {
         self.at(w).load(order)
     }
-    #[inline(always)]
-    pub fn store(self, w: Word, v: u64, order: Ordering) {
-        self.at(w).store(v, order)
-    }
-    #[inline(always)]
-    pub fn swap(self, w: Word, v: u64, order: Ordering) -> u64 {
-        self.at(w).swap(v, order)
-    }
-    /// 単調カウンタの加算 (Relaxed)。
-    #[inline(always)]
-    pub fn fetch_add(self, w: Word, v: u64) -> u64 {
-        self.at(w).fetch_add(v, Ordering::Relaxed)
-    }
 
     /// 書き手が空き待ち中かどうか (Host が space_available の通知要否を判断する)。
     #[inline]
     pub fn writer_waiting(self) -> bool {
         self.load(Word::WriterWaiting, Ordering::Acquire) != 0
-    }
-    /// Agent 側: プロセス全体の欠落呼び出し数を掲示する (単調、P1-1)。
-    #[inline]
-    pub fn publish_process_missing_calls(self, total: u64) {
-        self.at(Word::ProcessMissingCalls)
-            .fetch_max(total, Ordering::Relaxed);
     }
     /// Host 側: 掲示された欠落呼び出し数 (信用しない参考値。下限として使う)。
     #[inline]
@@ -380,37 +471,6 @@ impl<'a> Control<'a> {
     /// Magic が公開済みか (Host と同一の読み手述語)。
     pub fn is_published(self) -> bool {
         self.load(Word::Magic, Ordering::Acquire) == MAGIC
-    }
-
-    /// Control を初期化する (生成者のみが呼ぶ)。
-    ///
-    /// 公開順序 (レビュー第5回 #4): Magic は**最後**に `Release` で書く。
-    /// それ以外の全フィールド (ゼロクリア・版数・容量・Generation・Owner) を
-    /// 先に書き終えてから Magic を公開することで、Magic を `Acquire` で読んだ
-    /// Host は初期化済みの全フィールドを見る。
-    pub fn init(self, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
-        self.init_fields(cfg, generation, owner_thread_id);
-        self.store(Word::Magic, MAGIC, Ordering::Release);
-    }
-
-    /// [`Control::init`] のうち Magic 以外 (公開前の段階テスト用に分離)。
-    pub fn init_fields(self, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
-        for w in self.words {
-            w.store(0, Ordering::Relaxed);
-        }
-        self.store(Word::LayoutVersion, LAYOUT_VERSION, Ordering::Relaxed);
-        self.store(
-            Word::DescriptorCapacity,
-            cfg.descriptor_capacity_u64(),
-            Ordering::Relaxed,
-        );
-        self.store(
-            Word::PayloadCapacity,
-            cfg.payload_capacity_u64(),
-            Ordering::Relaxed,
-        );
-        self.store(Word::Generation, generation, Ordering::Relaxed);
-        self.store(Word::OwnerThreadId, owner_thread_id, Ordering::Relaxed);
     }
 
     /// Control 全体を語ごとの原子読み (Acquire) で所有データへ写す。
@@ -432,6 +492,127 @@ impl<'a> Control<'a> {
     }
 }
 
+/// 書き手 (Producer) だけが更新する語。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProducerWord {
+    WriteCursor,
+    PayloadWritePosition,
+    DroppedEvents,
+    DroppedPayloadBytes,
+    DegradedEvents,
+    OverflowState,
+    ExpansionRequested,
+    LastWaitNs,
+    WriterWaiting,
+}
+
+impl ProducerWord {
+    pub const fn word(self) -> Word {
+        match self {
+            Self::WriteCursor => Word::WriteCursor,
+            Self::PayloadWritePosition => Word::PayloadWritePosition,
+            Self::DroppedEvents => Word::DroppedEvents,
+            Self::DroppedPayloadBytes => Word::DroppedPayloadBytes,
+            Self::DegradedEvents => Word::DegradedEvents,
+            Self::OverflowState => Word::OverflowState,
+            Self::ExpansionRequested => Word::ExpansionRequested,
+            Self::LastWaitNs => Word::LastWaitNs,
+            Self::WriterWaiting => Word::WriterWaiting,
+        }
+    }
+}
+
+/// 読み手 (Consumer) だけが更新する語。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConsumerWord {
+    ReadCursor,
+    PayloadReadPosition,
+    RingStopped,
+    HostDrainCount,
+}
+
+impl ConsumerWord {
+    pub const fn word(self) -> Word {
+        match self {
+            Self::ReadCursor => Word::ReadCursor,
+            Self::PayloadReadPosition => Word::PayloadReadPosition,
+            Self::RingStopped => Word::RingStopped,
+            Self::HostDrainCount => Word::HostDrainCount,
+        }
+    }
+}
+
+/// 書き手側の Control。[`ProducerWord`] と、書き手側の手続き (HostWaiting の
+/// 消費、欠落数の掲示) だけを書ける。[`Shm::producer_control`] で得る。
+#[derive(Clone, Copy)]
+pub struct ProducerControl<'a> {
+    ctl: Control<'a>,
+}
+
+impl<'a> std::ops::Deref for ProducerControl<'a> {
+    type Target = Control<'a>;
+    fn deref(&self) -> &Control<'a> {
+        &self.ctl
+    }
+}
+
+impl ProducerControl<'_> {
+    #[inline(always)]
+    pub fn store(self, w: ProducerWord, v: u64, order: Ordering) {
+        self.ctl.at(w.word()).store(v, order)
+    }
+    /// 単調カウンタの加算 (Relaxed)。
+    #[inline(always)]
+    pub fn fetch_add(self, w: ProducerWord, v: u64) -> u64 {
+        self.ctl.at(w.word()).fetch_add(v, Ordering::Relaxed)
+    }
+    /// Host が立てた HostWaiting を消費する。立っていれば true。
+    #[inline(always)]
+    pub fn take_host_waiting(self) -> bool {
+        self.ctl.at(Word::HostWaiting).swap(0, Ordering::Relaxed) != 0
+    }
+    /// Agent 側: プロセス全体の欠落呼び出し数を掲示する (単調、P1-1)。
+    #[inline]
+    pub fn publish_process_missing_calls(self, total: u64) {
+        self.ctl
+            .at(Word::ProcessMissingCalls)
+            .fetch_max(total, Ordering::Relaxed);
+    }
+}
+
+/// 読み手側の Control。[`ConsumerWord`] と HostWaiting だけを書ける。
+/// [`Shm::consumer_control`] で得る。
+#[derive(Clone, Copy)]
+pub struct ConsumerControl<'a> {
+    ctl: Control<'a>,
+}
+
+impl<'a> std::ops::Deref for ConsumerControl<'a> {
+    type Target = Control<'a>;
+    fn deref(&self) -> &Control<'a> {
+        &self.ctl
+    }
+}
+
+impl ConsumerControl<'_> {
+    #[inline(always)]
+    pub fn store(self, w: ConsumerWord, v: u64, order: Ordering) {
+        self.ctl.at(w.word()).store(v, order)
+    }
+    /// 単調カウンタの加算 (Relaxed)。
+    #[inline(always)]
+    pub fn fetch_add(self, w: ConsumerWord, v: u64) -> u64 {
+        self.ctl.at(w.word()).fetch_add(v, Ordering::Relaxed)
+    }
+    /// Host が空き通知を待つ印を立てる / 下ろす。
+    #[inline(always)]
+    pub fn set_host_waiting(self, waiting: bool, order: Ordering) {
+        self.ctl
+            .at(Word::HostWaiting)
+            .store(u64::from(waiting), order)
+    }
+}
+
 /// 領域の写し (所有データ)。検証器へ渡す像や、壊した像を作るテストに使う。
 /// 共有メモリではないので、語の読み書きは普通のバイト操作で足りる。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,17 +631,17 @@ impl Image {
             bytes: src.to_vec(),
         }
     }
-    /// `cfg` の大きさで、[`Control::init`] と同じ Control を持つ像。
+    /// `cfg` の大きさで、[`UninitializedRing::publish`] と同じ Control を持つ像。
     pub fn initialized(cfg: RingConfig, generation: u64, owner_thread_id: u64) -> Self {
         let mut img = Self::zeroed(cfg.required_len());
         img.init(cfg, generation, owner_thread_id);
         img
     }
-    /// Control を [`Control::init`] と同じ内容で書き直す。
+    /// Control を [`UninitializedRing::publish`] と同じ内容で書き直す。
     pub fn init(&mut self, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
         let words: [AtomicU64; CONTROL_WORDS] = std::array::from_fn(|_| AtomicU64::new(0));
         let ctl = Control::from_words(&words);
-        ctl.init(cfg, generation, owner_thread_id);
+        init_control(ctl, cfg, generation, owner_thread_id);
         self.bytes[..CONTROL_SIZE].copy_from_slice(&ctl.snapshot());
     }
     pub fn get(&self, w: Word) -> u64 {
@@ -510,30 +691,118 @@ mod tests {
     }
 
     #[test]
-    fn copy_out_is_bounds_checked() {
+    fn copy_out_is_bounds_checked_and_never_covers_control() {
         let shm = Shm::alloc_zeroed(CONTROL_SIZE + 8).unwrap();
-        assert_eq!(
-            shm.copy_out(0..CONTROL_SIZE + 8).unwrap().len(),
-            CONTROL_SIZE + 8
-        );
-        assert!(shm.copy_out(0..CONTROL_SIZE + 9).is_none());
-        #[allow(clippy::reversed_empty_ranges)]
-        let reversed = 5..4;
-        assert!(shm.copy_out(reversed).is_none());
+        // SAFETY: 誰も書いていない領域。
+        unsafe {
+            assert_eq!(
+                shm.copy_out(CONTROL_SIZE..CONTROL_SIZE + 8).unwrap().len(),
+                8
+            );
+            assert!(shm.copy_out(CONTROL_SIZE..CONTROL_SIZE + 9).is_none());
+            // Control は原子操作でしか読まない (レビュー 2026-11-16 P0)。
+            assert!(shm.copy_out(0..8).is_none());
+            assert!(shm.copy_out(CONTROL_SIZE - 1..CONTROL_SIZE + 1).is_none());
+            #[allow(clippy::reversed_empty_ranges)]
+            let reversed = CONTROL_SIZE + 5..CONTROL_SIZE + 4;
+            assert!(shm.copy_out(reversed).is_none());
+        }
     }
 
     #[test]
     fn control_words_round_trip_through_snapshot() {
-        let shm = Shm::alloc_zeroed(CONTROL_SIZE).unwrap();
-        for (i, w) in Word::ALL.into_iter().enumerate() {
-            shm.control().store(w, i as u64 + 1, Ordering::Relaxed);
+        let cfg = RingConfig::new(4, 64);
+        let shm = UninitializedRing::alloc(cfg).unwrap().publish(7, 42);
+        let producer = [
+            ProducerWord::WriteCursor,
+            ProducerWord::PayloadWritePosition,
+            ProducerWord::DroppedEvents,
+            ProducerWord::DroppedPayloadBytes,
+            ProducerWord::DegradedEvents,
+            ProducerWord::OverflowState,
+            ProducerWord::ExpansionRequested,
+            ProducerWord::LastWaitNs,
+            ProducerWord::WriterWaiting,
+        ];
+        let consumer = [
+            ConsumerWord::ReadCursor,
+            ConsumerWord::PayloadReadPosition,
+            ConsumerWord::RingStopped,
+            ConsumerWord::HostDrainCount,
+        ];
+        // SAFETY: このテストが唯一の書き手かつ読み手。
+        let (p, c) = unsafe { (shm.producer_control(), shm.consumer_control()) };
+        for (i, w) in producer.into_iter().enumerate() {
+            p.store(w, 100 + i as u64, Ordering::Relaxed);
         }
-        let snap = shm.snapshot();
-        for (i, w) in Word::ALL.into_iter().enumerate() {
-            let off = w.offset();
-            let v = u64::from_le_bytes(snap[off..off + 8].try_into().unwrap());
-            assert_eq!(v, i as u64 + 1, "{w:?}");
+        for (i, w) in consumer.into_iter().enumerate() {
+            c.store(w, 200 + i as u64, Ordering::Relaxed);
         }
+        c.set_host_waiting(true, Ordering::Relaxed);
+        p.publish_process_missing_calls(9);
+        // SAFETY: 誰も書いていない。
+        let snap = unsafe { shm.snapshot() };
+        let img = Image::copy_of(&snap);
+        for (i, w) in producer.into_iter().enumerate() {
+            assert_eq!(img.get(w.word()), 100 + i as u64, "{w:?}");
+        }
+        for (i, w) in consumer.into_iter().enumerate() {
+            assert_eq!(img.get(w.word()), 200 + i as u64, "{w:?}");
+        }
+        assert_eq!(img.get(Word::HostWaiting), 1);
+        assert_eq!(img.get(Word::ProcessMissingCalls), 9);
+        assert_eq!(img.get(Word::Magic), MAGIC);
+        assert_eq!(img.get(Word::Generation), 7);
+        assert_eq!(img.get(Word::OwnerThreadId), 42);
+        assert!(p.take_host_waiting());
+        assert!(!p.take_host_waiting());
+    }
+
+    /// 役割の語は互いに素で、Meta 行の語はどちらにも無い。全ての語は
+    /// Producer / Consumer / HostWaiting・ProcessMissingCalls / Meta の
+    /// どれか一つに属する (役割の取り違えを表の段階で防ぐ)。
+    #[test]
+    fn role_words_partition_control() {
+        use std::collections::HashSet;
+        let producer: HashSet<Word> = [
+            ProducerWord::WriteCursor,
+            ProducerWord::PayloadWritePosition,
+            ProducerWord::DroppedEvents,
+            ProducerWord::DroppedPayloadBytes,
+            ProducerWord::DegradedEvents,
+            ProducerWord::OverflowState,
+            ProducerWord::ExpansionRequested,
+            ProducerWord::LastWaitNs,
+            ProducerWord::WriterWaiting,
+        ]
+        .map(ProducerWord::word)
+        .into();
+        let consumer: HashSet<Word> = [
+            ConsumerWord::ReadCursor,
+            ConsumerWord::PayloadReadPosition,
+            ConsumerWord::RingStopped,
+            ConsumerWord::HostDrainCount,
+        ]
+        .map(ConsumerWord::word)
+        .into();
+        let meta: HashSet<Word> = [
+            Word::Magic,
+            Word::LayoutVersion,
+            Word::DescriptorCapacity,
+            Word::PayloadCapacity,
+            Word::Generation,
+            Word::OwnerThreadId,
+        ]
+        .into();
+        let handshake: HashSet<Word> = [Word::HostWaiting, Word::ProcessMissingCalls].into();
+        let sets = [&producer, &consumer, &meta, &handshake];
+        for (i, a) in sets.iter().enumerate() {
+            for b in &sets[i + 1..] {
+                assert!(a.is_disjoint(b));
+            }
+        }
+        let all: HashSet<Word> = sets.iter().flat_map(|s| s.iter().copied()).collect();
+        assert_eq!(all, Word::ALL.into_iter().collect());
     }
 
     #[test]

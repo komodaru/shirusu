@@ -1,0 +1,11 @@
+error[E0599]: no method named `store` found for struct `Control<'a>` in the current scope
+ --> tests/ui/control_is_read_only.rs:8:22
+  |
+8 |     region.control().store(Word::WriteCursor, 1, Ordering::Relaxed);
+  |                      ^^^^^ method not found in `Control<'_>`
+
+error[E0599]: no method named `init` found for struct `Control<'a>` in the current scope
+ --> tests/ui/control_is_read_only.rs:9:22
+  |
+9 |     region.control().init(RingConfig::new(4, 64), 2, 1);
+  |                      ^^^^ method not found in `Control<'_>`

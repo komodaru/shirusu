@@ -303,7 +303,8 @@ fn validating_host_generation_mismatch_stops_permanently() {
     let region = SharedRegion::new(cfg, 5, 1).unwrap();
     let known = KnownConfig::new(cfg, cfg.required_len());
     let mut host = ValidatingHost::new(known, 6); // 世代 5 の像に 6 を期待する
-    assert!(host.drain_image(&region.snapshot()).is_err());
+                                                  // SAFETY: no writer is writing to the region while it is copied.
+    assert!(host.drain_image(&unsafe { region.snapshot() }).is_err());
     assert!(host.integrity_lost);
     assert!(host.is_stopped());
     assert!(matches!(
@@ -312,7 +313,8 @@ fn validating_host_generation_mismatch_stops_permanently() {
     ));
     // 停止後は正しい像を持ってきても RingStopped のまま
     assert!(matches!(
-        host.drain_image(&region.snapshot()),
+        // SAFETY: no writer is writing to the region while it is copied.
+        host.drain_image(&unsafe { region.snapshot() }),
         Err(shirusu_transport::validate::IntegrityError::RingStopped)
     ));
 }
@@ -336,11 +338,13 @@ fn validating_host_keys_accumulate_across_drains() {
     let mut inp = ev(EventKind::CallEnter, 1);
     inp.payload = b"aaa";
     w.write(inp);
-    let _ = host.drain_image(&region.snapshot()).unwrap();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let _ = host.drain_image(&unsafe { region.snapshot() }).unwrap();
     let mut inp2 = ev(EventKind::CallEnter, 2);
     inp2.payload = b"bb";
     w.write(inp2);
-    let _ = host.drain_image(&region.snapshot()).unwrap();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let _ = host.drain_image(&unsafe { region.snapshot() }).unwrap();
     assert_eq!(
         host.payload_keys,
         vec![

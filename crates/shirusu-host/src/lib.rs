@@ -19,7 +19,7 @@ pub const MAX_RING_COUNT: usize = shirusu_hook::bootstrap::MAX_BOOTSTRAP_RINGS;
 use shirusu_transport::descriptor::EventKind;
 use shirusu_transport::layout::{self, LossCounters};
 use shirusu_transport::ring::{DrainBatch, ReceivedEvent, SharedRegion};
-use shirusu_transport::shm::{Control, Shm, ShmError, Word};
+use shirusu_transport::shm::{ConsumerControl, ConsumerWord, Control, Shm, ShmError, Word};
 use shirusu_transport::slot::{SlotHandle, SlotPool};
 use shirusu_transport::validate::{CommittedChunk, IntegrityError, KnownConfig, ValidatingReader};
 use shirusu_transport::RingConfig;
@@ -405,8 +405,10 @@ impl CommittedRangeCollector {
         })
     }
 
-    fn ctl(&self) -> Control<'_> {
-        self.shm.control()
+    fn ctl(&self) -> ConsumerControl<'_> {
+        // SAFETY: CommittedRangeCollector はこの Ring の唯一の読み手
+        // (構築時の約束)。
+        unsafe { self.shm.consumer_control() }
     }
 
     /// Whether the Agent is reinitializing (or has reinitialized) this
@@ -557,11 +559,14 @@ impl CommittedRangeCollector {
         // 4. Release the copied range to the writer.
         self.read_cursor = write_cursor;
         self.payload_read_position = payload_end;
+        self.ctl().store(
+            ConsumerWord::PayloadReadPosition,
+            payload_end,
+            Ordering::Release,
+        );
         self.ctl()
-            .store(Word::PayloadReadPosition, payload_end, Ordering::Release);
-        self.ctl()
-            .store(Word::ReadCursor, write_cursor, Ordering::Release);
-        self.ctl().fetch_add(Word::HostDrainCount, 1);
+            .store(ConsumerWord::ReadCursor, write_cursor, Ordering::Release);
+        self.ctl().fetch_add(ConsumerWord::HostDrainCount, 1);
         if self.ctl().writer_waiting() {
             notify_space();
         }
@@ -832,18 +837,19 @@ impl DrainWorker {
         };
         if !batch.events.is_empty() {
             // 前進は検証済み範囲に限る。
-            let ctl = shm.control();
+            // SAFETY: DrainWorker はこの Ring の唯一の読み手 (構築時の約束)。
+            let ctl = unsafe { shm.consumer_control() };
             ctl.store(
-                Word::PayloadReadPosition,
+                ConsumerWord::PayloadReadPosition,
                 self.reader.payload_read_position(),
                 Ordering::Release,
             );
             ctl.store(
-                Word::ReadCursor,
+                ConsumerWord::ReadCursor,
                 self.reader.read_cursor(),
                 Ordering::Release,
             );
-            ctl.fetch_add(Word::HostDrainCount, 1);
+            ctl.fetch_add(ConsumerWord::HostDrainCount, 1);
         }
         self.process_batch(&batch);
         batch
@@ -1191,7 +1197,11 @@ impl ValidatingHost {
     /// の読み位置は進めないため、実 Mapping を相手にする場合はこちらを使う。
     /// 前進は検証に成功した範囲に限り、失敗時は共有側を一切変更しない。
     /// 領域が検証側の要求長に満たない場合は `ImageTooSmall` で失敗する。
-    pub fn drain_shared(&mut self, shm: &Shm) -> Result<Vec<ReceivedEvent>, IntegrityError> {
+    ///
+    /// # Safety
+    /// 呼び出し側は `shm` の Ring の唯一の読み手であること (SPSC)。読み位置を
+    /// 進めるので、ほかの読み手と並ぶと書き手が未読の範囲を上書きする。
+    pub unsafe fn drain_shared(&mut self, shm: &Shm) -> Result<Vec<ReceivedEvent>, IntegrityError> {
         let cfg = self.known.config();
         if shm.check_fits(cfg).is_err() {
             return Err(IntegrityError::ImageTooSmall);
@@ -1212,18 +1222,19 @@ impl ValidatingHost {
         let events = self.drain_image(&image)?;
         if !events.is_empty() {
             // 前進は検証済み範囲に限る。
-            let ctl = shm.control();
+            // SAFETY: 呼び出し側がこの Ring の唯一の読み手だと約束した。
+            let ctl = unsafe { shm.consumer_control() };
             ctl.store(
-                Word::PayloadReadPosition,
+                ConsumerWord::PayloadReadPosition,
                 self.reader.payload_read_position(),
                 Ordering::Release,
             );
             ctl.store(
-                Word::ReadCursor,
+                ConsumerWord::ReadCursor,
                 self.reader.read_cursor(),
                 Ordering::Release,
             );
-            ctl.fetch_add(Word::HostDrainCount, 1);
+            ctl.fetch_add(ConsumerWord::HostDrainCount, 1);
         }
         Ok(events)
     }
@@ -1591,7 +1602,8 @@ mod tests {
         w.write(ev(EventKind::CallEnter, 1, b"xy"));
         let known = KnownConfig::new(cfg, cfg.required_len());
         let mut host = ValidatingHost::new(known, 3);
-        let events = host.drain_shared(region.shm()).unwrap();
+        // SAFETY: the test is the only reader of this ring.
+        let events = unsafe { host.drain_shared(region.shm()) }.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].payload, b"xy");
         // Control 256 + Descriptor 64 + Payload 2B
@@ -1653,25 +1665,34 @@ mod tests {
         let (region, mut w, mut host) = setup();
         w.write(ev(EventKind::CallEnter, 1, b"a"));
         // 書き手が空き待ち中のときだけ、回収で空けた分を通知する。
-        region
-            .control()
-            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the test plays this ring's producer side.
+        unsafe { region.producer_control() }.store(
+            shirusu_transport::ProducerWord::WriterWaiting,
+            1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let notified = Cell::new(false);
         let b = host.drain_once_with_space_notify(16, || notified.set(true));
         assert_eq!(b.events.len(), 1);
         assert!(notified.get());
         // フラグが下りていれば、回収しても通知しない。
         w.write(ev(EventKind::CallEnter, 2, b"b"));
-        region
-            .control()
-            .store(Word::WriterWaiting, 0, std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the test plays this ring's producer side.
+        unsafe { region.producer_control() }.store(
+            shirusu_transport::ProducerWord::WriterWaiting,
+            0,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let notified = Cell::new(false);
         host.drain_once_with_space_notify(16, || notified.set(true));
         assert!(!notified.get());
         // 空きができなければ、フラグが立っていても通知しない。
-        region
-            .control()
-            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the test plays this ring's producer side.
+        unsafe { region.producer_control() }.store(
+            shirusu_transport::ProducerWord::WriterWaiting,
+            1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let notified = Cell::new(false);
         let b = host.drain_once_with_space_notify(16, || notified.set(true));
         assert_eq!(b.events.len(), 0);
@@ -1699,7 +1720,8 @@ mod tests {
         let region = SharedRegion::new(cfg, 5, 1).unwrap();
         let known = KnownConfig::new(cfg, cfg.required_len());
         let mut host = ValidatingHost::new(known, 5);
-        let mut image = AlignedImage::copy_of(&region.snapshot());
+        // SAFETY: no writer is writing to the region while it is copied.
+        let mut image = AlignedImage::copy_of(&unsafe { region.snapshot() });
         assert!(host.drain_image(image.as_slice()).unwrap().is_empty());
         // Cursor を異常値に壊す
         image.set(Word::WriteCursor, u64::MAX - 3);
@@ -1724,9 +1746,12 @@ mod tests {
             .wait_timeout(std::time::Duration::from_millis(1)));
         // 書き手が空き待ち中なら、回収で空けた分を 1 回通知する。
         w.write(ev(EventKind::CallEnter, 2, b"b"));
-        region
-            .control()
-            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the test plays this ring's producer side.
+        unsafe { region.producer_control() }.store(
+            shirusu_transport::ProducerWord::WriterWaiting,
+            1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let b = nw.drain_all();
         assert_eq!(b.events.len(), 1);
         assert_eq!(nw.space_notifications, 1);
@@ -1735,9 +1760,12 @@ mod tests {
             .space_available
             .wait_timeout(std::time::Duration::from_millis(100)));
         // 空きができなければ、フラグが立っていても通知しない。
-        region
-            .control()
-            .store(Word::WriterWaiting, 1, std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the test plays this ring's producer side.
+        unsafe { region.producer_control() }.store(
+            shirusu_transport::ProducerWord::WriterWaiting,
+            1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         nw.drain_all();
         assert_eq!(nw.space_notifications, 1);
         assert_eq!(nw.space_notify_errors, 0);
@@ -1843,7 +1871,8 @@ mod tests {
         w.write(ev(EventKind::CallEnter, 1, b"hello"));
         w.write(ev(EventKind::CallLeave, 1, b"world"));
         let mut host = ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 3);
-        let evs = host.drain_image(&region.snapshot()).unwrap();
+        // SAFETY: no writer is writing to the region while it is copied.
+        let evs = host.drain_image(&unsafe { region.snapshot() }).unwrap();
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[0].payload, b"hello");
         assert_eq!(evs[1].payload, b"world");
@@ -1927,16 +1956,19 @@ mod tests {
         w.write(ev(EventKind::CallLeave, 1, b"world"));
         let mut host = ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 3);
         let _len = cfg.required_len();
-        let evs = host.drain_shared(region.shm()).unwrap();
+        // SAFETY: the test is the only reader of this ring.
+        let evs = unsafe { host.drain_shared(region.shm()) }.unwrap();
         assert_eq!(evs.len(), 2);
         assert_eq!(region.control().load(Word::ReadCursor, AOrd::Relaxed), 2);
         // 続きは無いので 2 回目は空で、Cursor も動かない。
-        let evs = host.drain_shared(region.shm()).unwrap();
+        // SAFETY: the test is the only reader of this ring.
+        let evs = unsafe { host.drain_shared(region.shm()) }.unwrap();
         assert!(evs.is_empty());
         assert_eq!(region.control().load(Word::ReadCursor, AOrd::Relaxed), 2);
         // 破損した像では失敗し、Cursor は前進しない。
         w.write(ev(EventKind::CallEnter, 2, b"again"));
-        let mut image = AlignedImage::copy_of(&region.snapshot());
+        // SAFETY: no writer is writing to the region while it is copied.
+        let mut image = AlignedImage::copy_of(&unsafe { region.snapshot() });
         image.set(Word::WriteCursor, u64::MAX - 3);
         assert!(host.drain_image(image.as_slice()).is_err());
         assert_eq!(region.control().load(Word::ReadCursor, AOrd::Relaxed), 2);
@@ -2074,7 +2106,8 @@ mod tests {
         w.write(ev(EventKind::CallLeave, 1, b"world"));
         let mut host = ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 3);
         host.set_identity(RingIdentity::new(ProcessInstanceId(9), RingId(4), 3));
-        let evs = host.drain_image(&region.snapshot()).unwrap();
+        // SAFETY: no writer is writing to the region while it is copied.
+        let evs = host.drain_image(&unsafe { region.snapshot() }).unwrap();
         assert_eq!(evs.len(), 2);
         assert_eq!(
             host.payload_keys,
@@ -2150,7 +2183,10 @@ mod tests {
         let other = base.clone();
         let reinit = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            other.control().init(cfg, 2, 1);
+            // SAFETY: the test plays the Agent reusing the Slot.
+            unsafe { shirusu_transport::UninitializedRing::from_shm(other, cfg) }
+                .unwrap()
+                .publish(2, 1);
         });
         let waited = wait_for_ring_generation(base.control(), 2, std::time::Duration::from_secs(5));
         reinit.join().unwrap();

@@ -41,7 +41,9 @@ use shirusu_transport::ring::{
     EventInput, LoaderLockProbe, LoaderLockState, RingWriter, SharedRegion, WriteOutcome,
     WriterPolicy,
 };
-use shirusu_transport::shm::{Control, Shm, Word};
+use shirusu_transport::shm::{
+    Control, ProducerControl, ProducerWord, Shm, UninitializedRing, Word,
+};
 use shirusu_transport::slot::{SlotHandle, SlotPool};
 use shirusu_transport::RingConfig;
 use shirusu_transport_win::{EventClock, EventObject, OwnedHandle, RingNotify, SharedMapping};
@@ -663,7 +665,9 @@ impl Agent {
         // ロックを取らない: このメソッドは Slot を持てない記録スレッドから
         // 呼ばれ、そのスレッドが強制終了されてもロックが残らないようにする。
         self.published_bases
-            .for_each(|shm| shm.control().publish_process_missing_calls(total));
+            // SAFETY: Agent はこれらの Ring の書き手側。書くのは単調な
+            // 欠落数 (fetch_max) だけで、Cursor や位置には触れない。
+            .for_each(|shm| unsafe { shm.producer_control() }.publish_process_missing_calls(total));
     }
     /// 管理パス: Host から配送された Mapping を Slot として登録する公開
     /// 入口（本体は A70 の管理スレッド経路と同じ `register_expanded_mapping`）。
@@ -694,9 +698,17 @@ impl Agent {
             .cloned();
         let region = match expanded {
             Some(shm) => {
-                shm.control()
-                    .init(self.config, handle.generation, thread_id);
-                shm
+                // SAFETY: FREE の Slot だけを claim できる。Slot が FREE に
+                // 戻るのは前の書き手が引退し、Host がその Ring を drain し
+                // 終えた後だけ (poll_reclaims)。新しい Generation で公開する
+                // ので、Host は前の世代の読み手を続けない。
+                match unsafe { UninitializedRing::from_shm(shm, self.config) } {
+                    Ok(ring) => ring.publish(handle.generation, thread_id),
+                    Err(_) => {
+                        let _ = self.pool.cancel_claim(handle);
+                        return None;
+                    }
+                }
             }
             // 確保に失敗したら Slot を返して記録しない (対象プロセスを止めない)。
             None => match SharedRegion::new(self.config, handle.generation, thread_id) {
@@ -1198,7 +1210,9 @@ impl Agent {
         // 排他取得自体が、進行中の記録の完了待ちになる。記録の途中で
         // 強制終了した書き手は待たずに隔離する (レビュー P0)。
         if state.writer.exclusive(|writer| writer.mark_detached()) == Access::OwnerTerminated {
-            abandon_ring(state.region.control());
+            // SAFETY: 書き手は終了済みで、Agent がこの Ring の書き手側を
+            // 引き継ぐ。書くのは単調な欠落カウンタだけ。
+            abandon_ring(unsafe { state.region.producer_control() });
         }
         // この Ring への space_available 結線はこの incarnation の
         // ものであるため外す (再利用時は ensure 経路が結び直す)。
@@ -1358,8 +1372,8 @@ fn ring_is_drained(ctl: Control<'_>, abandoned: bool) -> bool {
 /// 書きかけのイベントは公開されないため、欠落として 1 件数える。
 /// 書き手は終了済み (二度と実行されない) なので、書き手行の更新が
 /// 競合することはない。
-fn abandon_ring(ctl: Control<'_>) {
-    ctl.fetch_add(Word::DroppedEvents, 1);
+fn abandon_ring(ctl: ProducerControl<'_>) {
+    ctl.fetch_add(ProducerWord::DroppedEvents, 1);
 }
 
 #[cfg(test)]
@@ -1827,8 +1841,12 @@ mod tests {
                 let pos = base
                     .control()
                     .load(Word::PayloadWritePosition, Ordering::Relaxed);
-                base.control()
-                    .store(Word::PayloadWritePosition, pos + 8, Ordering::Relaxed);
+                // SAFETY: the test plays this ring's producer side.
+                unsafe { base.producer_control() }.store(
+                    ProducerWord::PayloadWritePosition,
+                    pos + 8,
+                    Ordering::Relaxed,
+                );
                 std::mem::forget(guard);
                 // Leak the TLS cache's reference as well: a terminated thread
                 // drops nothing.

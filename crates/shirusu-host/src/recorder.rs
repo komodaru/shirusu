@@ -166,6 +166,12 @@ impl RingMapping {
     fn control(&self) -> shirusu_transport::Control<'_> {
         self.0.control()
     }
+    /// 空き通知を待つ印 (Relaxed。順序は呼び出し側の SeqCst fence が付ける)。
+    fn set_host_waiting(&self, on: bool) {
+        // SAFETY: CaptureSession は写した全 Ring の Host 側 (読み手) であり、
+        // 書くのは読み手の HostWaiting だけ。Cursor には触れない。
+        unsafe { self.0.consumer_control() }.set_host_waiting(on, Ordering::Relaxed)
+    }
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -580,9 +586,7 @@ impl CaptureSession {
                 && ring.mapping.agent_initialized()
         };
         for ring in self.rings.iter().filter(|r| active(r)) {
-            ring.mapping
-                .control()
-                .store(Word::HostWaiting, 1, Ordering::Relaxed);
+            ring.mapping.set_host_waiting(true);
         }
         // Order the flag stores before the cursor loads (Dekker with the
         // writer's cursor store and flag load).
@@ -598,9 +602,7 @@ impl CaptureSession {
     pub fn disarm_host_waiting(&mut self) {
         for ring in &self.rings {
             if ring.mapping.agent_initialized() {
-                ring.mapping
-                    .control()
-                    .store(Word::HostWaiting, 0, Ordering::Relaxed);
+                ring.mapping.set_host_waiting(false);
             }
         }
     }

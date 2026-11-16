@@ -82,7 +82,8 @@ fn writer_degraded_event_above_capacity_passes_validating_reader() {
     });
     let mut vr = ValidatingReader::new(known(8, 256), 1);
     let evs = vr
-        .drain_image(&region.snapshot())
+        // SAFETY: no writer is writing to the region while it is copied.
+        .drain_image(&unsafe { region.snapshot() })
         .expect("degraded events must validate");
     assert_eq!(evs.len(), 2);
     assert!(evs[0].descriptor.payload_dropped());

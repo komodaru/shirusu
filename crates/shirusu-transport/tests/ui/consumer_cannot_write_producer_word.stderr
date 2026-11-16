@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+  --> tests/ui/consumer_cannot_write_producer_word.rs:10:16
+   |
+10 |     host.store(ProducerWord::WriteCursor, 1, Ordering::Relaxed);
+   |          ----- ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `ConsumerWord`, found `ProducerWord`
+   |          |
+   |          arguments to this method are incorrect
+   |
+note: method defined here
+  --> src/shm.rs
+   |
+   |     pub fn store(self, w: ConsumerWord, v: u64, order: Ordering) {
+   |            ^^^^^

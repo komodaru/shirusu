@@ -67,7 +67,9 @@ impl Rig {
     fn tamper(&self, cursor: u64, f: impl FnOnce(&mut EventDescriptor)) {
         let off = self.cfg.descriptors_offset()
             + ((cursor % self.cfg.descriptor_capacity_u64()) as usize) * 64;
-        let mut d = EventDescriptor::from_bytes(&self.region.snapshot()[off..off + 64]).unwrap();
+        // SAFETY: no writer is writing to the region while it is copied.
+        let mut d =
+            EventDescriptor::from_bytes(&unsafe { self.region.snapshot() }[off..off + 64]).unwrap();
         f(&mut d);
         let bytes = d.to_bytes();
         // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.
@@ -145,9 +147,12 @@ fn last_descriptor_spanning_more_than_the_payload_capacity_stops_collection() {
     r.write(10);
     r.write(20);
     // 書込み済み位置を超えない範囲で、容量 (64) を超える長さの区間を作る。
-    r.region
-        .control()
-        .store(Word::PayloadWritePosition, 200, Ordering::Release);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { r.region.producer_control() }.store(
+        shirusu_transport::ProducerWord::PayloadWritePosition,
+        200,
+        Ordering::Release,
+    );
     r.tamper(1, |d| d.payload_len = 100);
     r.expect_stop(0, 0);
 }
@@ -156,9 +161,12 @@ fn last_descriptor_spanning_more_than_the_payload_capacity_stops_collection() {
 fn write_cursor_beyond_the_capacity_stops_collection() {
     let mut r = rig();
     r.write(10);
-    r.region
-        .control()
-        .store(Word::WriteCursor, 5, Ordering::Release);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { r.region.producer_control() }.store(
+        shirusu_transport::ProducerWord::WriteCursor,
+        5,
+        Ordering::Release,
+    );
     let chunk = r.collector.collect(|| {}).unwrap();
     assert!(r.collector.is_stopped());
     assert!(chunk.descriptors.is_empty());

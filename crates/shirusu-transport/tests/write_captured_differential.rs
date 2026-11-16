@@ -120,7 +120,8 @@ proptest! {
                 Op::Tick(t) => ts.advance(t),
             }
             prop_assert!(
-                a.region.snapshot() == b.region.snapshot(),
+                // SAFETY: no writer is writing to the region while it is copied.
+                unsafe { a.region.snapshot() } == unsafe { b.region.snapshot() },
                 "op {}: shared memory images differ",
                 i
             );

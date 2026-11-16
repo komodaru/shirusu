@@ -2236,12 +2236,19 @@ mod tests {
     #[test]
     fn mapping_and_event_roundtrip() {
         let m = SharedMapping::create(4096).unwrap();
-        m.shm().control().store(
-            shirusu_transport::Word::WriteCursor,
+        // SAFETY: the test is the only user of the mapping.
+        unsafe { m.shm().producer_control() }.store(
+            shirusu_transport::ProducerWord::WriteCursor,
             0xAB,
             std::sync::atomic::Ordering::Relaxed,
         );
-        assert_eq!(m.shm().copy_out(0..1).unwrap()[0], 0xAB);
+        assert_eq!(
+            m.shm().control().load(
+                shirusu_transport::Word::WriteCursor,
+                std::sync::atomic::Ordering::Relaxed
+            ),
+            0xAB
+        );
         let e = EventObject::new(true, false).unwrap();
         assert!(e.is_auto_reset());
         assert!(!e.wait_timeout(Duration::from_millis(1)));
@@ -2268,23 +2275,37 @@ mod tests {
             .is_err(),
             "a view larger than the section is refused"
         );
-        again.shm().control().store(
-            shirusu_transport::Word::WriteCursor,
+        // SAFETY: the test is the only user of the mapping.
+        unsafe { again.shm().producer_control() }.store(
+            shirusu_transport::ProducerWord::WriteCursor,
             7,
             std::sync::atomic::Ordering::Relaxed,
         );
-        assert_eq!(m.shm().copy_out(0..1).unwrap()[0], 7);
+        assert_eq!(
+            m.shm().control().load(
+                shirusu_transport::Word::WriteCursor,
+                std::sync::atomic::Ordering::Relaxed
+            ),
+            7
+        );
     }
     #[test]
     fn restricted_mapping_roundtrip() {
         // 現在のユーザーだけに開ける DACL 付き Mapping が作れて使えること。
         let m = SharedMapping::create_restricted(4096).unwrap();
-        m.shm().control().store(
-            shirusu_transport::Word::WriteCursor,
+        // SAFETY: the test is the only user of the mapping.
+        unsafe { m.shm().producer_control() }.store(
+            shirusu_transport::ProducerWord::WriteCursor,
             0x5A,
             std::sync::atomic::Ordering::Relaxed,
         );
-        assert_eq!(m.shm().copy_out(0..1).unwrap()[0], 0x5A);
+        assert_eq!(
+            m.shm().control().load(
+                shirusu_transport::Word::WriteCursor,
+                std::sync::atomic::Ordering::Relaxed
+            ),
+            0x5A
+        );
         assert_eq!(m.len(), 4096);
     }
     #[test]
@@ -2503,8 +2524,9 @@ mod portable_tests {
         let region = shirusu_transport::ring::SharedRegion::new(cfg, 1, 1).unwrap();
         let notify = RingNotify::new().unwrap();
         assert!(!notify_space_if_writer_waiting(region.control(), &notify).unwrap());
-        region.control().store(
-            shirusu_transport::Word::WriterWaiting,
+        // SAFETY: the test is the only user of the mapping.
+        unsafe { region.producer_control() }.store(
+            shirusu_transport::ProducerWord::WriterWaiting,
             1,
             std::sync::atomic::Ordering::Relaxed,
         );

@@ -109,7 +109,19 @@ fn cross_arch() -> ScenarioReport {
             }
         }
     };
-    mapping.shm().control().init(cfg, 1, 4242);
+    // SAFETY: the mapping was just created; no child has opened it yet.
+    match unsafe { shirusu_transport::UninitializedRing::from_shm(mapping.shm().clone(), cfg) } {
+        Ok(ring) => {
+            ring.publish(1, 4242);
+        }
+        Err(e) => {
+            return ScenarioReport {
+                name: "cross_arch_interprocess",
+                passed: false,
+                detail: format!("ring: {e}"),
+            }
+        }
+    }
     let notify = match ProcessNotify::new() {
         Ok(n) => n,
         Err(e) => {

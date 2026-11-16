@@ -452,9 +452,9 @@ state_case!(
 #[test]
 fn notify_host_waiting_flag_produces_signal() {
     let (region, mut w, _rd, _clk) = setup(4, 256, no_wait());
-    region
-        .control()
-        .store(Word::HostWaiting, 1, std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: the test plays this ring's consumer side.
+    unsafe { region.consumer_control() }
+        .set_host_waiting(true, std::sync::atomic::Ordering::Relaxed);
     match w.write(input(EventKind::CallEnter, 1, b"a")) {
         WriteOutcome::Published { notify, .. } => assert_eq!(notify, NotifySignal::HostWaiting),
         o => panic!("expected published, got {o:?}"),
@@ -540,9 +540,9 @@ fn notify_threshold_rearms_after_partial_drain_without_an_intermediate_publish()
 #[test]
 fn notify_crossing_takes_precedence_over_host_waiting() {
     let (region, mut w, _rd, _clk) = setup(4, 256, no_wait());
-    region
-        .control()
-        .store(Word::HostWaiting, 1, std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: the test plays this ring's consumer side.
+    unsafe { region.consumer_control() }
+        .set_host_waiting(true, std::sync::atomic::Ordering::Relaxed);
     w.write(input(EventKind::CallEnter, 1, b"a")); // 25%: HostWaiting 側
     match w.write(input(EventKind::CallEnter, 2, b"b")) {
         WriteOutcome::Published { notify, .. } => {
@@ -681,9 +681,9 @@ fn reader_usage_drops_after_drain() {
 #[test]
 fn host_waiting_flag_is_consumed_once() {
     let (region, mut w, _r, _clock) = setup(64, 4096, no_wait());
-    region
-        .control()
-        .store(Word::HostWaiting, 1, std::sync::atomic::Ordering::Release);
+    // SAFETY: the test plays this ring's consumer side.
+    unsafe { region.consumer_control() }
+        .set_host_waiting(true, std::sync::atomic::Ordering::Release);
     let first = w.write(input(EventKind::CallEnter, 1, b"x"));
     assert!(
         matches!(

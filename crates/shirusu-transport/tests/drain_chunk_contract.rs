@@ -77,7 +77,8 @@ impl Rig {
     /// Host の回収と同じ手順: Control を写し、`[read_cursor, +max)` の
     /// Descriptor と、最後の Descriptor の格納終端までの Payload を写す。
     fn chunk(&self, read_cursor: u64, payload_read: u64, max: usize) -> CommittedChunk {
-        let image = self.region.snapshot();
+        // SAFETY: no writer is writing to the region while it is copied.
+        let image = unsafe { self.region.snapshot() };
         let control = image[..CONTROL_SIZE].to_vec();
         let wc = self.load(Word::WriteCursor);
         let count = (wc - read_cursor).min(max as u64);
@@ -463,7 +464,9 @@ fn global_order_needs_the_session_setting_on_both_readers() {
 fn tamper(r: &Rig, cursor: u64, f: impl FnOnce(&mut EventDescriptor)) {
     let off =
         r.cfg.descriptors_offset() + ((cursor % r.cfg.descriptor_capacity_u64()) as usize) * 64;
-    let mut d = EventDescriptor::from_bytes(&r.region.snapshot()[off..off + 64]).unwrap();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let mut d =
+        EventDescriptor::from_bytes(&unsafe { r.region.snapshot() }[off..off + 64]).unwrap();
     f(&mut d);
     let bytes = d.to_bytes();
     // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.

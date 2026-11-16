@@ -174,7 +174,8 @@ fn corrupted_image_never_panics_and_stops_ring() {
     let known = KnownConfig::new(cfg, cfg.required_len());
     for seed in 0..64u64 {
         let region = SharedRegion::new(cfg, 1, 1).unwrap();
-        let mut image = region.snapshot().to_vec();
+        // SAFETY: no writer is writing to the region while it is copied.
+        let mut image = unsafe { region.snapshot() }.to_vec();
         // 疑似ランダムにバイトを壊す
         let mut x = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         for _ in 0..24 {
@@ -203,12 +204,14 @@ fn generation_rollover_isolation() {
         let mut w = unsafe { region.writer(WriterPolicy::default(), clock) };
         w.write(input(b"gen-data", gen));
         let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), gen);
-        let events = vr.drain_image(&region.snapshot()).unwrap();
+        // SAFETY: no writer is writing to the region while it is copied.
+        let events = vr.drain_image(&unsafe { region.snapshot() }).unwrap();
         assert_eq!(events.len(), 1);
         let mut vr_old = ValidatingReader::new(
             KnownConfig::new(cfg, cfg.required_len()),
             gen.wrapping_add(100),
         );
-        assert!(vr_old.drain_image(&region.snapshot()).is_err());
+        // SAFETY: no writer is writing to the region while it is copied.
+        assert!(vr_old.drain_image(&unsafe { region.snapshot() }).is_err());
     }
 }

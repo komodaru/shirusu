@@ -477,7 +477,8 @@ pub fn scenario_slot_reuse() -> ScenarioReport {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, h2.generation, 200).unwrap();
     let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), h1.generation);
-    let gen_rejected = vr.drain_image(&region.snapshot()).is_err();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let gen_rejected = vr.drain_image(&unsafe { region.snapshot() }).is_err();
     report(
         "slot_reuse_generation",
         ok && gen_rejected,
@@ -489,7 +490,8 @@ pub fn scenario_slot_reuse() -> ScenarioReport {
 pub fn scenario_corruption() -> ScenarioReport {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
-    let mut image = AlignedImage::copy_of(&region.snapshot());
+    // SAFETY: no writer is writing to the region while it is copied.
+    let mut image = AlignedImage::copy_of(&unsafe { region.snapshot() });
     image.set(Word::PayloadWritePosition, u64::MAX);
     let mut host = shirusu_host::ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 1);
     let err = host.drain_image(image.as_slice()).is_err();
@@ -568,7 +570,8 @@ pub fn scenario_producer_killed_mid_publish() -> ScenarioReport {
     let mut rd = unsafe { region.reader() };
     let b = rd.drain_all();
     let mut host = shirusu_host::ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 1);
-    let via_validating = host.drain_image(&region.snapshot());
+    // SAFETY: no writer is writing to the region while it is copied.
+    let via_validating = host.drain_image(&unsafe { region.snapshot() });
     let ok = b.events.len() == 5
         && matches!(via_validating, Ok(ref evs) if evs.len() == 5)
         && !host.integrity_lost;
@@ -719,7 +722,8 @@ pub fn scenario_corruption_injection_stops_ring() -> ScenarioReport {
         w.write(ev(i, b"stage"));
     }
     let mut host = shirusu_host::ValidatingHost::new(KnownConfig::new(cfg, cfg.required_len()), 1);
-    let mut image = AlignedImage::copy_of(&region.snapshot());
+    // SAFETY: no writer is writing to the region while it is copied.
+    let mut image = AlignedImage::copy_of(&unsafe { region.snapshot() });
     let first = host.drain_image(image.as_slice());
     let first_ok = matches!(first, Ok(ref evs) if evs.len() == 10);
     // 未読スロットの Descriptor の kind を未知の値に壊す (slot 10 が次の読取位置)

@@ -225,12 +225,18 @@ fn cursors_near_u64_max_publish_and_drain() {
     let cfg = RingConfig::new(4, 64);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
     // Cursor を u64::MAX-2 に置いてから writer/reader を作る。
-    region
-        .control()
-        .store(Word::WriteCursor, u64::MAX - 2, Ordering::Relaxed);
-    region
-        .control()
-        .store(Word::ReadCursor, u64::MAX - 2, Ordering::Relaxed);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { region.producer_control() }.store(
+        shirusu_transport::ProducerWord::WriteCursor,
+        u64::MAX - 2,
+        Ordering::Relaxed,
+    );
+    // SAFETY: the test plays this ring's consumer side.
+    unsafe { region.consumer_control() }.store(
+        shirusu_transport::ConsumerWord::ReadCursor,
+        u64::MAX - 2,
+        Ordering::Relaxed,
+    );
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(no_wait(), clock) };
@@ -260,12 +266,18 @@ fn cursors_near_u64_max_publish_and_drain() {
 fn payload_position_near_u64_max() {
     let cfg = RingConfig::new(4, 64);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
-    region
-        .control()
-        .store(Word::PayloadWritePosition, u64::MAX - 3, Ordering::Relaxed);
-    region
-        .control()
-        .store(Word::PayloadReadPosition, u64::MAX - 3, Ordering::Relaxed);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { region.producer_control() }.store(
+        shirusu_transport::ProducerWord::PayloadWritePosition,
+        u64::MAX - 3,
+        Ordering::Relaxed,
+    );
+    // SAFETY: the test plays this ring's consumer side.
+    unsafe { region.consumer_control() }.store(
+        shirusu_transport::ConsumerWord::PayloadReadPosition,
+        u64::MAX - 3,
+        Ordering::Relaxed,
+    );
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
     // SAFETY: the only writer of this region (SPSC).
     let mut w = unsafe { region.writer(no_wait(), clock) };
@@ -765,9 +777,8 @@ fn publish_notify_signal_crossing_and_host_waiting() {
     );
     // Host 待機中フラグが立っていれば、crossing でなくても HostWaiting
     let region2 = SharedRegion::new(cfg, 1, 1).unwrap();
-    region2
-        .control()
-        .store(Word::HostWaiting, 1, Ordering::Relaxed);
+    // SAFETY: the test plays this ring's consumer side.
+    unsafe { region2.consumer_control() }.set_host_waiting(true, Ordering::Relaxed);
     let clock2 = Arc::new(ManualClock::new());
     // SAFETY: the only writer of this region (SPSC).
     let mut w2 = unsafe { region2.writer(no_wait(), clock2 as Arc<dyn Clock>) };
@@ -816,9 +827,12 @@ impl Clock for RacingClock {
         let n = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
         if n == self.trigger_call {
             // 競合する Host の回収: Descriptor を 1 つ空ける
-            self.shm
-                .control()
-                .store(Word::ReadCursor, 1, Ordering::Relaxed);
+            // SAFETY: the test plays this ring's consumer side.
+            unsafe { self.shm.consumer_control() }.store(
+                shirusu_transport::ConsumerWord::ReadCursor,
+                1,
+                Ordering::Relaxed,
+            );
         }
         end.saturating_sub(start)
     }
@@ -884,13 +898,19 @@ fn reader_level_accessors_reflect_shared_state() {
     // (Host 側テストでのみ間接検証されていた)。
     let (region, mut w, rd, _clock) = setup(2, 64, no_wait());
     assert!(!rd.writer_waiting());
-    region
-        .control()
-        .store(Word::WriterWaiting, 1, Ordering::Relaxed);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { region.producer_control() }.store(
+        shirusu_transport::ProducerWord::WriterWaiting,
+        1,
+        Ordering::Relaxed,
+    );
     assert!(rd.writer_waiting());
-    region
-        .control()
-        .store(Word::WriterWaiting, 0, Ordering::Relaxed);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { region.producer_control() }.store(
+        shirusu_transport::ProducerWord::WriterWaiting,
+        0,
+        Ordering::Relaxed,
+    );
     assert!(!rd.writer_waiting());
     // 欠落を起こしてから Reader 側カウンタが Writer 側と一致すること
     w.write(input(EventKind::CallEnter, 1, b"a"));
@@ -959,7 +979,8 @@ fn validating_reader_accepts_oversized_mapping() {
     w2.write(input(EventKind::CallEnter, 1, b"m"));
     let known = KnownConfig::new(cfg, cfg.required_len() + 8192);
     let mut vr = ValidatingReader::new(known, 7);
-    let evs = vr.drain_image(&region.snapshot()).unwrap();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let evs = vr.drain_image(&unsafe { region.snapshot() }).unwrap();
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0].payload, b"m");
 }
@@ -1141,9 +1162,12 @@ fn reader_drain_zero_and_partial_advance() {
 fn writer_with_regressed_reader_cursor_drops_safely() {
     // 読み手 Cursor が書き手より先行する破損状態でも、書込は落として前に進む。
     let (region, mut w, _rd, _ck) = setup(4, 64, no_wait());
-    region
-        .control()
-        .store(Word::ReadCursor, 10, Ordering::Relaxed);
+    // SAFETY: the test plays this ring's consumer side.
+    unsafe { region.consumer_control() }.store(
+        shirusu_transport::ConsumerWord::ReadCursor,
+        10,
+        Ordering::Relaxed,
+    );
     let out = w.write(input(EventKind::CallEnter, 1, b"data"));
     assert!(matches!(out, WriteOutcome::Dropped { .. }));
     assert_eq!(w.loss_counters().dropped_events, 1);
@@ -1747,16 +1771,20 @@ fn validating_reader_boundaries() {
     let mut w = unsafe { region.writer(no_wait(), clock) };
     w.write(input(EventKind::CallEnter, 1, b"one"));
     let mut vr = ValidatingReader::new(known, 7);
-    let evs = vr.drain_image(&region.snapshot()).unwrap();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let evs = vr.drain_image(&unsafe { region.snapshot() }).unwrap();
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0].payload, b"one");
-    assert!(vr.drain_image(&region.snapshot()).unwrap().is_empty());
+    // SAFETY: no writer is writing to the region while it is copied.
+    let again = unsafe { region.snapshot() };
+    assert!(vr.drain_image(&again).unwrap().is_empty());
     assert!(!vr.is_stopped());
     assert_eq!(vr.control_snapshot().unwrap().write_cursor, 1);
 
     // Sequence 0 の Descriptor は確定済みスロットでは矛盾（書き手は 1 から振る）。
     // write_cursor だけが進んだ壊れた像として SequenceRegressed で止まる。
-    let mut image = AlignedImage::copy_of(&region.snapshot());
+    // SAFETY: no writer is writing to the region while it is copied.
+    let mut image = AlignedImage::copy_of(&unsafe { region.snapshot() });
     let mut zero_seq = EventDescriptor::new(EventKind::CallEnter, 0);
     zero_seq.payload_len = 0;
     let off = cfg.descriptors_offset() + 64; // slot 1
@@ -1774,9 +1802,11 @@ fn validating_reader_boundaries() {
     // Sequence が後退した Descriptor を置くと SequenceRegressed で止まる
     // （止まった Reader は再利用できないため、新しい Reader で確認する）
     let mut vr = ValidatingReader::new(known, 7);
-    let evs = vr.drain_image(&region.snapshot()).unwrap();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let evs = vr.drain_image(&unsafe { region.snapshot() }).unwrap();
     assert_eq!(evs.len(), 1);
-    let mut image2 = AlignedImage::copy_of(&region.snapshot());
+    // SAFETY: no writer is writing to the region while it is copied.
+    let mut image2 = AlignedImage::copy_of(&unsafe { region.snapshot() });
     // slot 1 は正常な後続イベントにする（seq 2、Payload 位置は "one" の終端 3）。
     // そうしないと Reader は slot 1 のゼロ埋め像で UnknownKind になってしまう。
     let mut next = EventDescriptor::new(EventKind::CallEnter, 2);

@@ -52,7 +52,8 @@ fn rewrite_descriptor(region: &SharedRegion, slot: usize, f: impl Fn(&mut EventD
     let cfg = region.config();
     let off = cfg.descriptors_offset() + slot * 64;
     let mut bytes = [0u8; 64];
-    bytes.copy_from_slice(&region.snapshot()[off..off + 64]);
+    // SAFETY: no writer is writing to the region while it is copied.
+    bytes.copy_from_slice(&unsafe { region.snapshot() }[off..off + 64]);
     let mut d = EventDescriptor::from_bytes(&bytes).unwrap();
     f(&mut d);
     // SAFETY: `off..off + 64` is a descriptor slot inside this region's live mapping.

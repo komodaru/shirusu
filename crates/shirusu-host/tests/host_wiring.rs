@@ -5,7 +5,6 @@
 use shirusu_host::{DrainWorker, IntegrityLevel, NotifyingDrainWorker, ValidatingHost};
 use shirusu_transport::clock::ManualClock;
 use shirusu_transport::ring::{EventInput, RingWriter, SharedRegion, WriterPolicy};
-use shirusu_transport::shm::Word;
 use shirusu_transport::validate::KnownConfig;
 use shirusu_transport::{CaptureState, Clock, EventKind, RingConfig};
 use shirusu_transport_win::RingNotify;
@@ -41,9 +40,12 @@ fn write(w: &mut RingWriter, kind: EventKind, call: u64, order: u64) {
 }
 
 fn set_writer_waiting(region: &SharedRegion, on: bool) {
-    region
-        .control()
-        .store(Word::WriterWaiting, on as u64, Ordering::Release);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { region.producer_control() }.store(
+        shirusu_transport::ProducerWord::WriterWaiting,
+        on as u64,
+        Ordering::Release,
+    );
 }
 
 #[test]
@@ -131,12 +133,14 @@ fn validating_host_accepts_global_order_only_when_enabled() {
     let known = KnownConfig::new(cfg, cfg.required_len());
 
     let mut strict = ValidatingHost::new(known, 1);
-    assert!(strict.drain_image(&region.snapshot()).is_err());
+    // SAFETY: no writer is writing to the region while it is copied.
+    assert!(strict.drain_image(&unsafe { region.snapshot() }).is_err());
     assert!(strict.is_stopped());
 
     let mut host = ValidatingHost::new(known, 1);
     host.set_global_order(true);
-    let events = host.drain_image(&region.snapshot()).unwrap();
+    // SAFETY: no writer is writing to the region while it is copied.
+    let events = host.drain_image(&unsafe { region.snapshot() }).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].descriptor.global_order, 5);
 }

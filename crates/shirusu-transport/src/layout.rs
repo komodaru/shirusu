@@ -258,19 +258,21 @@ mod tests {
         // レビュー第5回 #4 の段階テスト: 書き手の途中段階ごとに読み手
         // 述語を回し、最終の Magic 公開より前は「初期化済み」に
         // ならないことを確認する。
-        use crate::shm::{Shm, Word};
+        use crate::shm::{Shm, UninitializedRing, Word};
         use crate::validate::{validate_control, IntegrityError, KnownConfig};
         use std::sync::atomic::Ordering;
         let cfg = RingConfig::new(8, 256);
         let shm = Shm::alloc_zeroed(cfg.required_len()).unwrap();
         let ctl = shm.control();
         for w in Word::ALL {
-            ctl.store(w, 0xDEAD_BEEF_DEAD_BEEF, Ordering::Relaxed);
+            ctl.at(w).store(0xDEAD_BEEF_DEAD_BEEF, Ordering::Relaxed);
         }
         // 段階 0: 未初期化 (ゴミ)。述語は偽。
         assert!(!ctl.is_published());
         // 段階 1: ゼロクリア + 全フィールド書き込み (公開前)。
-        ctl.init_fields(cfg, 7, 42);
+        // SAFETY: このテストだけが使う新しい領域。
+        let ring = unsafe { UninitializedRing::from_shm(shm.clone(), cfg) }.unwrap();
+        ring.prepare(7, 42);
         assert_eq!(ctl.load(Word::LayoutVersion, Ordering::Relaxed), 1);
         assert_eq!(ctl.load(Word::DescriptorCapacity, Ordering::Relaxed), 8);
         assert_eq!(ctl.load(Word::Generation, Ordering::Relaxed), 7);
@@ -281,15 +283,15 @@ mod tests {
             validate_control(&ctl.snapshot(), &known, None),
             Err(IntegrityError::BadMagic)
         );
-        // 段階 2: Magic を Release で公開 (init の最終段と同一)。
-        ctl.store(Word::Magic, MAGIC, Ordering::Release);
+        // 段階 2: 公開 (Magic を最後に Release で書く)。
+        let published = ring.publish(7, 42);
+        assert!(published.same_region(&shm));
         assert!(ctl.is_published());
         let snap =
             validate_control(&ctl.snapshot(), &known, None).expect("initialized control validates");
         assert_eq!(snap.generation, 7);
-        // 一括の init でも同じ到達状態になる。
-        let shm2 = Shm::alloc_zeroed(cfg.required_len()).unwrap();
-        shm2.control().init(cfg, 7, 42);
+        // 新しく確保した領域の公開でも同じ到達状態になる。
+        let shm2 = UninitializedRing::alloc(cfg).unwrap().publish(7, 42);
         assert!(shm2.control().is_published());
         assert_eq!(shm2.control().snapshot(), ctl.snapshot());
     }

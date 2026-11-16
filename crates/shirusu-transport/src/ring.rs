@@ -14,7 +14,10 @@ use crate::clock::{system_timestamp_source, Clock, TimestampSource};
 use crate::descriptor::{flags, CaptureState, EventDescriptor, EventKind};
 use crate::layout::*;
 use crate::notify::{threshold_min_used, NotifySignal, PublishNotifyTracker};
-use crate::shm::{Control, Shm, ShmError, Word};
+use crate::shm::{
+    ConsumerControl, ConsumerWord, Control, ProducerControl, ProducerWord, Shm, ShmError,
+    UninitializedRing, Word,
+};
 use crate::tsc::EventTimestamper;
 use crate::validate::{IntegrityError, MAX_DROPPED_ORIGINAL_LEN};
 
@@ -124,8 +127,7 @@ impl SharedRegion {
         generation: u64,
         owner_thread_id: u64,
     ) -> Result<Self, ShmError> {
-        let shm = Shm::alloc_zeroed(config.required_len())?;
-        shm.control().init(config, generation, owner_thread_id);
+        let shm = UninitializedRing::alloc(config)?.publish(generation, owner_thread_id);
         Ok(Self { shm, config })
     }
     pub fn config(&self) -> RingConfig {
@@ -137,9 +139,29 @@ impl SharedRegion {
     pub fn control(&self) -> Control<'_> {
         self.shm.control()
     }
+    /// 書き手側の Control ([`Shm::producer_control`])。
+    ///
+    /// # Safety
+    /// [`Shm::producer_control`] と同じ。
+    pub unsafe fn producer_control(&self) -> ProducerControl<'_> {
+        // SAFETY: 呼び出し側の約束をそのまま渡す。
+        unsafe { self.shm.producer_control() }
+    }
+    /// 読み手側の Control ([`Shm::consumer_control`])。
+    ///
+    /// # Safety
+    /// [`Shm::consumer_control`] と同じ。
+    pub unsafe fn consumer_control(&self) -> ConsumerControl<'_> {
+        // SAFETY: 呼び出し側の約束をそのまま渡す。
+        unsafe { self.shm.consumer_control() }
+    }
     /// 領域全体の写し (検証器・テスト用の所有データ)。
-    pub fn snapshot(&self) -> Vec<u8> {
-        self.shm.snapshot()
+    ///
+    /// # Safety
+    /// 写している間、この Ring の書き手が書かないこと ([`Shm::snapshot`])。
+    pub unsafe fn snapshot(&self) -> Vec<u8> {
+        // SAFETY: 呼び出し側の約束をそのまま渡す。
+        unsafe { self.shm.snapshot() }
     }
     /// # Safety
     /// この Ring の書き手は同時に 1 つだけであること (SPSC)。
@@ -403,8 +425,9 @@ impl RingWriter {
         }
     }
     #[inline(always)]
-    fn ctl(&self) -> Control<'_> {
-        self.shm.control()
+    fn ctl(&self) -> ProducerControl<'_> {
+        // SAFETY: RingWriter はこの Ring の唯一の書き手 (構築時の約束)。
+        unsafe { self.shm.producer_control() }
     }
     /// 書いている領域。
     pub fn shm(&self) -> &Shm {
@@ -514,7 +537,7 @@ impl RingWriter {
     fn set_state(&mut self, s: OverflowState) {
         self.state = s;
         self.ctl()
-            .store(Word::OverflowState, s.to_u64(), Ordering::Relaxed);
+            .store(ProducerWord::OverflowState, s.to_u64(), Ordering::Relaxed);
     }
 
     /// 唯一の公開点。Payload コピー → Descriptor 書込 → write_cursor Release 更新。
@@ -529,7 +552,7 @@ impl RingWriter {
             unsafe { copy_payload_write(self.base, self.cfg, desc.payload_position, p) };
             self.payload_write_position = desc.payload_position + p.len() as u64;
             self.ctl().store(
-                Word::PayloadWritePosition,
+                ProducerWord::PayloadWritePosition,
                 self.payload_write_position,
                 Ordering::Relaxed,
             );
@@ -538,7 +561,7 @@ impl RingWriter {
         unsafe { write_descriptor_at(self.base, self.cfg, wc, &desc) };
         // 単一公開点: この Release store より前の書込みは、Acquire で読む読み手から見える。
         self.ctl()
-            .store(Word::WriteCursor, wc + 1, Ordering::Release);
+            .store(ProducerWord::WriteCursor, wc + 1, Ordering::Release);
         // The Host raises the flag before it sleeps on an idle Ring. The
         // first publication after that consumes it, so one wait costs the
         // writer one notification; while the flag is down (always under
@@ -617,8 +640,7 @@ impl RingWriter {
     /// Host waiting flag check after a publication (see `publish`).
     #[inline]
     fn take_host_waiting(&self) -> bool {
-        self.ctl().load(Word::HostWaiting, Ordering::Relaxed) != 0
-            && self.ctl().swap(Word::HostWaiting, 0, Ordering::Relaxed) != 0
+        self.ctl().load(Word::HostWaiting, Ordering::Relaxed) != 0 && self.ctl().take_host_waiting()
     }
 
     /// Captured event on the common path: NORMAL state, no dropped Enter
@@ -665,7 +687,7 @@ impl RingWriter {
             unsafe { copy_payload_write(self.base, self.cfg, position, payload) };
             self.payload_write_position = position + len;
             self.ctl().store(
-                Word::PayloadWritePosition,
+                ProducerWord::PayloadWritePosition,
                 self.payload_write_position,
                 Ordering::Relaxed,
             );
@@ -687,7 +709,7 @@ impl RingWriter {
         unsafe { write_descriptor_at(self.base, self.cfg, wc, &descriptor) };
         // 単一公開点 (publish と同じ順序)。
         self.ctl()
-            .store(Word::WriteCursor, wc + 1, Ordering::Release);
+            .store(ProducerWord::WriteCursor, wc + 1, Ordering::Release);
         let host_waiting = self.take_host_waiting();
         let notify = self.notify_after_publish(wc, payload_before, len, host_waiting);
         WriteOutcome::Published {
@@ -738,10 +760,12 @@ impl RingWriter {
         }
         self.set_state(OverflowState::BoundedWait);
         self.wait_count += 1;
-        self.ctl().store(Word::WriterWaiting, 1, Ordering::Release);
+        self.ctl()
+            .store(ProducerWord::WriterWaiting, 1, Ordering::Release);
         std::sync::atomic::fence(Ordering::SeqCst);
         let got_space = self.bounded_wait_inner(need_desc, need_payload);
-        self.ctl().store(Word::WriterWaiting, 0, Ordering::Release);
+        self.ctl()
+            .store(ProducerWord::WriterWaiting, 0, Ordering::Release);
         got_space
     }
     fn bounded_wait_inner(&mut self, need_desc: u64, need_payload: u64) -> bool {
@@ -766,7 +790,8 @@ impl RingWriter {
     fn record_wait(&mut self, ns: u64) {
         self.last_wait_ns = ns;
         self.total_wait_ns = self.total_wait_ns.saturating_add(ns);
-        self.ctl().store(Word::LastWaitNs, ns, Ordering::Relaxed);
+        self.ctl()
+            .store(ProducerWord::LastWaitNs, ns, Ordering::Relaxed);
     }
 
     /// イベントを 1 件書く（満杯ポリシー状態機械を通す）。
@@ -782,8 +807,9 @@ impl RingWriter {
             && !self.dropped_enter_calls.is_empty()
             && self.forget_dropped_enter(input.call_id)
         {
-            self.ctl().fetch_add(Word::DroppedEvents, 1);
-            self.ctl().fetch_add(Word::DroppedPayloadBytes, payload_len);
+            self.ctl().fetch_add(ProducerWord::DroppedEvents, 1);
+            self.ctl()
+                .fetch_add(ProducerWord::DroppedPayloadBytes, payload_len);
             return WriteOutcome::Dropped {
                 sequence: seq,
                 reason: CaptureState::DroppedByBackpressure,
@@ -852,8 +878,9 @@ impl RingWriter {
         // (1) Payload だけ落として Descriptor を残す
         if self.descriptor_free() >= 1 {
             self.refresh_read_positions();
-            self.ctl().fetch_add(Word::DegradedEvents, 1);
-            self.ctl().fetch_add(Word::DroppedPayloadBytes, payload_len);
+            self.ctl().fetch_add(ProducerWord::DegradedEvents, 1);
+            self.ctl()
+                .fetch_add(ProducerWord::DroppedPayloadBytes, payload_len);
             let pos = self.payload_write_position;
             let d = self.make_desc(
                 seq,
@@ -870,8 +897,9 @@ impl RingWriter {
             };
         }
         // (2) Descriptor も書けないのでイベントを捨てる
-        self.ctl().fetch_add(Word::DroppedEvents, 1);
-        self.ctl().fetch_add(Word::DroppedPayloadBytes, payload_len);
+        self.ctl().fetch_add(ProducerWord::DroppedEvents, 1);
+        self.ctl()
+            .fetch_add(ProducerWord::DroppedPayloadBytes, payload_len);
         if input.kind == EventKind::CallEnter {
             self.remember_dropped_enter(input.call_id);
         }
@@ -1073,8 +1101,9 @@ impl RingReader {
         self
     }
     #[inline(always)]
-    fn ctl(&self) -> Control<'_> {
-        self.shm.control()
+    fn ctl(&self) -> ConsumerControl<'_> {
+        // SAFETY: RingReader はこの Ring の唯一の読み手 (構築時の約束)。
+        unsafe { self.shm.consumer_control() }
     }
     pub fn write_cursor(&self) -> u64 {
         self.ctl().load(Word::WriteCursor, Ordering::Acquire)
@@ -1164,11 +1193,11 @@ impl RingReader {
         if processed > 0 {
             if let Some(end) = last_payload_end {
                 self.ctl()
-                    .store(Word::PayloadReadPosition, end, Ordering::Release);
+                    .store(ConsumerWord::PayloadReadPosition, end, Ordering::Release);
             }
             self.ctl()
-                .store(Word::ReadCursor, rc + processed, Ordering::Release);
-            self.ctl().fetch_add(Word::HostDrainCount, 1);
+                .store(ConsumerWord::ReadCursor, rc + processed, Ordering::Release);
+            self.ctl().fetch_add(ConsumerWord::HostDrainCount, 1);
         }
         batch
     }

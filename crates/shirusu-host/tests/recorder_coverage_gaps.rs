@@ -34,7 +34,7 @@ use shirusu_trace::proto::{CaptureEnvironment, SessionMetadata};
 use shirusu_trace::TraceError;
 use shirusu_transport::context::HostMonitor;
 use shirusu_transport::ring::{SharedRegion, WriterPolicy};
-use shirusu_transport::shm::Word;
+use shirusu_transport::shm::{UninitializedRing, Word};
 use shirusu_transport::slot::SlotPool;
 use shirusu_transport::RingConfig;
 use shirusu_transport::Shm;
@@ -294,9 +294,11 @@ fn published_slot_exhaustion_degrades_capture_coverage() {
     session.add_local_ring(region, spec(1)).unwrap();
     session.start().unwrap();
     session.poll_once().unwrap();
-    base.control().publish_process_missing_calls(3);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { base.producer_control() }.publish_process_missing_calls(3);
     // 小さい値の掲示は最大値を下げない。
-    base.control().publish_process_missing_calls(1);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { base.producer_control() }.publish_process_missing_calls(1);
     assert_eq!(base.control().process_missing_calls(), 3);
     let summary = session.stop().unwrap();
     assert_eq!(summary.integrity.capture_coverage, IntegrityLevel::Degraded);
@@ -366,8 +368,11 @@ fn generation_change_retires_worker_and_records_loss() {
 
     // 同じ Mapping を新しい世代で再初期化する（別スレッドが Slot を
     // 回収して使い直したのと同じ状態）。
-    base.control()
-        .init(RingConfig::new(64, 4096), generation + 1, 11);
+    // SAFETY: the test plays the Agent reusing the Slot; the session only
+    // reads the ring.
+    unsafe { UninitializedRing::from_shm(base.clone(), RingConfig::new(64, 4096)) }
+        .unwrap()
+        .publish(generation + 1, 11);
 
     let stats = session.poll_once().unwrap();
     assert_eq!(stats.events, 0);
@@ -408,9 +413,11 @@ fn reinitialization_in_progress_is_not_an_integrity_loss() {
     assert_eq!(session.poll_once().unwrap().events, 2);
 
     // 初期化の途中: ゼロクリア済みで Magic はまだ公開されていない。
-    base.control().store(Word::Magic, 0, Ordering::Release);
-    base.control()
-        .store(Word::WriteCursor, 0, Ordering::Release);
+    // SAFETY: the test plays the Agent reusing the Slot; the session only
+    // reads the ring.
+    let reinit =
+        unsafe { UninitializedRing::from_shm(base.clone(), RingConfig::new(64, 4096)) }.unwrap();
+    reinit.prepare(generation + 1, 12);
     let stats = session.poll_once().unwrap();
     assert_eq!(
         stats.stopped_rings, 0,
@@ -418,8 +425,7 @@ fn reinitialization_in_progress_is_not_an_integrity_loss() {
     );
 
     // 新しい世代で公開されたら、旧 Worker は確定し新しい incarnation を読む。
-    base.control()
-        .init(RingConfig::new(64, 4096), generation + 1, 12);
+    reinit.publish(generation + 1, 12);
     let stats = session.poll_once().unwrap();
     assert_eq!(stats.stopped_rings, 0);
 

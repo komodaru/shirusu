@@ -1013,7 +1013,10 @@ mod tests {
         }
         // 2 件目の Descriptor の payload_position だけを +1 ずらす
         let mut image = AlignedImage::zeroed(cfg.required_len());
-        image.as_mut_slice().copy_from_slice(&region.snapshot());
+        // SAFETY: no writer is writing to the region while it is copied.
+        image
+            .as_mut_slice()
+            .copy_from_slice(&unsafe { region.snapshot() });
         let off = cfg.descriptors_offset() + 64;
         let mut d = EventDescriptor::from_bytes(&image[off..off + 64]).unwrap();
         assert_eq!(d.payload_position, 3);
@@ -1054,7 +1057,10 @@ mod tests {
         // write_cursor だけを 2 に進め、slot 1 に Sequence 0 の Descriptor を置く
         // （書き手は 1 から振るため、確定済みスロットの 0 は未公開スロットの混入＝矛盾）
         let mut image = AlignedImage::zeroed(cfg.required_len());
-        image.as_mut_slice().copy_from_slice(&region.snapshot());
+        // SAFETY: no writer is writing to the region while it is copied.
+        image
+            .as_mut_slice()
+            .copy_from_slice(&unsafe { region.snapshot() });
         let off = cfg.descriptors_offset() + 64;
         let zero_seq = EventDescriptor::new(EventKind::CallEnter, 0);
         image.as_mut_slice()[off..off + 64].copy_from_slice(&zero_seq.to_bytes());
@@ -1105,7 +1111,8 @@ mod tests {
         // 次の格納 Payload は落とした件と同じ位置から始まる
         write(&mut w, crate::descriptor::CaptureState::Captured, b"z");
         let mut vr = ValidatingReader::new(known, 1);
-        let evs = vr.drain_image(&region.snapshot()).unwrap();
+        // SAFETY: no writer is writing to the region while it is copied.
+        let evs = vr.drain_image(&unsafe { region.snapshot() }).unwrap();
         assert_eq!(evs.len(), 3);
         assert_eq!(evs[0].descriptor.payload_position, 0);
         assert_eq!(evs[1].descriptor.payload_position, 3);

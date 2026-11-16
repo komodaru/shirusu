@@ -1997,11 +1997,8 @@ mod tests {
         rt.ensure_thread(tid);
         // SAFETY: this test retains the Agent and is the only producer/reader.
         let base = agent.thread_region(tid).unwrap();
-        base.control().store(
-            shirusu_transport::shm::Word::HostWaiting,
-            1,
-            Ordering::Relaxed,
-        );
+        // SAFETY: as above; the test plays the Host side here.
+        unsafe { base.consumer_control() }.set_host_waiting(true, Ordering::Relaxed);
         let result = rt.record_enter(
             tid,
             api_by_id(API_CREATE_FILE_W).unwrap(),

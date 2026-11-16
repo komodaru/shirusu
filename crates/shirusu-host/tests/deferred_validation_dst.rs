@@ -282,7 +282,9 @@ fn trailing_drops_without_new_events_are_reported() {
     assert!(before > 0, "drops are reported");
     // Only a counter moves now, as for an event cut off by a writer that was
     // terminated mid-record (review P0).
-    sim.region.control().fetch_add(Word::DroppedEvents, 1);
+    // SAFETY: the test plays this ring's producer side.
+    unsafe { sim.region.producer_control() }
+        .fetch_add(shirusu_transport::ProducerWord::DroppedEvents, 1);
     sim.finish();
     assert_eq!(sim.worker.loss_events.len(), before + 1);
     let report = sim.worker.integrity_report(0, false);

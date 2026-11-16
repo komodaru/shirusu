@@ -354,12 +354,15 @@ fn c16_thread_and_slot_reuse_no_generation_crosstalk() {
         let mut w = unsafe { region1.writer(WriterPolicy::default(), clock) };
         w.write(ev(EventKind::CallEnter, 1, b"gen1"));
     }
-    let events = vr.drain_image(&region1.snapshot()).unwrap();
+    // SAFETY: the writer is gone.
+    let events = vr.drain_image(&unsafe { region1.snapshot() }).unwrap();
     assert_eq!(events.len(), 1);
     // 同じ Thread ID の別 Generation の像を旧 reader が読むと矛盾として止まる
     let region2 = SharedRegion::new(cfg, 2, 100).unwrap();
+    // SAFETY: region2 has no writer.
+    let image2 = unsafe { region2.snapshot() };
     assert!(matches!(
-        vr.drain_image(&region2.snapshot()),
+        vr.drain_image(&image2),
         Err(IntegrityError::GenerationMismatch { .. })
     ));
     assert!(vr.is_stopped());
@@ -405,7 +408,8 @@ fn c18_nested_app_calls_recorded_with_parent() {
 fn c19_corrupted_shared_memory_host_survives() {
     let cfg = RingConfig::new(8, 256);
     let region = SharedRegion::new(cfg, 1, 1).unwrap();
-    let mut image = AlignedImage::copy_of(&region.snapshot());
+    // SAFETY: no writer is writing to the region while it is copied.
+    let mut image = AlignedImage::copy_of(&unsafe { region.snapshot() });
     // 異常な Cursor
     image.set(Word::WriteCursor, u64::MAX);
     let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), 1);

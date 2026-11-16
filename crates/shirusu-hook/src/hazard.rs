@@ -23,15 +23,15 @@
 //!
 //! Forced termination (review P0): a thread ended by `TerminateThread` inside
 //! a Detour never clears its hazard. Each slot keeps its owner's
-//! [`ThreadLiveness`]; a scan that finds a hazard whose owner has terminated
+//! [`ThreadKey`] in an atomic (no lock: a thread terminated while claiming
+//! must not leave one held, review 2026-11-16 P1); a scan that finds a hazard whose owner has terminated
 //! withdraws it and frees the slot. That is safe because a terminated thread
 //! never runs again, so it can no longer dereference the runtime. A hazard of
 //! a live thread (even one suspended for ever) is always counted.
 
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
-use shirusu_transport_win::ThreadLiveness;
+use shirusu_transport_win::ThreadKey;
 
 use crate::runtime::HookRuntime;
 
@@ -44,9 +44,9 @@ pub(crate) const HAZARD_SLOTS: usize = 1024;
 pub(crate) struct HazardSlot {
     runtime: AtomicPtr<HookRuntime>,
     claimed: AtomicBool,
-    /// The claiming thread's liveness (cold paths only). `None`: unknown,
-    /// the owner is treated as alive.
-    owner: Mutex<Option<ThreadLiveness>>,
+    /// The claiming thread's key bits (cold paths only). 0: unknown, the
+    /// owner is treated as alive.
+    owner: AtomicU64,
 }
 
 impl HazardSlot {
@@ -54,7 +54,7 @@ impl HazardSlot {
         Self {
             runtime: AtomicPtr::new(std::ptr::null_mut()),
             claimed: AtomicBool::new(false),
-            owner: Mutex::new(None),
+            owner: AtomicU64::new(0),
         }
     }
 }
@@ -70,20 +70,16 @@ pub(crate) fn claim() -> Option<u32> {
                 .is_ok()
     })?;
     // Before the first publication: a scan that sees this thread's hazard
-    // finds its liveness (the slot lock orders the two).
-    *lock_owner(&SLOTS[index]) = ThreadLiveness::current();
+    // (after its heavy fence) finds its key. A key it misses reads as alive.
+    let key = ThreadKey::current().map_or(0, ThreadKey::to_bits);
+    SLOTS[index].owner.store(key, Ordering::Release);
     Some(index as u32)
-}
-
-fn lock_owner(slot: &HazardSlot) -> std::sync::MutexGuard<'_, Option<ThreadLiveness>> {
-    slot.owner.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Give a slot back. Its owner must not be publishing through it.
 pub(crate) fn release(index: u32) {
     let slot = &SLOTS[index as usize];
-    let liveness = lock_owner(slot).take();
-    drop(liveness);
+    slot.owner.store(0, Ordering::Relaxed);
     slot.runtime.store(std::ptr::null_mut(), Ordering::Release);
     slot.claimed.store(false, Ordering::Release);
 }
@@ -92,17 +88,22 @@ pub(crate) fn release(index: u32) {
 /// Returns whether it did.
 #[cold]
 fn reap_if_terminated(slot: &HazardSlot) -> bool {
-    let mut owner = lock_owner(slot);
-    if !owner.as_ref().is_some_and(ThreadLiveness::has_terminated) {
+    let bits = slot.owner.load(Ordering::Acquire);
+    if !ThreadKey::from_bits(bits).is_some_and(ThreadKey::has_terminated) {
         return false;
     }
-    let liveness = owner.take();
+    // One scanner wins the withdrawal; a slot claimed anew has another key.
+    if slot
+        .owner
+        .compare_exchange(bits, 0, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return false;
+    }
     // The owner never runs again: nobody else stores to this slot until it
     // is claimed anew, which needs `claimed` false.
     slot.runtime.store(std::ptr::null_mut(), Ordering::Release);
     slot.claimed.store(false, Ordering::Release);
-    drop(owner);
-    drop(liveness);
     true
 }
 
@@ -188,5 +189,33 @@ mod tests {
         assert_eq!(count(rt), 1);
         clear(live);
         release(live);
+    }
+
+    /// Scanners racing over one terminated hazard withdraw it once and never
+    /// touch a slot that was claimed anew meanwhile (no lock orders them).
+    #[test]
+    fn racing_scanners_withdraw_a_dead_hazard_once() {
+        const RT: usize = 0x2000; // compared, never dereferenced
+        for _ in 0..20 {
+            let index = std::thread::spawn(|| {
+                let index = claim().unwrap();
+                publish(index, RT as *const HookRuntime);
+                index
+            })
+            .join()
+            .unwrap();
+            let withdrawn: usize = (0..4)
+                .map(|_| {
+                    std::thread::spawn(move || {
+                        usize::from(reap_if_terminated(&SLOTS[index as usize]))
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .sum();
+            assert_eq!(withdrawn, 1);
+            assert_eq!(count(RT as *const HookRuntime), 0);
+        }
     }
 }

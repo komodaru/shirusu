@@ -46,7 +46,9 @@ use shirusu_transport::shm::{
 };
 use shirusu_transport::slot::{SlotHandle, SlotPool};
 use shirusu_transport::RingConfig;
-use shirusu_transport_win::{EventClock, EventObject, OwnedHandle, RingNotify, SharedMapping};
+use shirusu_transport_win::{
+    EventClock, EventObject, OwnedHandle, RingNotify, SharedMapping, ThreadKey,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
@@ -64,6 +66,24 @@ pub enum RecordResult {
     /// Agent 自身の呼出なので記録しない。
     SkippedAgentInternal,
 }
+
+/// スレッドの初回登録をどこで行うか (外部レビュー 2026-11-16 P1)。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Registration {
+    /// 記録するスレッド自身が登録する (登録表のロックと Heap を使う)。
+    /// プロセス内の試験と、強制終了の起きない呼び出し元向け。
+    Inline,
+    /// 管理スレッド ([`Agent::serve_managed`] を回すスレッド) が登録する。
+    /// 記録するスレッドは要求を置いて受け取るだけで、ロックを取らない。
+    /// Agent DLL はこれを使う: Detour の中で TerminateThread されても、
+    /// 共有ロックが残らない。
+    Managed,
+}
+
+/// 管理モードで、初めて要求したスレッドが Ring を待つ上限。管理スレッドは
+/// 通常 1 ms 以内に作る。これを過ぎた呼び出しは欠落として数え、以後は
+/// 何かが渡されたときだけ受け取りを試す。
+pub const MANAGED_FIRST_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Agent 全体。SlotPool と、Slot ごとの共有領域・書き手を管理する。
 pub struct Agent {
@@ -115,6 +135,18 @@ pub struct Agent {
     /// 置き、登録・終了・回収をする別のスレッドが Ring を作って置き、要求した
     /// スレッドがロックなしで受け取る。
     adoptions: Adoptions,
+    /// 初回登録の場所。構築時に決め、以後は不変。
+    registration: Registration,
+    /// 管理モードで何かを渡すたびに進む番号。受け取れなかったスレッドは、
+    /// これが進むまで受け渡し口を走査しない。
+    adoption_epoch: AtomicU64,
+    /// 管理パスを終えた回数。待つスレッドは、要求を置いた後に始まった管理
+    /// パスが終わっても受け取れなければ (Slot が無い) 待つのをやめる。
+    manager_passes: AtomicU64,
+    /// 管理スレッド (要求を置いたら起こす)。
+    manager: std::sync::OnceLock<std::thread::Thread>,
+    /// 管理スレッドが回っている間 true。止めた後は誰も待たない。
+    manager_running: AtomicBool,
     /// Test-only fixed termination point (debug builds): after this many
     /// owner fast-path entries on one thread, call the hook while holding
     /// the fast path, before writing. Used once per process.
@@ -309,6 +341,11 @@ impl Agent {
             expanded_regions: Arc::new(Mutex::new(HashMap::new())),
             published_bases: PublishedBases::new(),
             adoptions: Adoptions::new(),
+            registration: Registration::Inline,
+            adoption_epoch: AtomicU64::new(0),
+            manager_passes: AtomicU64::new(0),
+            manager: std::sync::OnceLock::new(),
+            manager_running: AtomicBool::new(false),
             #[cfg(debug_assertions)]
             test_writer_stall: None,
             order_global: false,
@@ -348,6 +385,26 @@ impl Agent {
         if n == Ok(after) && !FIRED.swap(true, Ordering::AcqRel) {
             stall();
         }
+    }
+    /// 初回登録を管理スレッドへ任せる ([`Registration::Managed`])。
+    pub fn with_registration(mut self, registration: Registration) -> Self {
+        self.registration = registration;
+        self
+    }
+    pub fn registration(&self) -> Registration {
+        self.registration
+    }
+    /// 管理スレッドを知らせる (要求を置いたスレッドが起こす)。1 回だけ。
+    pub fn set_manager_thread(&self, thread: std::thread::Thread) -> bool {
+        let set = self.manager.set(thread).is_ok();
+        if set {
+            self.manager_running.store(true, Ordering::Release);
+        }
+        set
+    }
+    /// 管理スレッドを止めた (以後、初回の呼び出しは待たずに欠落として数える)。
+    pub fn manager_stopped(&self) {
+        self.manager_running.store(false, Ordering::Release);
     }
     pub fn with_order_global(mut self, enabled: bool) -> Self {
         self.order_global = enabled;
@@ -461,6 +518,178 @@ impl Agent {
         if let Some(s) = cached {
             return Some(s);
         }
+        let state = match self.registration {
+            Registration::Inline => self.state_for_inline(thread_id)?,
+            Registration::Managed => self.state_for_managed(thread_id)?,
+        };
+        let _ = NO_SLOT.try_with(|c| {
+            if c.get().0 == self.id && c.get().1 == thread_id {
+                c.set((0, 0, 0, 0));
+            }
+        });
+        TLS_STATE
+            .try_with(|c| {
+                *c.borrow_mut() = Some(CachedState {
+                    agent: self.id,
+                    thread_id,
+                    state: Arc::clone(&state),
+                    publish_depth: PublishGuard::depth_cell(),
+                });
+            })
+            .ok()?;
+        Some(state)
+    }
+
+    /// 管理モードの取得: 自分宛ての Ring を受け取るか、要求を置く。ロックも
+    /// 登録表も使わない (確保もしない)。初めて要求したときだけ
+    /// [`MANAGED_FIRST_WAIT`] まで待つ。待つのは自分宛ての口の状態だけで、
+    /// 何も握らないので、ここで強制終了されても他のスレッドは止まらない。
+    fn state_for_managed(&self, thread_id: u64) -> Option<Arc<ThreadSlotState>> {
+        let epoch = self.adoption_epoch.load(Ordering::Acquire);
+        let prior = NO_SLOT
+            .try_with(Cell::get)
+            .ok()
+            .filter(|&(agent, tid, _, _)| agent == self.id && tid == thread_id);
+        let target = adoption::AdoptTid::new(thread_id)
+            .zip(ThreadKey::current().and_then(|k| adoption::RequesterKey::from_bits(k.to_bits())));
+        let attempt = match prior {
+            None => true,
+            Some((_, _, seen, misses)) => {
+                seen != epoch || misses.is_multiple_of(NO_SLOT_RETRY_INTERVAL)
+            }
+        };
+        if let (true, Some((t, key))) = (attempt, target) {
+            if let Some(state) = self.take_live(t, key) {
+                return Some(state);
+            }
+            let placed = self.adoptions.request(t, key);
+            if placed {
+                self.wake_manager();
+            }
+            if placed && prior.is_none() && self.may_wait_for_manager() {
+                let deadline = std::time::Instant::now() + MANAGED_FIRST_WAIT;
+                // A pass that starts after this point sees the request.
+                let seen_by = self.manager_passes.load(Ordering::Acquire) + 2;
+                let mut spins = 0u32;
+                loop {
+                    if let Some(state) = self.take_live(t, key) {
+                        return Some(state);
+                    }
+                    if std::time::Instant::now() >= deadline
+                        || self.manager_passes.load(Ordering::Acquire) >= seen_by
+                    {
+                        // Timed out, or a whole pass saw the request and built
+                        // nothing (no free Slot): one last look, then missing.
+                        if let Some(state) = self.take_live(t, key) {
+                            return Some(state);
+                        }
+                        break;
+                    }
+                    spins = spins.wrapping_add(1);
+                    if spins < 64 {
+                        std::thread::yield_now();
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+            }
+        }
+        let total = self.pool.note_missing_call();
+        let misses = prior.map_or(0, |p| p.3) + 1;
+        let _ = NO_SLOT.try_with(|c| c.set((self.id, thread_id, epoch, misses)));
+        if misses == 1 || misses.is_multiple_of(NO_SLOT_PUBLISH_INTERVAL) {
+            self.publish_missing_calls_total(total);
+        }
+        None
+    }
+
+    /// 自分宛てに置かれた生きている Ring を受け取る。
+    fn take_live(
+        &self,
+        t: adoption::AdoptTid,
+        key: adoption::RequesterKey,
+    ) -> Option<Arc<ThreadSlotState>> {
+        self.adoptions
+            .take(t, key)
+            .filter(|s| !s.retired.load(Ordering::Acquire))
+    }
+
+    /// 待ってよいか: 管理スレッドがいること。Windows で Loader Lock を持つ
+    /// (持つか分からない) スレッドは待たない (管理スレッドの仕事を止めうる
+    /// ものを持ったまま待たない)。SlotPool の空き数は読まない (読みロック)。
+    fn may_wait_for_manager(&self) -> bool {
+        #[cfg(windows)]
+        let loader_lock = shirusu_transport_win::loader_lock_held_by_current_thread();
+        #[cfg(not(windows))]
+        let loader_lock = false;
+        self.manager_running.load(Ordering::Acquire) && !loader_lock
+    }
+
+    fn wake_manager(&self) {
+        if let Some(manager) = self.manager.get() {
+            manager.unpark();
+        }
+    }
+
+    /// 管理スレッドの 1 回分 (管理モード): 終了した要求者の要求を取り消して
+    /// その Ring を回収へ送り、生きている要求者の Ring を作って渡す。
+    /// `wire` は作った Ring を渡す前に呼ぶ (通知の結線)。渡した数を返す。
+    /// 記録経路からは呼ばない。
+    pub fn serve_managed(&self, mut wire: impl FnMut(u64, SlotHandle)) -> usize {
+        let dead = |k: adoption::RequesterKey| {
+            ThreadKey::from_bits(k.bits()).is_some_and(ThreadKey::has_terminated)
+        };
+        self.adoptions
+            .sweep(dead, |t, state| self.retire_adopted(t.get(), state));
+        let mut served = 0;
+        for request in self.adoptions.waiting() {
+            if dead(request.key()) {
+                continue; // the next sweep cancels it
+            }
+            if self.pool.free_count() == 0 {
+                break;
+            }
+            let Some(fill) = self.adoptions.begin_fill(request) else {
+                continue;
+            };
+            let tid = fill.tid().get();
+            // Like a registering thread: a state left by an earlier thread
+            // with this ID whose owner terminated is reaped first.
+            let Some(state) = self.state_for_slow(tid) else {
+                continue;
+            };
+            // The requester's termination is known from now on, even if it
+            // never writes (an unclaimed writer is otherwise never reaped).
+            if let Some(key) = ThreadKey::from_bits(request.key().bits()) {
+                let _ = state.writer.assign_owner(key);
+            }
+            wire(tid, state.handle);
+            match fill.offer(state) {
+                Ok(()) => served += 1,
+                // 作っている間に取り消された (終了通知)。登録表の扱いは終了の
+                // 経路に任せる。
+                Err(state) => drop(state),
+            }
+        }
+        if served > 0 {
+            self.adoption_epoch.fetch_add(1, Ordering::Release);
+        }
+        self.manager_passes.fetch_add(1, Ordering::AcqRel);
+        served
+    }
+
+    /// 受け取られなかった Ring を回収へ送る (要求者は終了した)。
+    fn retire_adopted(&self, tid: u64, state: Arc<ThreadSlotState>) {
+        let _ = self.reap_thread(tid, &state);
+    }
+
+    /// 要求を置いて Ring を待っているスレッドの数 (観測用)。
+    pub fn adoption_requests(&self) -> usize {
+        self.adoptions.waiting().count()
+    }
+
+    /// 従来の取得 (記録するスレッド自身が登録する)。
+    fn state_for_inline(&self, thread_id: u64) -> Option<Arc<ThreadSlotState>> {
         let epoch = self.pool.free_epoch();
         let no_slot = NO_SLOT
             .try_with(Cell::get)
@@ -471,10 +700,12 @@ impl Agent {
             // にも触れない。別のスレッドが作った Ring を受け取れれば使う。
             let retry = failed_epoch != epoch || misses % NO_SLOT_RETRY_INTERVAL == 0;
             let adopt_tid = adoption::AdoptTid::new(thread_id);
-            let adopted = if let (true, Some(t)) = (retry, adopt_tid) {
-                let adopted = self.adoptions.take(t);
+            let adopt_key =
+                ThreadKey::current().and_then(|k| adoption::RequesterKey::from_bits(k.to_bits()));
+            let adopted = if let (true, Some(t), Some(key)) = (retry, adopt_tid, adopt_key) {
+                let adopted = self.adoptions.take(t, key);
                 if adopted.is_none() {
-                    let _ = self.adoptions.request(t);
+                    let _ = self.adoptions.request(t, key);
                 }
                 adopted
             } else {
@@ -503,29 +734,16 @@ impl Agent {
             self.serve_adoptions();
             let Some(state) = found else {
                 let _ = NO_SLOT.try_with(|c| c.set((self.id, thread_id, epoch, 1)));
-                if let Some(t) = adopt_tid {
-                    let _ = self.adoptions.request(t);
+                let adopt_key = ThreadKey::current()
+                    .and_then(|k| adoption::RequesterKey::from_bits(k.to_bits()));
+                if let (Some(t), Some(key)) = (adopt_tid, adopt_key) {
+                    let _ = self.adoptions.request(t, key);
                 }
                 self.publish_missing_calls();
                 return None;
             };
             state
         };
-        let _ = NO_SLOT.try_with(|c| {
-            if c.get().0 == self.id && c.get().1 == thread_id {
-                c.set((0, 0, 0, 0));
-            }
-        });
-        TLS_STATE
-            .try_with(|c| {
-                *c.borrow_mut() = Some(CachedState {
-                    agent: self.id,
-                    thread_id,
-                    state: Arc::clone(&state),
-                    publish_depth: PublishGuard::depth_cell(),
-                });
-            })
-            .ok()?;
         Some(state)
     }
     /// Whether the calling OS thread already records for `thread_id` through
@@ -552,6 +770,11 @@ impl Agent {
     /// 作った Ring の書き手は、受け取ったスレッドが最初に書くときに所有する。
     /// 渡した数を返す。
     pub fn serve_adoptions(&self) -> usize {
+        if self.registration == Registration::Managed {
+            // 管理モードでは管理スレッドの serve_managed だけが渡す (結線と
+            // 終了した要求者の掃除を伴う)。
+            return 0;
+        }
         let mut served = 0;
         for request in self.adoptions.waiting() {
             if self.pool.free_count() == 0 {

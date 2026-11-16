@@ -905,7 +905,7 @@ mod adoption;
 
 #[cfg(test)]
 mod adoption_tests {
-    use super::adoption::{AdoptTid, Adoptions};
+    use super::adoption::{AdoptTid, Adoptions, RequesterKey};
     use loom::sync::atomic::{AtomicUsize, Ordering};
     use loom::sync::Arc;
     use loom::thread;
@@ -923,6 +923,9 @@ mod adoption_tests {
     const T: u64 = 7;
     fn tid() -> AdoptTid {
         AdoptTid::new(T).unwrap()
+    }
+    fn key() -> RequesterKey {
+        RequesterKey::from_bits(T | (1 << 40)).unwrap()
     }
 
     /// 管理パス 1 回分: 待っている要求を引き受けて値を置く。置けた数を返す。
@@ -949,15 +952,15 @@ mod adoption_tests {
             let a = Arc::new(Cells::new());
             let made = Arc::new(AtomicUsize::new(0));
             let dropped = Arc::new(AtomicUsize::new(0));
-            assert!(a.request(tid()));
+            assert!(a.request(tid(), key()));
             let server = {
                 let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
                 thread::spawn(move || serve(&a, &made, &dropped))
             };
-            let early = a.take(tid());
+            let early = a.take(tid(), key());
             let served = server.join().unwrap();
             assert_eq!(served, 1, "the only request is served");
-            let late = a.take(tid());
+            let late = a.take(tid(), key());
             assert!(early.is_some() ^ late.is_some(), "delivered exactly once");
             assert_eq!(dropped.load(Ordering::Relaxed), 0);
             drop((early, late));
@@ -974,7 +977,7 @@ mod adoption_tests {
             let a = Arc::new(Cells::new());
             let made = Arc::new(AtomicUsize::new(0));
             let dropped = Arc::new(AtomicUsize::new(0));
-            assert!(a.request(tid()));
+            assert!(a.request(tid(), key()));
             let server = {
                 let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
                 thread::spawn(move || serve(&a, &made, &dropped))
@@ -984,13 +987,13 @@ mod adoption_tests {
             // 取り消しが提供の後なら、置かれた値は取り消しが捨てている。
             // 提供中なら作り手へ戻り、作り手が捨てている。
             a.clear(tid());
-            assert!(a.take(tid()).is_none());
+            assert!(a.take(tid(), key()).is_none());
             assert_eq!(a.waiting().count(), 0);
             assert_eq!(
                 dropped.load(Ordering::Relaxed),
                 made.load(Ordering::Relaxed)
             );
-            assert!(a.request(tid()), "a cell is free again");
+            assert!(a.request(tid(), key()), "a cell is free again");
         });
     }
 
@@ -1001,7 +1004,7 @@ mod adoption_tests {
             let a = Arc::new(Cells::new());
             let made = Arc::new(AtomicUsize::new(0));
             let dropped = Arc::new(AtomicUsize::new(0));
-            assert!(a.request(tid()));
+            assert!(a.request(tid(), key()));
             let other = {
                 let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
                 thread::spawn(move || serve(&a, &made, &dropped))
@@ -1010,7 +1013,7 @@ mod adoption_tests {
             let theirs = other.join().unwrap();
             assert_eq!(mine + theirs, 1);
             assert_eq!(made.load(Ordering::Relaxed), 1);
-            assert!(a.take(tid()).is_some());
+            assert!(a.take(tid(), key()).is_some());
             assert_eq!(dropped.load(Ordering::Relaxed), 1);
         });
     }
@@ -1023,7 +1026,7 @@ mod adoption_tests {
             let a = Arc::new(Cells::new());
             let made = Arc::new(AtomicUsize::new(0));
             let dropped = Arc::new(AtomicUsize::new(0));
-            assert!(a.request(tid()));
+            assert!(a.request(tid(), key()));
             let stale = a.waiting().next().unwrap();
             let filler = {
                 let (a, made, dropped) = (a.clone(), made.clone(), dropped.clone());
@@ -1037,14 +1040,72 @@ mod adoption_tests {
                 })
             };
             a.clear(tid());
-            assert!(a.request(tid()));
+            assert!(a.request(tid(), key()));
             filler.join().unwrap();
-            assert!(a.take(tid()).is_none(), "the new request got nothing");
+            assert!(
+                a.take(tid(), key()).is_none(),
+                "the new request got nothing"
+            );
             assert_eq!(a.waiting().count(), 1, "the new request still waits");
             assert_eq!(
                 dropped.load(Ordering::Relaxed),
                 made.load(Ordering::Relaxed)
             );
         });
+    }
+
+    /// レビュー 2026-11-16 P1: 要求者の受け取りと、要求者を終了と見た掃除
+    /// (掃除は終了の証拠でしか動かないが、検査では証拠の真偽を問わない) が
+    /// 並んでも、値は要求者か回収のどちらか一方へちょうど 1 回渡る。
+    #[test]
+    fn loom_adoption_sweep_racing_take_hands_the_value_over_once() {
+        loom::model(|| {
+            let a = Arc::new(Cells::new());
+            let made = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            assert!(a.request(tid(), key()));
+            assert_eq!(serve(&a, &made, &dropped), 1);
+            let retired = Arc::new(AtomicUsize::new(0));
+            let sweeper = {
+                let (a, retired) = (a.clone(), retired.clone());
+                thread::spawn(move || {
+                    a.sweep(
+                        |_| true,
+                        |_, v| {
+                            retired.fetch_add(1, Ordering::Relaxed);
+                            drop(v);
+                        },
+                    )
+                })
+            };
+            let taken = a.take(tid(), key());
+            sweeper.join().unwrap();
+            let taken_n = usize::from(taken.is_some());
+            assert_eq!(taken_n + retired.load(Ordering::Relaxed), 1);
+            drop(taken);
+            assert_eq!(dropped.load(Ordering::Relaxed), 1);
+            assert!(a.request(tid(), key()), "the cell is free again");
+        });
+    }
+
+    /// 掃除と出し直しが並んでも、掃除は新しい要求 (別の Ticket) を取り消さない。
+    #[test]
+    fn loom_adoption_sweep_never_cancels_a_newer_request() {
+        loom::model(|| {
+            let a = Arc::new(Cells::new());
+            let other = RequesterKey::from_bits(T | (2 << 40)).unwrap();
+            assert!(a.request(tid(), key()));
+            let sweeper = {
+                let a = a.clone();
+                thread::spawn(move || a.sweep(|k| k == key(), drop_pair))
+            };
+            a.clear(tid());
+            assert!(a.request(tid(), other));
+            sweeper.join().unwrap();
+            assert_eq!(a.waiting().filter(|r| r.key() == other).count(), 1);
+        });
+    }
+    fn drop_pair(_: AdoptTid, v: Tracked) {
+        drop(v);
     }
 }

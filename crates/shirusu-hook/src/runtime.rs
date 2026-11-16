@@ -30,14 +30,14 @@ use crate::winrt::{
     WINRT_ACTIVATION_API_ID, WINRT_ACTIVATION_COUNT, WINRT_ACTIVATION_ENTER_SCHEMA_ID,
     WINRT_ACTIVATION_LEAVE_SCHEMA_ID,
 };
-use shirusu_agent::{Agent, RecordResult};
+use shirusu_agent::{Agent, RecordResult, Registration};
 use shirusu_transport::descriptor::EventKind;
 use shirusu_transport::notify::NotifySignal;
 use shirusu_transport::ring::WriteOutcome;
 use shirusu_transport_win::{ProcessNotify, RingNotify};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -770,6 +770,12 @@ impl Drop for RuntimeCacheAccess {
 
 pub struct RuntimeSlot {
     revision: AtomicU64,
+    /// The runtime Detours use (active, else retired), uncounted. Written
+    /// under the `current` write lock before the revision it belongs to; read
+    /// without a lock only behind a published hazard plus a revision re-check
+    /// (review 2026-11-16 P1: a thread's first Detour took the `current` read
+    /// lock, which a thread terminated there would leave held).
+    published: AtomicPtr<HookRuntime>,
     current: RwLock<RuntimeState>,
 }
 struct RuntimeState {
@@ -784,6 +790,7 @@ impl RuntimeSlot {
     pub const fn new() -> Self {
         Self {
             revision: AtomicU64::new(0),
+            published: AtomicPtr::new(std::ptr::null_mut()),
             current: RwLock::new(RuntimeState {
                 active: None,
                 retired: None,
@@ -828,6 +835,8 @@ impl RuntimeSlot {
         let revision = NEXT_RUNTIME_REVISION
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
             .expect("runtime revision exhausted");
+        self.published
+            .store(Arc::as_ptr(&rt) as *mut HookRuntime, Ordering::Release);
         cur.active = Some(rt);
         self.revision.store(revision, Ordering::Release);
         Ok(())
@@ -931,6 +940,14 @@ impl RuntimeSlot {
 
     #[cold]
     fn fill_cache(&self, cache: &mut RuntimeCache) -> Option<RuntimeRef> {
+        if cache.hazard == NO_HAZARD {
+            cache.hazard = crate::hazard::claim().unwrap_or(HAZARD_EXHAUSTED);
+        }
+        if let Some(rt) = self.fill_cache_lock_free(cache) {
+            return Some(rt);
+        }
+        // No usable hazard (the table is full, or an outer Detour of this
+        // thread publishes another runtime): the counted path.
         let state = self
             .current
             .read()
@@ -939,12 +956,38 @@ impl RuntimeSlot {
         // Load under the lock: the revision must describe this snapshot.
         let revision = self.revision.load(Ordering::Relaxed);
         drop(state);
-        if cache.hazard == NO_HAZARD {
-            cache.hazard = crate::hazard::claim().unwrap_or(HAZARD_EXHAUSTED);
-        }
         cache.revision = revision;
         cache.runtime = Arc::as_ptr(&rt);
         Some(RuntimeRef::Shared(rt))
+    }
+
+    /// Fill the cache from `published` behind this thread's hazard, with no
+    /// lock: the same publish-then-re-check handshake as the warm path.
+    fn fill_cache_lock_free(&self, cache: &mut RuntimeCache) -> Option<RuntimeRef> {
+        let slot = cache.hazard_slot()?;
+        if !crate::hazard::published(slot).is_null() {
+            return None;
+        }
+        for _ in 0..4 {
+            let revision = self.revision.load(Ordering::Acquire);
+            if revision == 0 {
+                return None;
+            }
+            let rt = std::ptr::NonNull::new(self.published.load(Ordering::Acquire))?;
+            crate::hazard::publish(slot, rt.as_ptr());
+            if self.revision.load(Ordering::Acquire) != revision {
+                crate::hazard::clear(slot);
+                continue; // replaced meanwhile
+            }
+            cache.revision = revision;
+            cache.runtime = rt.as_ptr();
+            return Some(RuntimeRef::Hazard {
+                rt,
+                slot,
+                owned: true,
+            });
+        }
+        None
     }
 
     /// Free graveyard runtimes no hazard publishes. Runs outside the lock:
@@ -1451,6 +1494,44 @@ impl HookRuntime {
             let _ = REGISTERED_THREAD.try_with(|cache| cache.set(Some(key)));
             return;
         }
+        match self.agent.registration() {
+            Registration::Managed => self.ensure_thread_managed(thread_id, key),
+            Registration::Inline => self.ensure_thread_inline(thread_id),
+        }
+    }
+
+    /// Managed registration (the Agent DLL, review 2026-11-16 P1): the
+    /// recording thread takes no shared lock. It arms its exit notice (one
+    /// thread-local store) and takes the Ring the management thread builds
+    /// for it ([`HookRuntime::manage`]); the Agent counts the call as missing
+    /// while none is there. The seen set, the thread table and the
+    /// notification wiring are the management thread's.
+    fn ensure_thread_managed(&self, thread_id: u64, key: RegistrationKey) {
+        crate::fls::arm_current_thread(thread_id);
+        if self.agent.thread_begin(thread_id).is_some() {
+            let _ = REGISTERED_THREAD.try_with(|cache| cache.set(Some(key)));
+        }
+    }
+
+    /// One pass of the management thread (managed registration): process
+    /// exit notices, reap terminated threads, reclaim drained Slots, then
+    /// build and wire the Rings that recording threads asked for. Runs on a
+    /// thread of the Agent's own, never inside a Detour.
+    pub fn manage(&self) -> usize {
+        crate::fls::drain_pending_exits();
+        if self.agent.reap_due() {
+            self.reap_terminated_threads();
+        }
+        self.agent.poll_reclaims();
+        self.agent.serve_managed(|tid, handle| {
+            if let Some(notify) = self.space_notifies.get(handle.index) {
+                self.agent
+                    .attach_space_available_notify(tid, Arc::clone(notify));
+            }
+        })
+    }
+
+    fn ensure_thread_inline(&self, thread_id: u64) {
         // Exit notices queued by DLL_THREAD_DETACH are processed here, by a
         // thread about to register, and not on every recording call: the
         // processing (thread table, seen set, Heap frees) ran on whichever
@@ -2536,8 +2617,13 @@ mod tests {
 
     /// A warm cache takes the hazard path: no shared counter, still counted.
     fn warm_hazard(slot: &RuntimeSlot) -> RuntimeRef {
+        // Review 2026-11-16 P1: even the cold fill takes no lock; it reads
+        // the published runtime behind this thread's hazard.
         let first = slot.for_detour_ref().unwrap();
-        assert!(matches!(first, RuntimeRef::Shared(_)), "cold cache fills");
+        assert!(
+            matches!(first, RuntimeRef::Hazard { owned: true, .. }),
+            "cold cache fills lock-free"
+        );
         drop(first);
         let warm = slot.for_detour_ref().unwrap();
         assert!(matches!(warm, RuntimeRef::Hazard { owned: true, .. }));

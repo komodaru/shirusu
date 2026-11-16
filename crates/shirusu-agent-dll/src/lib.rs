@@ -243,6 +243,61 @@ mod win {
     // Serialize complete lifecycle operations, including initialization before
     // STATE is populated and restoration retries after recording is disabled.
     static CONTROL: Mutex<()> = Mutex::new(());
+    /// The registration manager thread (managed registration). Started last
+    /// by init, stopped first by shutdown, both under CONTROL.
+    static MANAGER: Mutex<Option<Manager>> = Mutex::new(None);
+
+    struct Manager {
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        thread: std::thread::JoinHandle<()>,
+        rt: Arc<HookRuntime>,
+    }
+
+    /// How long the manager sleeps when nobody wakes it: exit notices and
+    /// Slots the Host drained are picked up at this pace.
+    const MANAGER_IDLE: std::time::Duration = std::time::Duration::from_millis(10);
+
+    fn start_manager(rt: &Arc<HookRuntime>) -> bool {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (run_rt, run_stop) = (Arc::clone(rt), Arc::clone(&stop));
+        let spawned = std::thread::Builder::new()
+            .name("shirusu-registration".into())
+            .spawn(move || {
+                // The Agent's own thread: everything it calls passes through
+                // the Detours unrecorded.
+                let _guard = shirusu_hook::runtime::ReentrancyGuard::try_enter();
+                while !run_stop.load(std::sync::atomic::Ordering::Acquire) {
+                    run_rt.manage();
+                    std::thread::park_timeout(MANAGER_IDLE);
+                }
+                shirusu_hook::runtime::ReentrancyGuard::mark_thread_exiting();
+            });
+        let Ok(thread) = spawned else {
+            return false;
+        };
+        let _ = rt.agent().set_manager_thread(thread.thread().clone());
+        *MANAGER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Manager {
+            stop,
+            thread,
+            rt: Arc::clone(rt),
+        });
+        true
+    }
+
+    fn stop_manager() {
+        let manager = MANAGER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(m) = manager {
+            m.rt.agent().manager_stopped();
+            m.stop.store(true, std::sync::atomic::Ordering::Release);
+            m.thread.thread().unpark();
+            let _ = m.thread.join();
+        }
+    }
 
     fn retain_failed_installation(rt: &Arc<HookRuntime>, pending: InstalledHooks) {
         rt.shutdown_recording();
@@ -407,7 +462,12 @@ mod win {
                     ..Default::default()
                 })
                 // L11: Host が Bootstrap v4 で指定した --order=global を Agent へ渡す。
-                .with_order_global(b.order_global != 0),
+                .with_order_global(b.order_global != 0)
+                // Review 2026-11-16 P1: a Detour never registers its thread
+                // itself (thread table, seen set, writer claim): the manager
+                // thread started below does, so a thread terminated inside a
+                // Detour cannot leave a shared lock held.
+                .with_registration(shirusu_agent::Registration::Managed),
         );
         #[cfg(all(debug_assertions, windows))]
         let agent = match test_writer_stall_after() {
@@ -729,6 +789,9 @@ mod win {
             internal_hooks: InlineHooks::Installed(internal_hook_outcome.installed),
             callbacks: InlineHooks::Installed(callback_outcome.installed),
         });
+        // Without the manager no thread registers: every call is counted
+        // missing (Capture Coverage shows it), and the hooks still pass through.
+        let _ = start_manager(&rt);
         // This is the dedicated remote injection worker, not an application
         // thread. Its return through ExitThread must not become an unmatched
         // application call or block replay of an otherwise complete trace.
@@ -760,6 +823,8 @@ mod win {
         let _control = CONTROL
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Stop registering first; the exit notices it left are drained here.
+        stop_manager();
         shirusu_hook::fls::drain_pending_exits();
         let mut state_slot = STATE
             .lock()

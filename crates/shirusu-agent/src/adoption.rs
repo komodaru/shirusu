@@ -7,11 +7,18 @@
 //! ```text
 //! Empty(t) --request--> Requested(t, tid) --begin_fill--> Filling(t, tid)
 //!    ^                        |    ^                         |       |
-//!    |                  clear |    +------- Fill の Drop ----+       | offer
-//!    +--------- t+1 ----------+                                      v
-//!    +--------- t+1 --- take / clear --- Claimed(t, tid) <--- Offered(t, tid)
+//!    |          clear / sweep |    +------- Fill の Drop ----+       | offer
+//!    +--- t+1 --- (Claimed) --+                                      v
+//!    +--------- t+1 --- take / clear / sweep --- Claimed(t, tid) <--- Offered(t, tid)
 //!    +--------- t+1 --- offer / Fill の Drop --- Cancelled(t, tid) <-- clear (Filling 中)
 //! ```
+//!
+//! 要求には要求者の [`RequesterKey`] (スレッド ID と生成時刻) を添える。管理パスは
+//! 終了した要求者の要求を [`Adoptions::sweep`] で取り消し、置いたまま受け取られ
+//! なかった値を返す (外部レビュー 2026-11-16 P1: Slot を持てずに要求したまま
+//! 終了したスレッドへ Ring を割り当て続けていた)。鍵の語は口を Empty へ戻す
+//! スレッドが先に 0 へ戻し、要求者は Requested を作った直後に書く。0 の間
+//! (書く前) の要求は管理パスが引き受けない。
 //!
 //! 値の置き場は `Filling` / `Claimed` を作ったスレッドだけが触る。Empty へ
 //! 戻すたびに Ticket を進めるので、取り消して出し直した要求へ古い
@@ -37,6 +44,18 @@ impl AdoptTid {
     }
     pub fn get(self) -> u64 {
         u64::from(self.0)
+    }
+}
+
+/// 要求者の識別 (`shirusu_transport_win::ThreadKey` のビット)。0 ではない。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RequesterKey(std::num::NonZeroU64);
+impl RequesterKey {
+    pub fn from_bits(bits: u64) -> Option<Self> {
+        std::num::NonZeroU64::new(bits).map(Self)
+    }
+    pub fn bits(self) -> u64 {
+        self.0.get()
     }
 }
 
@@ -133,6 +152,9 @@ impl CellWord {
 
 struct Cell<T> {
     word: AtomicU64,
+    /// 要求者の鍵 (0: まだ書かれていない)。Requested を作った要求者だけが
+    /// 書き、口を Empty へ戻すスレッドが 0 へ戻す。
+    key: AtomicU64,
     /// `Filling` / `Claimed` を作ったスレッドだけが触る。
     value: UnsafeCell<Option<T>>,
 }
@@ -151,8 +173,17 @@ impl<T> Cell<T> {
         // SAFETY: Claimed を CAS で作ったのはこのスレッドだけで、値を置いた
         // 側の書込みは Offered への AcqRel で見えている。
         let value = self.value.with_mut(|p| unsafe { (*p).take() });
-        self.word.store(claimed.emptied().pack(), Ordering::Release);
+        self.release(claimed);
         value
+    }
+    /// 口を独占しているスレッド (Claimed / Cancelled を持つ) が口を空ける。
+    /// 鍵を先に消すので、次の要求者が見る鍵は 0 か自分のもの。
+    fn release(&self, held: CellWord) {
+        self.key.store(0, Ordering::Relaxed);
+        self.word.store(held.emptied().pack(), Ordering::Release);
+    }
+    fn requester(&self) -> Option<RequesterKey> {
+        RequesterKey::from_bits(self.key.load(Ordering::Acquire))
     }
 }
 
@@ -162,6 +193,13 @@ impl<T> Cell<T> {
 pub struct Request {
     index: usize,
     word: CellWord,
+    key: RequesterKey,
+}
+impl Request {
+    /// 要求したスレッド。
+    pub fn key(&self) -> RequesterKey {
+        self.key
+    }
 }
 
 /// `N` は口の数 (loom 検査では小さくする)。
@@ -185,18 +223,24 @@ impl<T, const N: usize> Adoptions<T, N> {
         Self {
             cells: std::array::from_fn(|_| Cell {
                 word: AtomicU64::new(CellWord::EMPTY.pack()),
+                key: AtomicU64::new(0),
                 value: UnsafeCell::new(None),
             }),
         }
     }
-    /// 要求を置く (既に待っていれば何もしない)。置けなければ false。
-    pub fn request(&self, tid: AdoptTid) -> bool {
-        if self.cells.iter().any(|c| c.load().is_pending_for(tid)) {
+    /// 要求を置く (同じ要求者の要求が既に待っていれば何もしない)。置けな
+    /// ければ false。ロックも確保もしない。
+    pub fn request(&self, tid: AdoptTid, key: RequesterKey) -> bool {
+        if self
+            .cells
+            .iter()
+            .any(|c| c.load().is_pending_for(tid) && c.requester() == Some(key))
+        {
             return true;
         }
         self.cells.iter().any(|c| {
             let w = c.load();
-            w.phase == Phase::Empty
+            let placed = w.phase == Phase::Empty
                 && c.cas(
                     w,
                     CellWord {
@@ -205,14 +249,21 @@ impl<T, const N: usize> Adoptions<T, N> {
                         tid: tid.0,
                     },
                 )
-                .is_ok()
+                .is_ok();
+            if placed {
+                // 鍵を書くまで管理パスは引き受けない。この 2 命令の間で強制
+                // 終了されると (終了通知も届かない)、この口は鍵なしの要求の
+                // まま残る。失うのは口 1 つで、他の要求も記録も止まらない。
+                c.key.store(key.bits(), Ordering::Release);
+            }
+            placed
         })
     }
     /// 自分宛てに置かれた値を受け取り、口を空ける。
-    pub fn take(&self, tid: AdoptTid) -> Option<T> {
+    pub fn take(&self, tid: AdoptTid, key: RequesterKey) -> Option<T> {
         self.cells.iter().find_map(|c| {
             let w = c.load();
-            if w.tid != tid.0 || w.phase != Phase::Offered {
+            if w.tid != tid.0 || w.phase != Phase::Offered || c.requester() != Some(key) {
                 return None;
             }
             let claimed = w.with(Phase::Claimed);
@@ -224,7 +275,12 @@ impl<T, const N: usize> Adoptions<T, N> {
     pub fn waiting(&self) -> impl Iterator<Item = Request> + '_ {
         self.cells.iter().enumerate().filter_map(|(index, c)| {
             let word = c.load();
-            (word.phase == Phase::Requested).then_some(Request { index, word })
+            if word.phase != Phase::Requested {
+                return None;
+            }
+            // 鍵が別の要求のものでも、begin_fill の CAS (Ticket 込み) が外れる。
+            let key = c.requester()?;
+            Some(Request { index, word, key })
         })
     }
     /// 要求を引き受ける。同じ要求を別の作り手が先に引き受けたか、要求が
@@ -249,7 +305,7 @@ impl<T, const N: usize> Adoptions<T, N> {
                     break;
                 }
                 let to = match w.phase {
-                    Phase::Requested => w.emptied(),
+                    Phase::Requested => w.with(Phase::Claimed),
                     Phase::Filling => w.with(Phase::Cancelled),
                     Phase::Offered => w.with(Phase::Claimed),
                     Phase::Empty | Phase::Claimed | Phase::Cancelled => break,
@@ -263,6 +319,36 @@ impl<T, const N: usize> Adoptions<T, N> {
                     }
                     Err(now) => w = now,
                 }
+            }
+        }
+    }
+    /// 終了した要求者の要求を取り消し、受け取られずに置かれた値を `retire`
+    /// へ渡す (管理パス)。`is_dead` は終了が確かな鍵だけに true を返すこと
+    /// (分からなければ生きている扱い)。作っている最中の口は作り手が扱う。
+    pub fn sweep(
+        &self,
+        mut is_dead: impl FnMut(RequesterKey) -> bool,
+        mut retire: impl FnMut(AdoptTid, T),
+    ) {
+        for c in &self.cells {
+            let w = c.load();
+            match w.phase {
+                Phase::Requested | Phase::Offered => {}
+                Phase::Empty | Phase::Filling | Phase::Claimed | Phase::Cancelled => continue,
+            }
+            let Some(key) = c.requester() else {
+                continue;
+            };
+            if !is_dead(key) {
+                continue;
+            }
+            // 鍵を読んだ後に口が別の要求へ移っていれば、Ticket 込みの CAS が外れる。
+            let claimed = w.with(Phase::Claimed);
+            if c.cas(w, claimed).is_err() {
+                continue;
+            }
+            if let Some(value) = c.finish_claim(claimed) {
+                retire(AdoptTid(w.tid), value);
             }
         }
     }
@@ -287,6 +373,7 @@ impl<T> Fill<'_, T> {
     pub fn tid(&self) -> AdoptTid {
         AdoptTid(self.word.tid)
     }
+
     /// 値を置く。作っている間に要求が取り消されていれば値を返す
     /// (呼び出し側が片付ける)。
     pub fn offer(self, value: T) -> Result<(), T> {
@@ -302,7 +389,7 @@ impl<T> Fill<'_, T> {
                 // SAFETY: Cancelled へ移せるのは Filling の間だけで、値の置き場は
                 // まだこのスレッドだけが持つ。
                 let back = cell.value.with_mut(|p| unsafe { (*p).take() });
-                cell.word.store(word.emptied().pack(), Ordering::Release);
+                cell.release(word);
                 Err(back.expect("the value this thread just stored"))
             }
         }
@@ -316,9 +403,7 @@ impl<T> Drop for Fill<'_, T> {
             .is_err()
         {
             // 取り消された (Cancelled)。口を空ける。
-            self.cell
-                .word
-                .store(self.word.emptied().pack(), Ordering::Release);
+            self.cell.release(self.word);
         }
     }
 }
@@ -329,6 +414,10 @@ mod tests {
 
     fn tid(n: u64) -> AdoptTid {
         AdoptTid::new(n).unwrap()
+    }
+    /// 試験用の要求者鍵 (ID ごとに 1 つ)。
+    fn key(n: u64) -> RequesterKey {
+        RequesterKey::from_bits(n | (1 << 40)).unwrap()
     }
 
     #[test]
@@ -364,53 +453,56 @@ mod tests {
     #[test]
     fn request_fill_offer_take() {
         let a = Adoptions::<u32>::new();
-        assert!(a.request(tid(5)));
-        assert!(a.request(tid(5)), "a second request is the same one");
+        assert!(a.request(tid(5), key(5)));
+        assert!(
+            a.request(tid(5), key(5)),
+            "a second request is the same one"
+        );
         assert_eq!(a.waiting().count(), 1);
-        assert_eq!(a.take(tid(5)), None, "nothing offered yet");
+        assert_eq!(a.take(tid(5), key(5)), None, "nothing offered yet");
         let req = a.waiting().next().unwrap();
         let fill = a.begin_fill(req).unwrap();
         assert_eq!(fill.tid(), tid(5));
         assert!(a.begin_fill(req).is_none(), "one filler per request");
         assert_eq!(a.waiting().count(), 0);
-        assert_eq!(a.take(tid(5)), None, "still filling");
+        assert_eq!(a.take(tid(5), key(5)), None, "still filling");
         fill.offer(42).unwrap();
-        assert_eq!(a.take(tid(6)), None, "only the requester takes it");
-        assert_eq!(a.take(tid(5)), Some(42));
-        assert_eq!(a.take(tid(5)), None);
+        assert_eq!(a.take(tid(6), key(6)), None, "only the requester takes it");
+        assert_eq!(a.take(tid(5), key(5)), Some(42));
+        assert_eq!(a.take(tid(5), key(5)), None);
         assert_eq!(a.waiting().count(), 0);
     }
 
     #[test]
     fn a_cancelled_request_cannot_be_filled_with_its_old_ticket() {
         let a = Adoptions::<u32>::new();
-        assert!(a.request(tid(5)));
+        assert!(a.request(tid(5), key(5)));
         let stale = a.waiting().next().unwrap();
         a.clear(tid(5));
-        assert!(a.request(tid(5)));
+        assert!(a.request(tid(5), key(5)));
         let fresh = a.waiting().next().unwrap();
         assert_ne!(stale, fresh);
         assert!(a.begin_fill(stale).is_none(), "the old request id is dead");
         a.begin_fill(fresh).unwrap().offer(1).unwrap();
-        assert_eq!(a.take(tid(5)), Some(1));
+        assert_eq!(a.take(tid(5), key(5)), Some(1));
     }
 
     #[test]
     fn clear_while_filling_hands_the_value_back() {
         let a = Adoptions::<u32>::new();
-        assert!(a.request(tid(5)));
+        assert!(a.request(tid(5), key(5)));
         let fill = a.begin_fill(a.waiting().next().unwrap()).unwrap();
         a.clear(tid(5));
         assert_eq!(fill.offer(9), Err(9));
-        assert_eq!(a.take(tid(5)), None);
+        assert_eq!(a.take(tid(5), key(5)), None);
         assert_eq!(a.waiting().count(), 0);
-        assert!(a.request(tid(5)), "the cell is free again");
+        assert!(a.request(tid(5), key(5)), "the cell is free again");
     }
 
     #[test]
     fn dropped_fill_returns_the_request() {
         let a = Adoptions::<u32>::new();
-        assert!(a.request(tid(5)));
+        assert!(a.request(tid(5), key(5)));
         drop(a.begin_fill(a.waiting().next().unwrap()).unwrap());
         assert_eq!(a.waiting().count(), 1);
         // 取り消し後に捨てた場合は口が空く。
@@ -425,7 +517,7 @@ mod tests {
         use std::sync::Arc;
         let a = Adoptions::<Arc<()>>::new();
         let v = Arc::new(());
-        assert!(a.request(tid(1)));
+        assert!(a.request(tid(1), key(1)));
         a.begin_fill(a.waiting().next().unwrap())
             .unwrap()
             .offer(Arc::clone(&v))
@@ -434,13 +526,89 @@ mod tests {
         a.clear(tid(1));
         assert_eq!(Arc::strong_count(&v), 1, "the offered value is released");
         for n in 0..ADOPTION_CELLS as u64 {
-            assert!(a.request(tid(100 + n)));
+            assert!(a.request(tid(100 + n), key(100 + n)));
         }
-        assert!(!a.request(tid(9999)), "every cell is taken");
+        assert!(!a.request(tid(9999), key(9999)), "every cell is taken");
         // 置かれたままの値は口と一緒に捨てる。
         let req = a.waiting().next().unwrap();
         a.begin_fill(req).unwrap().offer(Arc::clone(&v)).unwrap();
         drop(a);
         assert_eq!(Arc::strong_count(&v), 1);
+    }
+
+    /// レビュー 2026-11-16 P1: 終了した要求者の要求は取り消され、置いたまま
+    /// の値は回収へ渡る。生きている要求者のものには触れない。
+    #[test]
+    fn sweep_cancels_dead_requests_and_returns_unclaimed_values() {
+        let a = Adoptions::<u32>::new();
+        assert!(a.request(tid(1), key(1))); // dead, still requested
+        assert!(a.request(tid(2), key(2))); // dead, offered
+        assert!(a.request(tid(3), key(3))); // alive, offered
+        for req in a
+            .waiting()
+            .filter(|r| r.key() != key(1))
+            .collect::<Vec<_>>()
+        {
+            let fill = a.begin_fill(req).unwrap();
+            let v = fill.tid().get() as u32 * 10;
+            fill.offer(v).unwrap();
+        }
+        let mut retired = Vec::new();
+        a.sweep(
+            |k| k == key(1) || k == key(2),
+            |t, v| retired.push((t.get(), v)),
+        );
+        assert_eq!(retired, vec![(2, 20)]);
+        assert_eq!(a.waiting().count(), 0, "the dead request is gone");
+        assert_eq!(a.take(tid(3), key(3)), Some(30), "the live one is kept");
+        assert_eq!(a.take(tid(2), key(2)), None);
+    }
+
+    /// A later thread with a reused ID neither takes the value made for the
+    /// earlier one nor shares its request.
+    #[test]
+    fn a_reused_thread_id_is_another_requester() {
+        let a = Adoptions::<u32>::new();
+        let (old, new) = (key(5), RequesterKey::from_bits(5 | (2 << 40)).unwrap());
+        assert!(a.request(tid(5), old));
+        a.begin_fill(a.waiting().next().unwrap())
+            .unwrap()
+            .offer(1)
+            .unwrap();
+        assert!(a.request(tid(5), new));
+        assert_eq!(a.waiting().count(), 1, "the new requester waits on its own");
+        assert_eq!(a.take(tid(5), new), None, "not the old requester's value");
+        let mut retired = Vec::new();
+        a.sweep(|k| k == old, |_, v| retired.push(v));
+        assert_eq!(retired, vec![1]);
+        a.begin_fill(a.waiting().next().unwrap())
+            .unwrap()
+            .offer(2)
+            .unwrap();
+        assert_eq!(a.take(tid(5), new), Some(2));
+    }
+
+    /// A requester whose key is not written yet is never served (its cell
+    /// reads as no request), and emptied cells start without a key.
+    #[test]
+    fn unkeyed_requests_are_not_served_and_keys_reset_with_the_cell() {
+        let a = Adoptions::<u32, 1>::new();
+        let c = &a.cells[0];
+        c.word.store(
+            CellWord {
+                phase: Phase::Requested,
+                ticket: Ticket(0),
+                tid: 9,
+            }
+            .pack(),
+            Ordering::Release,
+        );
+        assert_eq!(a.waiting().count(), 0);
+        c.key.store(key(9).bits(), Ordering::Release);
+        assert_eq!(a.waiting().count(), 1);
+        a.clear(tid(9));
+        assert_eq!(c.key.load(Ordering::Acquire), 0);
+        assert!(a.request(tid(9), key(9)));
+        assert_eq!(a.waiting().next().unwrap().key(), key(9));
     }
 }

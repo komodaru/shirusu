@@ -204,8 +204,9 @@ pub(super) type GenericFn12 = unsafe extern "system-unwind" fn(
 /// 呼び出し側は `original` がこの `N` の `extern "system-unwind" fn` である
 /// ことを保証すること（生成表とトランポリンが保証する）。
 pub(super) unsafe fn call_original<const N: usize>(original: usize, args: &[usize; N]) -> usize {
+    const { assert!(N <= crate::api::GENERIC_MAX_ARITY) };
     // SAFETY: 各分岐は N に対応する引数個数の関数型へ transmute し、
-    // その個数で呼ぶ。N > 12 は生成表に現れない（生成器の上限）。
+    // その個数で呼ぶ。N > 12 は上の const 検査でコンパイル時に拒む。
     unsafe {
         match N {
             0 => std::mem::transmute::<usize, GenericFn0>(original)(),
@@ -242,7 +243,7 @@ pub(super) unsafe fn call_original<const N: usize>(original: usize, args: &[usiz
                 args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
                 args[9], args[10], args[11],
             ),
-            _ => panic!("generic detour arity {N} exceeds 12"),
+            _ => unreachable!("arity {N} is rejected at compile time"),
         }
     }
 }
@@ -273,9 +274,18 @@ pub(super) fn generic_detour_with<const N: usize>(
         }
         GenericPrepare::Unavailable => return 0,
     };
+    // The table shape is proven at build time (GENERIC_CONTRACT); only the
+    // pairing of this Detour's arity with its row is checked here. A
+    // mismatch is a generator bug: pass through instead of recording garbage.
+    let Some(generic) = crate::api::generic_api(api_id).filter(|g| g.arity() == N) else {
+        drop(flight);
+        drop(guard);
+        le.restore_before_original();
+        return invoke(original);
+    };
     let call_id = flight.runtime().alloc_call_id();
     {
-        let bytes = capture::encode_generic_enter::<N>(api, args);
+        let bytes = capture::encode_generic_enter::<N>(generic, args);
         flight
             .runtime()
             .emit_enter(tid, api, call_id, bytes.as_bytes());
@@ -299,7 +309,7 @@ pub(super) fn generic_detour_with<const N: usize>(
             ..
         } = prepare_generic(api_id)
         {
-            let bytes = capture::encode_generic_leave_with_inputs(api, ret, last_error, args);
+            let bytes = capture::encode_generic_leave_with_inputs(generic, ret, last_error, args);
             flight
                 .runtime()
                 .emit_leave(tid, api, call_id, bytes.as_bytes());
@@ -348,7 +358,7 @@ pub(super) fn generic_detour_with<const N: usize>(
     }
     guard.resume();
     pop_call(call_id);
-    let bytes = capture::encode_generic_leave_with_inputs(api, ret, last_error, args);
+    let bytes = capture::encode_generic_leave_with_inputs(generic, ret, last_error, args);
     call_guard
         .runtime()
         .emit_leave(tid, api, call_id, bytes.as_bytes());
@@ -402,21 +412,15 @@ pub(super) type GeneratedInvoke = unsafe fn(usize, &[u64]) -> u64;
 /// would otherwise each instantiate the full recording path; this function is
 /// instantiated once per arity, and only the typed invoker is per API.
 #[inline(never)]
-pub(super) fn generated_detour(api_id: u32, args: &[u64], invoke: GeneratedInvoke) -> u64 {
-    macro_rules! by_arity {
-        ($($n:literal)*) => {
-            match args.len() {
-                $($n => {
-                    let fixed: &[u64; $n] = args.try_into().expect("matched arity");
-                    // SAFETY: the generator pairs this invoker with this
-                    // API's original function type and argument count.
-                    generic_detour_with(api_id, fixed, move |original| unsafe {
-                        invoke(original, args)
-                    })
-                })*
-                n => panic!("generated detour arity {n} exceeds 12"),
-            }
-        };
-    }
-    by_arity!(0 1 2 3 4 5 6 7 8 9 10 11 12)
+pub(super) fn generated_detour<const N: usize>(
+    api_id: u32,
+    args: &[u64; N],
+    invoke: GeneratedInvoke,
+) -> u64 {
+    const { assert!(N <= crate::api::GENERIC_MAX_ARITY) };
+    // SAFETY: the generator pairs this invoker with this API's original
+    // function type and argument count.
+    generic_detour_with(api_id, args, move |original| unsafe {
+        invoke(original, args)
+    })
 }

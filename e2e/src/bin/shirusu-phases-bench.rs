@@ -183,11 +183,14 @@ fn main() {
         black_box(&buffer);
     }
     measure("scalar_enter_encode", || {
-        black_box(capture::encode_generic_enter::<3>(api, black_box(&args)));
+        black_box(capture::encode_generic_enter::<3>(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            black_box(&args),
+        ));
     });
     measure("scalar_leave_encode", || {
         black_box(capture::encode_generic_leave(
-            api,
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
             black_box(0x5678),
             black_box(0),
         ));
@@ -196,8 +199,15 @@ fn main() {
     let leave_schema = api.leave_schema();
     let enter_types = shirusu_trace::schema::schema_types(&enter_schema).unwrap();
     let leave_types = shirusu_trace::schema::schema_types(&leave_schema).unwrap();
-    let enter_payload = capture::encode_generic_enter::<3>(api, &args);
-    let leave_payload = capture::encode_generic_leave(api, 0x5678, 0);
+    let enter_payload = capture::encode_generic_enter::<3>(
+        shirusu_hook::api::generic_api(api.api_id).unwrap(),
+        &args,
+    );
+    let leave_payload = capture::encode_generic_leave(
+        shirusu_hook::api::generic_api(api.api_id).unwrap(),
+        0x5678,
+        0,
+    );
     measure("scalar_enter_validate", || {
         assert!(
             black_box(shirusu_trace::compact::validate_values_completeness(
@@ -284,8 +294,15 @@ fn main() {
             thread_id: 1,
             qpc_frequency: timestamps.frequency(),
         };
-        let enter = capture::encode_generic_enter::<3>(api, &args);
-        let leave = capture::encode_generic_leave(api, 0x5678, 0);
+        let enter = capture::encode_generic_enter::<3>(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            &args,
+        );
+        let leave = capture::encode_generic_leave(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            0x5678,
+            0,
+        );
         for _ in 0..ROUNDS {
             let start = Instant::now();
             for _ in 0..calls {
@@ -360,8 +377,15 @@ fn record_layers(
     use shirusu_transport::descriptor::{CaptureState, EventKind};
     use shirusu_transport::ring::{EventInput, RingWriter, SharedRegion, WriterPolicy};
     const CALLS: usize = 1536;
-    let enter = capture::encode_generic_enter::<3>(api, &[0x1234, 0, 64]);
-    let leave = capture::encode_generic_leave(api, 0x5678, 0);
+    let enter = capture::encode_generic_enter::<3>(
+        shirusu_hook::api::generic_api(api.api_id).unwrap(),
+        &[0x1234, 0, 64],
+    );
+    let leave = capture::encode_generic_leave(
+        shirusu_hook::api::generic_api(api.api_id).unwrap(),
+        0x5678,
+        0,
+    );
     let input = |kind, schema_id, call_id, payload| EventInput {
         kind,
         api_id: api.api_id,

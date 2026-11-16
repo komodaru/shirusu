@@ -9,7 +9,10 @@ use std::{hint::black_box, time::Instant};
 
 fn main() {
     let api = api_by_name("HeapAlloc").unwrap();
-    let values = capture::generic_enter(api, &[0x1234, 0, 64]);
+    let values = capture::generic_enter(
+        shirusu_hook::api::generic_api(api.api_id).unwrap(),
+        &[0x1234, 0, 64],
+    );
     let iterations = 100_000;
     for round in 0..5 {
         let mut times = [0.0; 2];
@@ -66,11 +69,16 @@ fn main() {
             let start = Instant::now();
             for _ in 0..iterations {
                 if mode == 0 {
-                    let values = capture::generic_enter(black_box(api), black_box(&raw_args));
+                    let values = capture::generic_enter(
+                        black_box(shirusu_hook::api::generic_api(api.api_id).unwrap()),
+                        black_box(&raw_args),
+                    );
                     black_box(capture::encode_enter(api, &values).unwrap());
                 } else {
-                    let bytes =
-                        capture::encode_generic_enter::<3>(black_box(api), black_box(&raw_args));
+                    let bytes = capture::encode_generic_enter::<3>(
+                        black_box(shirusu_hook::api::generic_api(api.api_id).unwrap()),
+                        black_box(&raw_args),
+                    );
                     black_box(bytes.as_bytes());
                 }
             }

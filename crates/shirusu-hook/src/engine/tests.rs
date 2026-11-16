@@ -307,9 +307,12 @@ fn measure_generic_detour() {
         black_box(prepare_generic(black_box(api.api_id)));
     });
     let encode = stage(&mut || {
-        black_box(capture::encode_generic_enter::<3>(api, black_box(&args)));
+        black_box(capture::encode_generic_enter::<3>(
+            crate::api::generic_api(api.api_id).unwrap(),
+            black_box(&args),
+        ));
         black_box(capture::encode_generic_leave_with_inputs(
-            api,
+            crate::api::generic_api(api.api_id).unwrap(),
             black_box(64),
             0,
             &args,
@@ -317,8 +320,14 @@ fn measure_generic_detour() {
     });
     let records = stage(&mut || {
         let _guard = ReentrancyGuard::try_enter().unwrap();
-        let enter = capture::encode_generic_enter::<3>(api, &args);
-        let leave = capture::encode_generic_leave_with_inputs(api, 64, 0, &args);
+        let enter =
+            capture::encode_generic_enter::<3>(crate::api::generic_api(api.api_id).unwrap(), &args);
+        let leave = capture::encode_generic_leave_with_inputs(
+            crate::api::generic_api(api.api_id).unwrap(),
+            64,
+            0,
+            &args,
+        );
         let id = rt.alloc_call_id();
         black_box(rt.record_enter(tid, api, id, black_box(enter.as_bytes())));
         black_box(rt.record_leave(tid, api, id, black_box(leave.as_bytes())));

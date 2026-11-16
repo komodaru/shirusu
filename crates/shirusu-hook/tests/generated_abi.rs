@@ -241,7 +241,10 @@ fn captured_floating_values_roundtrip_without_nan_canonicalization() {
         0x7ff8_0000_0000_1234,
         0x7ff0_0000_0000_0001,
     ] {
-        let values = capture::generic_enter(api, &[bits, bits]);
+        let values = capture::generic_enter(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            &[bits, bits],
+        );
         let bytes = capture::encode_enter(api, &values).unwrap();
         let decoded = decode_values(&schema_types(&api.enter_schema()).unwrap(), &bytes).unwrap();
         assert_eq!(decoded[0].value, TypedValue::F64Bits(bits));

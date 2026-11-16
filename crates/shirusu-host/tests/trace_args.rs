@@ -215,7 +215,7 @@ fn broad_tier_schemas_are_registered_on_first_use() {
     rec.set_lazy_schemas(shirusu_hook::api::broad_schema);
     let broad = &shirusu_hook::api::BROAD_API_TABLE[0];
     let payload = shirusu_hook::capture::encode_generic_enter::<12>(
-        broad,
+        shirusu_hook::api::generic_api(broad.api_id).unwrap(),
         &vec![0u64; broad.enter_fields.len()],
     )
     .as_bytes()

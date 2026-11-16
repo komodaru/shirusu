@@ -20,9 +20,9 @@
 //!   古い残留値のため `ValueCapture::Stale` として記録する（値本体は
 //!   生値を保持する。F20）。
 
-use crate::api::ApiDef;
+use crate::api::{ApiDef, GenericApi, GenericScalar};
 use shirusu_trace::compact::encode_values_iter;
-use shirusu_trace::schema::{CapturedValue, LastErrorMeaning, Ty, TypedValue, ValueCapture};
+use shirusu_trace::schema::{CapturedValue, LastErrorMeaning, TypedValue, ValueCapture};
 use shirusu_trace::CompactError;
 
 /// 対象プロセスのメモリを読む抽象。実装は「addr から buf を満たす
@@ -753,44 +753,30 @@ pub fn encode_leave(api: &ApiDef, values: &[CapturedValue]) -> Result<Vec<u8>, C
 /// L1 生成 API（L03）の汎用取得。生の引数値（usize を u64 へ写した
 /// もの）を、その API の enter Schema の型に沿って値列へ変換する。
 ///
-/// 生成表は整数・ポインタ型だけを使う（U32 / I32 / U64 / I64 / Bool）。
-/// 文字列・バッファの中身、構造体の参照先は L1 では取得しない
-/// （ポインタ値だけを記録する。L2 で手書き仕様により拡張する）。
-/// 対応外の型が表に現れたら panic する：生成表はコンパイル時に固定
-/// され、テストで型の制限を検査するためである（encode_enter の
-/// expect と同じ方針）。
-pub fn generic_enter(api: &ApiDef, args: &[u64]) -> Vec<CapturedValue> {
-    assert_eq!(
-        args.len(),
-        api.enter_fields.len(),
-        "{}: generic detour arity mismatch (args {} vs fields {})",
-        api.function,
-        args.len(),
-        api.enter_fields.len()
-    );
-    api.enter_fields
-        .iter()
+/// 生成表は整数・ポインタ型だけを使う（[`GenericScalar`]）。文字列・
+/// バッファの中身、構造体の参照先は L1 では取得しない（ポインタ値だけを
+/// 記録する。L2 で手書き仕様により拡張する）。表の形は
+/// [`crate::api::GENERIC_CONTRACT`] がコンパイル時に確かめ (外部レビュー
+/// 2026-11-16 P2)、ここは形を確かめない。引数の数が表と違えば共通の先頭
+/// だけを変換する (Detour は数の一致を確かめてから呼ぶ)。
+pub fn generic_enter(api: GenericApi, args: &[u64]) -> Vec<CapturedValue> {
+    api.enter()
         .zip(args.iter())
-        .map(|((name, ty, _, _), raw)| raw_to_value(api.function, name, *ty, *raw))
+        .map(|((_, scalar), raw)| raw_to_value(scalar, *raw))
         .collect()
 }
 
-/// L1 生成 API（L03）の汎用 leave 取得。leave Schema の `return`
-/// フィールドを戻り値の生値から、`last_error` フィールドを
-/// `last_error_value`（F20 の意味条件）で作る。void 戻りの API は
-/// `return` フィールドを持たず `last_error` だけになる。
-pub fn generic_leave(api: &ApiDef, return_value: u64, last_error: u32) -> Vec<CapturedValue> {
-    let meaning = generic_last_error_meaning(api, return_value, last_error, &[]);
-    api.leave_fields
-        .iter()
-        .map(|(name, ty, _, _)| match *name {
-            "return" => raw_to_value(api.function, name, *ty, return_value),
-            "last_error" => last_error_value(meaning, return_value, last_error),
-            other => panic!(
-                "{}: unexpected leave field {other} in generated table",
-                api.function
-            ),
-        })
+/// L1 生成 API（L03）の汎用 leave 取得。戻り値 (void なら無し) を生値から、
+/// `last_error` を `last_error_value`（F20 の意味条件）で作る。
+pub fn generic_leave(api: GenericApi, return_value: u64, last_error: u32) -> Vec<CapturedValue> {
+    let meaning = generic_last_error_meaning(api.def(), return_value, last_error, &[]);
+    let error = api
+        .records_last_error()
+        .then(|| last_error_value(meaning, return_value, last_error));
+    api.ret()
+        .map(|scalar| raw_to_value(scalar, return_value))
+        .into_iter()
+        .chain(error)
         .collect()
 }
 
@@ -836,39 +822,41 @@ impl<const FIELDS: usize> GenericPayload<FIELDS> {
     /// at most 11 bytes (state + 10-byte ULEB), so it is written into one
     /// fixed window: one bounds check per field instead of one per byte.
     #[inline(always)]
-    fn raw_scalar(&mut self, capture: ValueCapture, function: &str, name: &str, ty: Ty, raw: u64) {
+    fn raw_scalar(&mut self, capture: ValueCapture, scalar: GenericScalar, raw: u64) {
         let start = self.len;
-        let window: &mut [u8; 11] = (&mut self.bytes.as_flattened_mut()[start..start + 11])
-            .try_into()
-            .expect("field window");
+        // The caller writes at most FIELDS fields (see `encode_generic_*`),
+        // so `start + 11` is inside the buffer.
+        let Some(window) = self
+            .bytes
+            .as_flattened_mut()
+            .get_mut(start..start + 11)
+            .and_then(|w| <&mut [u8; 11]>::try_from(w).ok())
+        else {
+            return;
+        };
         window[0] = capture.code();
-        let n = match ty {
-            Ty::U32 => write_uleb(window, raw as u32 as u64),
-            Ty::U64 => write_uleb(window, raw),
-            Ty::I32 => {
+        let n = match scalar {
+            GenericScalar::U32 => write_uleb(window, raw as u32 as u64),
+            GenericScalar::U64 => write_uleb(window, raw),
+            GenericScalar::I32 => {
                 let v = raw as i32 as i64;
                 write_uleb(window, ((v << 1) ^ (v >> 63)) as u64)
             }
-            Ty::I64 => {
+            GenericScalar::I64 => {
                 let v = raw as i64;
                 write_uleb(window, ((v << 1) ^ (v >> 63)) as u64)
             }
-            Ty::Bool => {
+            GenericScalar::Bool => {
                 window[1] = (raw != 0) as u8;
                 1
             }
-            Ty::F32 => {
+            GenericScalar::F32 => {
                 window[1..5].copy_from_slice(&(raw as u32).to_le_bytes());
                 4
             }
-            Ty::F64 => {
+            GenericScalar::F64 => {
                 window[1..9].copy_from_slice(&raw.to_le_bytes());
                 8
-            }
-            other => {
-                panic!(
-                    "{function}: field {name} uses unsupported Ty {other:?} for generic L1 capture"
-                )
             }
         };
         self.len = start + 1 + n;
@@ -918,67 +906,58 @@ fn write_uleb(window: &mut [u8; 11], mut value: u64) -> usize {
     i
 }
 
-/// Encode generated arguments directly into bounded stack storage.
-/// FIELDS must cover every argument; the generated wrapper uses its exact arity.
+/// Encode generated arguments directly into bounded stack storage. At most
+/// FIELDS arguments are written (the generated Detour uses its exact arity,
+/// checked against the table before the call); a shorter or longer `args`
+/// encodes the common prefix. No shape check happens here: the build proved
+/// every generated row ([`crate::api::GENERIC_CONTRACT`]).
 pub fn encode_generic_enter<const FIELDS: usize>(
-    api: &ApiDef,
+    api: GenericApi,
     args: &[u64],
 ) -> GenericPayload<FIELDS> {
-    assert_eq!(
-        args.len(),
-        api.enter_fields.len(),
-        "generated detour arity mismatch"
-    );
-    assert!(args.len() <= FIELDS, "generated payload capacity exceeded");
     let mut payload = GenericPayload::new();
-    for ((name, ty, _, _), raw) in api.enter_fields.iter().zip(args) {
-        payload.raw_scalar(ValueCapture::Captured, api.function, name, *ty, *raw);
+    for ((_, scalar), raw) in api.enter().zip(args).take(FIELDS) {
+        payload.raw_scalar(ValueCapture::Captured, scalar, *raw);
     }
     payload
 }
 
 /// Encode the optional return value and LastError without heap allocation.
-pub fn encode_generic_leave(api: &ApiDef, return_value: u64, last_error: u32) -> GenericPayload<2> {
+pub fn encode_generic_leave(
+    api: GenericApi,
+    return_value: u64,
+    last_error: u32,
+) -> GenericPayload<2> {
     encode_generic_leave_with_inputs(api, return_value, last_error, &[])
 }
 
 /// Resolve supported input-dependent error semantics from the original scalar
 /// arguments. Missing context stays Unsupported, retaining the raw error value.
+/// The leave is `[return?, last_error?]` for every generated row (proven at
+/// build time), so it always fits two fields.
 pub fn encode_generic_leave_with_inputs(
-    api: &ApiDef,
+    api: GenericApi,
     return_value: u64,
     last_error: u32,
     args: &[u64],
 ) -> GenericPayload<2> {
-    let meaning = generic_last_error_meaning(api, return_value, last_error, args);
-    assert!(
-        api.leave_fields.len() <= 2,
-        "generated leave capacity exceeded"
-    );
+    let meaning = generic_last_error_meaning(api.def(), return_value, last_error, args);
     let mut payload = GenericPayload::new();
-    for (name, ty, _, _) in api.leave_fields {
-        match *name {
-            "return" => payload.raw_scalar(
-                ValueCapture::Captured,
-                api.function,
-                name,
-                *ty,
-                return_value,
-            ),
-            // Same capture state as `last_error_value`, always a U32 value.
-            "last_error" => {
-                let capture = if meaning == LastErrorMeaning::DependsOnInputs {
-                    ValueCapture::Unsupported
-                } else if meaning.is_meaningful(return_value) {
-                    ValueCapture::Captured
-                } else {
-                    ValueCapture::Stale
-                };
-                payload.raw_scalar(capture, api.function, name, Ty::U32, last_error as u64)
-            }
-            other => panic!("{}: unexpected leave field {other}", api.function),
-        }
+    if let Some(scalar) = api.ret() {
+        payload.raw_scalar(ValueCapture::Captured, scalar, return_value);
     }
+    if !api.records_last_error() {
+        return payload;
+    }
+    // Same capture state as `last_error_value`, always a U32 value.
+    let capture = if meaning == LastErrorMeaning::DependsOnInputs {
+        ValueCapture::Unsupported
+    } else if meaning.is_meaningful(return_value) {
+        ValueCapture::Captured
+    } else {
+        ValueCapture::Stale
+    };
+    payload.raw_scalar(capture, GenericScalar::U32, last_error as u64);
     payload
 }
 
@@ -1021,25 +1000,26 @@ fn generic_last_error_meaning(
 
 /// 生の u64 値を Schema の型に沿った `CapturedValue` へ変換する。
 /// 32bit 型は下位ビット、64bit 型は全ビット、Bool は 0 以外を真とする。
-/// 生成表で使わない型（Str16 / Bytes 等）は panic する。
-fn raw_to_value(function: &str, name: &str, ty: Ty, raw: u64) -> CapturedValue {
-    match ty {
-        Ty::U32 => u32v(raw as u32),
-        Ty::I32 => i32v(raw as i32),
-        Ty::U64 => u64v(raw),
-        Ty::I64 => i64v(raw as i64),
-        Ty::Bool => boolv(raw != 0),
-        Ty::F32 => CapturedValue::captured(TypedValue::F32Bits(raw as u32)),
-        Ty::F64 => CapturedValue::captured(TypedValue::F64Bits(raw)),
-        other => {
-            panic!("{function}: field {name} uses unsupported Ty {other:?} for generic L1 capture")
-        }
+fn raw_to_value(scalar: GenericScalar, raw: u64) -> CapturedValue {
+    match scalar {
+        GenericScalar::U32 => u32v(raw as u32),
+        GenericScalar::I32 => i32v(raw as i32),
+        GenericScalar::U64 => u64v(raw),
+        GenericScalar::I64 => i64v(raw as i64),
+        GenericScalar::Bool => boolv(raw != 0),
+        GenericScalar::F32 => CapturedValue::captured(TypedValue::F32Bits(raw as u32)),
+        GenericScalar::F64 => CapturedValue::captured(TypedValue::F64Bits(raw)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The generic-capture view of a row (test rows are leaked to 'static).
+    fn g(api: &ApiDef) -> GenericApi {
+        GenericApi::check(Box::leak(Box::new(*api))).expect("generic-capture row")
+    }
     use crate::api::*;
     use shirusu_trace::compact::{decode_values, encode_values};
     use shirusu_trace::schema::schema_types;
@@ -1251,7 +1231,7 @@ mod tests {
         for disposition in 1..=5 {
             let args = [0, 0, 0, 0, disposition, 128, 0];
             for returned in [0x1234, u32::MAX as u64, u64::MAX] {
-                let encoded = encode_generic_leave_with_inputs(api, returned, 183, &args);
+                let encoded = encode_generic_leave_with_inputs(g(api), returned, 183, &args);
                 let values = decode_values(&types, encoded.as_bytes()).unwrap();
                 assert_eq!(values[1].value, TypedValue::U32(183));
                 assert_eq!(
@@ -1265,7 +1245,7 @@ mod tests {
             }
         }
         for args in [&[][..], &[0, 0, 0, 0, u64::MAX][..]] {
-            let encoded = encode_generic_leave_with_inputs(api, 0x1234, 183, args);
+            let encoded = encode_generic_leave_with_inputs(g(api), 0x1234, 183, args);
             let values = decode_values(&types, encoded.as_bytes()).unwrap();
             assert_eq!(values[1].capture, ValueCapture::Unsupported);
             assert_eq!(values[1].value, TypedValue::U32(183));
@@ -1297,12 +1277,12 @@ mod tests {
             ] {
                 let mut args = vec![0; api.enter_fields.len()];
                 args[index] = name_ptr;
-                let bytes = encode_generic_leave_with_inputs(api, returned, error, &args);
+                let bytes = encode_generic_leave_with_inputs(g(api), returned, error, &args);
                 let values = decode_values(&types, bytes.as_bytes()).unwrap();
                 assert_eq!(values[1].capture, expected, "{name}");
                 assert_eq!(values[1].value, TypedValue::U32(error));
             }
-            let bytes = encode_generic_leave(api, 0x1234, 183);
+            let bytes = encode_generic_leave(g(api), 0x1234, 183);
             assert_eq!(
                 decode_values(&types, bytes.as_bytes()).unwrap()[1].capture,
                 ValueCapture::Unsupported
@@ -1347,7 +1327,7 @@ mod tests {
         assert_eq!(error, 183);
         let api = api_by_name("CreateEventW").unwrap();
         let args = [0, 0, 0, name.as_ptr() as usize as u64];
-        let bytes = encode_generic_leave_with_inputs(api, second as usize as u64, error, &args);
+        let bytes = encode_generic_leave_with_inputs(g(api), second as usize as u64, error, &args);
         let values = decode_values(
             &schema_types(&api.leave_schema()).unwrap(),
             bytes.as_bytes(),
@@ -1364,7 +1344,7 @@ mod tests {
         let types = schema_types(&api.leave_schema()).unwrap();
         for returned in [0, 0x1234] {
             for raw_error in [0, 5, 8, u32::MAX] {
-                let encoded = encode_generic_leave(api, returned, raw_error);
+                let encoded = encode_generic_leave(g(api), returned, raw_error);
                 let values = decode_values(&types, encoded.as_bytes()).unwrap();
                 assert_eq!(values[1].capture, ValueCapture::Stale);
                 assert_eq!(values[1].value, TypedValue::U32(raw_error));
@@ -1384,16 +1364,16 @@ mod tests {
                 0x7ff8_0000_0000_1234,
             ] {
                 let args = vec![raw; api.enter_fields.len()];
-                let enter = generic_enter(api, &args);
-                let leave = generic_leave(api, raw, u32::MAX);
+                let enter = generic_enter(g(api), &args);
+                let leave = generic_leave(g(api), raw, u32::MAX);
                 assert_eq!(
-                    encode_generic_enter::<32>(api, &args).as_bytes(),
+                    encode_generic_enter::<32>(g(api), &args).as_bytes(),
                     encode_enter(api, &enter).unwrap(),
                     "{} stack enter",
                     api.function
                 );
                 assert_eq!(
-                    encode_generic_leave(api, raw, u32::MAX).as_bytes(),
+                    encode_generic_leave(g(api), raw, u32::MAX).as_bytes(),
                     encode_leave(api, &leave).unwrap(),
                     "{} stack leave",
                     api.function
@@ -1424,11 +1404,11 @@ mod tests {
         ) {
             let api = &GENERATED_API_TABLE[api_index];
             let args = &raw_args[..api.enter_fields.len()];
-            let expected = encode_enter(api, &generic_enter(api, args)).unwrap();
-            let actual = encode_generic_enter::<32>(api, args);
+            let expected = encode_enter(api, &generic_enter(g(api), args)).unwrap();
+            let actual = encode_generic_enter::<32>(g(api), args);
             proptest::prop_assert_eq!(actual.as_bytes(), expected);
-            let expected = encode_leave(api, &generic_leave(api, returned, last_error)).unwrap();
-            let actual = encode_generic_leave(api, returned, last_error);
+            let expected = encode_leave(api, &generic_leave(g(api), returned, last_error)).unwrap();
+            let actual = encode_generic_leave(g(api), returned, last_error);
             proptest::prop_assert_eq!(actual.as_bytes(), expected);
         }
     }
@@ -1436,7 +1416,7 @@ mod tests {
     #[test]
     fn scalar_payload_handles_zero_fields_and_maximum_varint() {
         let api = api_by_name("GetCurrentProcessId").unwrap();
-        assert!(encode_generic_enter::<0>(api, &[]).as_bytes().is_empty());
+        assert!(encode_generic_enter::<0>(g(api), &[]).as_bytes().is_empty());
         let mut payload = GenericPayload::<1>::new();
         payload.scalar(CapturedValue::captured(TypedValue::U64(u64::MAX)));
         assert_eq!(payload.as_bytes().len(), 11);
@@ -1954,10 +1934,10 @@ mod tests {
     fn generic_enter_and_leave_roundtrip() {
         // L03: 生の引数値を Schema の型に沿って変換し、符号化が往復する。
         let api = reg_close_key_def();
-        let enter = generic_enter(&api, &[0x1234_5678_9abc_def0]);
+        let enter = generic_enter(g(&api), &[0x1234_5678_9abc_def0]);
         assert_eq!(enter, vec![u64v(0x1234_5678_9abc_def0)]);
         // 戻り値 0 (ERROR_SUCCESS) でも Never なら last_error は Stale。
-        let leave = generic_leave(&api, 0, 5);
+        let leave = generic_leave(g(&api), 0, 5);
         assert_eq!(leave[0], u32v(0));
         assert_eq!(leave[1].capture, ValueCapture::Stale);
         assert_eq!(leave[1].value, TypedValue::U32(5));
@@ -1998,7 +1978,7 @@ mod tests {
             last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
         };
         let enter = generic_enter(
-            &api,
+            g(&api),
             &[
                 0x1_0000_0002,
                 0xffff_ffff,
@@ -2018,8 +1998,8 @@ mod tests {
             ]
         );
         // 戻り値 0 (FALSE) なら last_error は意味あり、非 0 なら Stale。
-        assert_eq!(generic_leave(&api, 0, 5)[1], u32v(5));
-        assert_eq!(generic_leave(&api, 1, 5)[1].capture, ValueCapture::Stale);
+        assert_eq!(generic_leave(g(&api), 0, 5)[1], u32v(5));
+        assert_eq!(generic_leave(g(&api), 1, 5)[1].capture, ValueCapture::Stale);
     }
 
     #[test]
@@ -2028,9 +2008,9 @@ mod tests {
             let api = crate::api::api_table()
                 .find(|api| api.function == name)
                 .unwrap();
-            assert_eq!(generic_leave(api, 0, 5)[1].capture, ValueCapture::Stale);
+            assert_eq!(generic_leave(g(api), 0, 5)[1].capture, ValueCapture::Stale);
             for handle in [1, 0x8000_0000, 0xffff_ffff_0000_0000] {
-                assert_eq!(generic_leave(api, handle, 5)[1], u32v(5));
+                assert_eq!(generic_leave(g(api), handle, 5)[1], u32v(5));
             }
             let fields = api.leave_schema().fields;
             assert_eq!(
@@ -2062,9 +2042,9 @@ mod tests {
             ],
             last_error_meaning: LastErrorMeaning::WhenReturnIsNull,
         };
-        assert_eq!(generic_leave(&api, 0, 5)[1], u32v(5));
+        assert_eq!(generic_leave(g(&api), 0, 5)[1], u32v(5));
         assert_eq!(
-            generic_leave(&api, 0x1234, 5)[1].capture,
+            generic_leave(g(&api), 0x1234, 5)[1].capture,
             ValueCapture::Stale
         );
         // void 戻りは leave が last_error だけになる。
@@ -2083,43 +2063,92 @@ mod tests {
             )],
             last_error_meaning: LastErrorMeaning::Never,
         };
-        let leave = generic_leave(&void_api, 0, 5);
+        let leave = generic_leave(g(&void_api), 0, 5);
         assert_eq!(leave.len(), 1);
         assert_eq!(leave[0].capture, ValueCapture::Stale);
     }
 
+    /// Review 2026-11-16 P2: a wrong argument count is not a panic in the
+    /// recording path; the common prefix is encoded (the Detour checks the
+    /// count against the row before it records).
     #[test]
-    #[should_panic(expected = "arity mismatch")]
-    fn generic_enter_rejects_arity_mismatch() {
-        let api = reg_close_key_def();
-        let _ = generic_enter(&api, &[]);
+    fn generic_enter_with_a_wrong_arity_encodes_the_prefix() {
+        let api = g(&reg_close_key_def());
+        assert!(generic_enter(api, &[]).is_empty());
+        assert_eq!(generic_enter(api, &[1, 2]), vec![u64v(1)]);
+        assert_eq!(
+            encode_generic_enter::<1>(api, &[1, 2]).as_bytes(),
+            {
+                let mut one = GenericPayload::<1>::new();
+                one.scalar(u64v(1));
+                one
+            }
+            .as_bytes()
+        );
     }
 
+    /// A row that does not fit the generic capture cannot become a
+    /// `GenericApi`; for the generated tables the build fails instead
+    /// (`GENERIC_CONTRACT`).
     #[test]
-    #[should_panic(expected = "unsupported Ty")]
-    fn generic_enter_rejects_unsupported_type() {
-        // L03: 生成表に Str16 等が混ざると panic する（表の検査は
-        // api.rs のテストが担い、ここでは変換側の防御を確認する）。
+    fn rows_outside_the_generic_contract_are_rejected() {
+        use crate::api::GenericContractError;
         use shirusu_trace::schema::{CaptureTiming, LastErrorMeaning, ValueKind};
-        let api = ApiDef {
-            api_id: 904,
-            module: "kernel32.dll",
-            function: "FakeString",
-            level: 1,
-            level_note: "test",
+        let base = reg_close_key_def();
+        let leak = |api: ApiDef| GenericApi::check(Box::leak(Box::new(api)));
+        let string_arg = ApiDef {
             enter_fields: &[("s", Ty::Str16, ValueKind::Scalar, CaptureTiming::Before)],
+            ..base
+        };
+        assert_eq!(
+            leak(string_arg).err(),
+            Some(GenericContractError::UnsupportedArgument)
+        );
+        let wide_error = ApiDef {
+            leave_fields: &[(
+                "last_error",
+                Ty::U64,
+                ValueKind::Scalar,
+                CaptureTiming::After,
+            )],
+            ..base
+        };
+        assert_eq!(
+            leak(wide_error).err(),
+            Some(GenericContractError::LeaveShape)
+        );
+        let reversed = ApiDef {
             leave_fields: &[
-                ("return", Ty::I32, ValueKind::Scalar, CaptureTiming::After),
                 (
                     "last_error",
                     Ty::U32,
                     ValueKind::Scalar,
                     CaptureTiming::After,
                 ),
+                ("return", Ty::U32, ValueKind::Scalar, CaptureTiming::After),
             ],
-            last_error_meaning: LastErrorMeaning::WhenReturnIsFalse,
+            ..base
         };
-        let _ = generic_enter(&api, &[0x1000]);
+        assert_eq!(leak(reversed).err(), Some(GenericContractError::LeaveShape));
+        let bytes_return = ApiDef {
+            leave_fields: &[("return", Ty::Bytes, ValueKind::Scalar, CaptureTiming::After)],
+            ..base
+        };
+        assert_eq!(
+            leak(bytes_return).err(),
+            Some(GenericContractError::UnsupportedReturn)
+        );
+        const THIRTEEN: &[(&str, Ty, ValueKind, CaptureTiming)] =
+            &[("a", Ty::U32, ValueKind::Scalar, CaptureTiming::Before); 13];
+        let wide = ApiDef {
+            enter_fields: THIRTEEN,
+            ..base
+        };
+        assert_eq!(
+            leak(wide).err(),
+            Some(GenericContractError::TooManyArguments)
+        );
+        let _ = LastErrorMeaning::Never;
     }
 }
 

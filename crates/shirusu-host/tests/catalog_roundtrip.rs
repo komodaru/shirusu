@@ -72,12 +72,20 @@ fn roundtrip(calls: &[(&'static ApiDef, Vec<u64>, u64, u32)]) {
     let mut expected = Vec::new();
     for (i, (api, args, ret, err)) in calls.iter().enumerate() {
         let seq = 2 * i as u64 + 1;
-        let enter = capture::encode_generic_enter::<32>(api, args)
-            .as_bytes()
-            .to_vec();
-        let leave = capture::encode_generic_leave_with_inputs(api, *ret, *err, args)
-            .as_bytes()
-            .to_vec();
+        let enter = capture::encode_generic_enter::<32>(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            args,
+        )
+        .as_bytes()
+        .to_vec();
+        let leave = capture::encode_generic_leave_with_inputs(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            *ret,
+            *err,
+            args,
+        )
+        .as_bytes()
+        .to_vec();
         events.push(event(
             api,
             seq,
@@ -92,10 +100,17 @@ fn roundtrip(calls: &[(&'static ApiDef, Vec<u64>, u64, u32)]) {
             api.leave_schema_id(),
             leave,
         ));
-        expected.push(capture::generic_enter(api, args));
+        expected.push(capture::generic_enter(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            args,
+        ));
         // generic_leave は入力に依存する意味を解決しない（DependsOnInputs）。
         // 入力付きの符号化と比べるため、値と取得状態は個別に確かめる。
-        expected.push(capture::generic_leave(api, *ret, *err));
+        expected.push(capture::generic_leave(
+            shirusu_hook::api::generic_api(api.api_id).unwrap(),
+            *ret,
+            *err,
+        ));
     }
     let stats = rec.record_batch_with_args(&ctx(), &events).unwrap();
     // 空の値列（引数なしの enter）は Payload を持たず、args も付かない。
@@ -170,14 +185,38 @@ fn broad_stack_encoding_matches_reference_for_every_api() {
         ] {
             let args = vec![raw; api.enter_fields.len()];
             assert_eq!(
-                capture::encode_generic_enter::<32>(api, &args).as_bytes(),
-                capture::encode_enter(api, &capture::generic_enter(api, &args)).unwrap(),
+                capture::encode_generic_enter::<32>(
+                    shirusu_hook::api::generic_api(api.api_id).unwrap(),
+                    &args
+                )
+                .as_bytes(),
+                capture::encode_enter(
+                    api,
+                    &capture::generic_enter(
+                        shirusu_hook::api::generic_api(api.api_id).unwrap(),
+                        &args
+                    )
+                )
+                .unwrap(),
                 "{} enter",
                 api.function
             );
             assert_eq!(
-                capture::encode_generic_leave(api, raw, u32::MAX).as_bytes(),
-                capture::encode_leave(api, &capture::generic_leave(api, raw, u32::MAX)).unwrap(),
+                capture::encode_generic_leave(
+                    shirusu_hook::api::generic_api(api.api_id).unwrap(),
+                    raw,
+                    u32::MAX
+                )
+                .as_bytes(),
+                capture::encode_leave(
+                    api,
+                    &capture::generic_leave(
+                        shirusu_hook::api::generic_api(api.api_id).unwrap(),
+                        raw,
+                        u32::MAX
+                    )
+                )
+                .unwrap(),
                 "{} leave",
                 api.function
             );

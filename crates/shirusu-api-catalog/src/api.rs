@@ -475,6 +475,228 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
     true
 }
 
+/// 生成 Detour (L1 の汎用取得) が扱える値の型。[`Ty`] のうち生の引数値
+/// 1 つから作れるものだけ (外部レビュー 2026-11-16 P2: 生成 API の形を
+/// Detour の実行時に panic で確かめていた)。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GenericScalar {
+    U32,
+    I32,
+    U64,
+    I64,
+    Bool,
+    F32,
+    F64,
+}
+impl GenericScalar {
+    /// `ty` が汎用取得の型ならその型。
+    pub const fn of(ty: Ty) -> Option<Self> {
+        match ty {
+            Ty::U32 => Some(Self::U32),
+            Ty::I32 => Some(Self::I32),
+            Ty::U64 => Some(Self::U64),
+            Ty::I64 => Some(Self::I64),
+            Ty::Bool => Some(Self::Bool),
+            Ty::F32 => Some(Self::F32),
+            Ty::F64 => Some(Self::F64),
+            Ty::Str | Ty::Str16 | Ty::Bytes | Ty::BlobRef | Ty::Ptr32 | Ty::Ptr64 => None,
+        }
+    }
+    pub const fn ty(self) -> Ty {
+        match self {
+            Self::U32 => Ty::U32,
+            Self::I32 => Ty::I32,
+            Self::U64 => Ty::U64,
+            Self::I64 => Ty::I64,
+            Self::Bool => Ty::Bool,
+            Self::F32 => Ty::F32,
+            Self::F64 => Ty::F64,
+        }
+    }
+}
+
+/// 生成 Detour の引数の上限 (生成器の上限)。
+pub const GENERIC_MAX_ARITY: usize = 12;
+
+/// 生成表の行が汎用取得の形に合わない理由。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GenericContractError {
+    TooManyArguments,
+    UnsupportedArgument,
+    /// leave は `[return?, last_error]` で、`last_error` は U32。
+    LeaveShape,
+    UnsupportedReturn,
+}
+
+/// 汎用取得の形を満たすと確かめた API。汎用 Detour を持つ表 (生成 L1、内部 API、広域層)
+/// からしか作れず、その全行はコンパイル時に検査する ([`GENERIC_CONTRACT`])。
+/// 形に合わない行があればビルドが止まるので、Detour は形を実行時に確かめない。
+#[derive(Clone, Copy, Debug)]
+pub struct GenericApi {
+    def: &'static ApiDef,
+    ret: Option<GenericScalar>,
+    last_error: bool,
+}
+impl GenericApi {
+    /// 行の検査 (const)。
+    pub const fn check(def: &'static ApiDef) -> Result<Self, GenericContractError> {
+        if def.enter_fields.len() > GENERIC_MAX_ARITY {
+            return Err(GenericContractError::TooManyArguments);
+        }
+        let mut i = 0;
+        while i < def.enter_fields.len() {
+            if GenericScalar::of(def.enter_fields[i].1).is_none() {
+                return Err(GenericContractError::UnsupportedArgument);
+            }
+            i += 1;
+        }
+        let leave = def.leave_fields;
+        // `[return?, last_error?]`, in this order; `last_error` is U32.
+        let mut ret = None;
+        let mut next = 0;
+        if next < leave.len() && const_str_eq(leave[next].0, "return") {
+            ret = match GenericScalar::of(leave[next].1) {
+                Some(scalar) => Some(scalar),
+                None => return Err(GenericContractError::UnsupportedReturn),
+            };
+            next += 1;
+        }
+        let mut last_error = false;
+        if next < leave.len() && const_str_eq(leave[next].0, "last_error") {
+            if !matches!(leave[next].1, Ty::U32) {
+                return Err(GenericContractError::LeaveShape);
+            }
+            last_error = true;
+            next += 1;
+        }
+        if next != leave.len() {
+            return Err(GenericContractError::LeaveShape);
+        }
+        Ok(Self {
+            def,
+            ret,
+            last_error,
+        })
+    }
+    pub fn def(&self) -> &'static ApiDef {
+        self.def
+    }
+    pub fn arity(&self) -> usize {
+        self.def.enter_fields.len()
+    }
+    /// 引数の名前と型 (表の順)。
+    pub fn enter(&self) -> impl Iterator<Item = (&'static str, GenericScalar)> + '_ {
+        self.def.enter_fields.iter().map(|&(name, ty, _, _)| {
+            // The build proved every argument of a generated row scalar
+            // (GENERIC_CONTRACT); U64 keeps the raw bits if that ever broke.
+            (name, GenericScalar::of(ty).unwrap_or(GenericScalar::U64))
+        })
+    }
+    /// 戻り値の型 (void なら None)。leave は戻り値、続いて LastError。
+    pub fn ret(&self) -> Option<GenericScalar> {
+        self.ret
+    }
+    /// leave に LastError を持つか (内部 API の NTSTATUS 返しは持たない)。
+    pub fn records_last_error(&self) -> bool {
+        self.last_error
+    }
+}
+
+/// 汎用 Detour を持つ 3 表 (生成 L1、内部 API、広域層) の全行が汎用取得の形を満たす
+/// ことのコンパイル時検査。満たさない行があると const 評価が panic し、
+/// ビルドが失敗する。
+///
+/// 形に合わない行は const 評価で拒まれる (この検査と同じ `check` を使う):
+///
+/// ```compile_fail,E0080
+/// use shirusu_api_catalog::api::{ApiDef, GenericApi};
+/// use shirusu_trace::schema::{CaptureTiming, LastErrorMeaning, Ty, ValueKind};
+/// static ROW: ApiDef = ApiDef {
+///     api_id: 9999,
+///     module: "kernel32.dll",
+///     function: "FakeString",
+///     level: 1,
+///     level_note: "",
+///     enter_fields: &[("s", Ty::Str16, ValueKind::Scalar, CaptureTiming::Before)],
+///     leave_fields: &[("last_error", Ty::U32, ValueKind::Scalar, CaptureTiming::After)],
+///     last_error_meaning: LastErrorMeaning::Never,
+/// };
+/// const _: () = assert!(GenericApi::check(&ROW).is_ok());
+/// ```
+///
+/// 形に合う行は通る:
+///
+/// ```
+/// use shirusu_api_catalog::api::{ApiDef, GenericApi};
+/// use shirusu_trace::schema::{CaptureTiming, LastErrorMeaning, Ty, ValueKind};
+/// static ROW: ApiDef = ApiDef {
+///     api_id: 9999,
+///     module: "kernel32.dll",
+///     function: "FakeScalar",
+///     level: 1,
+///     level_note: "",
+///     enter_fields: &[("n", Ty::U32, ValueKind::Scalar, CaptureTiming::Before)],
+///     leave_fields: &[("last_error", Ty::U32, ValueKind::Scalar, CaptureTiming::After)],
+///     last_error_meaning: LastErrorMeaning::Never,
+/// };
+/// const _: () = assert!(GenericApi::check(&ROW).is_ok());
+/// ```
+pub const GENERIC_CONTRACT: () = {
+    let tables = [GENERATED_API_TABLE, INTERNAL_API_TABLE, BROAD_API_TABLE];
+    let mut t = 0;
+    while t < tables.len() {
+        let mut i = 0;
+        while i < tables[t].len() {
+            match GenericApi::check(&tables[t][i]) {
+                Ok(_) => {}
+                Err(GenericContractError::TooManyArguments) => {
+                    panic!("a generated API has more than 12 arguments")
+                }
+                Err(GenericContractError::UnsupportedArgument) => {
+                    panic!("a generated API argument is not a generic scalar")
+                }
+                Err(GenericContractError::LeaveShape) => {
+                    panic!("a generated API leave is not [return?, last_error?: U32]")
+                }
+                Err(GenericContractError::UnsupportedReturn) => {
+                    panic!("a generated API return is not a generic scalar")
+                }
+            }
+            i += 1;
+        }
+        t += 1;
+    }
+};
+#[allow(clippy::let_unit_value)]
+const _: () = GENERIC_CONTRACT;
+
+/// ID ごとに、生成 Detour を持つ表 (検査済み) の行かどうか。
+static IS_GENERIC: [bool; MAX_API_ID + 1] = {
+    let tables = [GENERATED_API_TABLE, INTERNAL_API_TABLE, BROAD_API_TABLE];
+    let mut is = [false; MAX_API_ID + 1];
+    let mut t = 0;
+    while t < tables.len() {
+        let mut i = 0;
+        while i < tables[t].len() {
+            is[tables[t][i].api_id as usize] = true;
+            i += 1;
+        }
+        t += 1;
+    }
+    is
+};
+
+/// 汎用 Detour の API (生成 L1、内部 API、広域層)。それ以外の ID は None。
+#[inline]
+pub fn generic_api(api_id: u32) -> Option<GenericApi> {
+    if !IS_GENERIC.get(api_id as usize).copied().unwrap_or(false) {
+        return None;
+    }
+    let def = api_by_id(api_id)?;
+    // Proven by GENERIC_CONTRACT for every row of these tables.
+    GenericApi::check(def).ok()
+}
+
 /// `kernel32.dll!ExitThread` の API ID。Detour の通常経路が毎回文字列を
 /// 比較しないよう、コンパイル時に表から求める（無ければビルドを拒否）。
 pub const EXIT_THREAD_API_ID: u32 = {
@@ -804,6 +1026,36 @@ mod tests {
         );
         let get_message = api_by_import("USER32.dll", "MessageBeep").unwrap();
         assert!(is_iat_only_api(get_message.api_id));
+    }
+
+    /// Review 2026-11-16 P2: every row with a generic Detour has a
+    /// `GenericApi` (its shape was proven at build time), and no other row has.
+    #[test]
+    fn generic_api_covers_exactly_the_generic_tables() {
+        for api in GENERATED_API_TABLE
+            .iter()
+            .chain(INTERNAL_API_TABLE)
+            .chain(BROAD_API_TABLE)
+        {
+            let g = generic_api(api.api_id).expect(api.function);
+            assert_eq!(g.arity(), api.enter_fields.len());
+            let leave: Vec<Ty> = g
+                .ret()
+                .map(GenericScalar::ty)
+                .into_iter()
+                .chain(g.records_last_error().then_some(Ty::U32))
+                .collect();
+            let table: Vec<Ty> = api.leave_fields.iter().map(|f| f.1).collect();
+            assert_eq!(leave, table, "{}", api.function);
+            for ((_, scalar), field) in g.enter().zip(api.enter_fields) {
+                assert_eq!(scalar.ty(), field.1);
+            }
+        }
+        for api in HANDWRITTEN_API_TABLE {
+            assert!(generic_api(api.api_id).is_none(), "{}", api.function);
+        }
+        assert!(generic_api(0).is_none());
+        assert!(generic_api(u32::MAX).is_none());
     }
 
     #[test]

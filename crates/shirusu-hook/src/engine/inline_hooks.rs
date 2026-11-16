@@ -28,24 +28,49 @@ use super::*;
 
 /// 公開済みの Inline Hook 1 件分。解除時にプロローグを復元するために保持する。
 /// トランポリンはプロセス終了まで保持する。捨てても復元はしない (上の注記)。
+///
+/// フィールドは engine の外から見えない (レビュー 2026-11-16 P2): 実際に
+/// パッチを公開した設置処理だけがこの値を作り、復元先のアドレスや元の
+/// バイトを後から書き換えることもできない。読むのは下のアクセサだけ。
+///
+/// ```compile_fail,E0451
+/// // 設置していない値は組み立てられない。
+/// let _ = shirusu_hook::engine::InstalledInlineHook {
+///     api_id: 1,
+///     target: 0x1000,
+///     trampoline: 0x2000,
+///     stolen_len: 5,
+///     original_bytes: vec![0; 5],
+///     patched_len: 5,
+///     installed_bytes: vec![0xE9; 5],
+///     restoration: Default::default(),
+///     caller_boundary: false,
+/// };
+/// ```
+///
+/// ```compile_fail,E0616
+/// // 設置後に復元先を書き換えられない。
+/// fn retarget(hook: &mut shirusu_hook::engine::InstalledInlineHook) {
+///     hook.target = 0xdead_0000;
+/// }
+/// ```
 #[derive(Debug)]
 #[must_use = "an installed hook stays patched until it is restored explicitly"]
 pub struct InstalledInlineHook {
-    pub api_id: u32,
-    pub target: usize,
-    pub trampoline: usize,
-    pub trampoline_size: usize,
-    pub stolen_len: usize,
+    pub(super) api_id: u32,
+    pub(super) target: usize,
+    pub(super) trampoline: usize,
+    pub(super) stolen_len: usize,
     /// パッチ前の先頭バイト（stolen_len 分）。
-    pub original_bytes: Vec<u8>,
+    pub(super) original_bytes: Vec<u8>,
     /// Only these bytes were overwritten; stolen instruction tails stay intact.
-    pub patched_len: usize,
+    pub(super) patched_len: usize,
     /// Exact bytes published by this hook, for ownership checks on removal.
-    pub installed_bytes: Vec<u8>,
-    pub restoration: InlineRestoration,
+    pub(super) installed_bytes: Vec<u8>,
+    pub(super) restoration: InlineRestoration,
     /// L23: the patch enters through a caller-capturing entry stub, so the
     /// Detour can exclude Windows-internal callers. False records every caller.
-    pub caller_boundary: bool,
+    pub(super) caller_boundary: bool,
 }
 
 #[derive(Debug, Default)]
@@ -55,6 +80,27 @@ pub struct InlineRestoration {
     pub(super) cache_pending: std::sync::atomic::AtomicBool,
 }
 impl InstalledInlineHook {
+    pub fn api_id(&self) -> u32 {
+        self.api_id
+    }
+    pub fn target(&self) -> usize {
+        self.target
+    }
+    pub fn trampoline(&self) -> usize {
+        self.trampoline
+    }
+    pub fn stolen_len(&self) -> usize {
+        self.stolen_len
+    }
+    pub fn original_bytes(&self) -> &[u8] {
+        &self.original_bytes
+    }
+    pub fn installed_bytes(&self) -> &[u8] {
+        &self.installed_bytes
+    }
+    pub fn caller_boundary(&self) -> bool {
+        self.caller_boundary
+    }
     pub fn maintenance_pending(&self) -> bool {
         use std::sync::atomic::Ordering;
         self.restoration.protection.load(Ordering::Acquire) != 0
@@ -897,7 +943,6 @@ fn inline_hook(
         api_id: p.slot.report_id(),
         target: p.target,
         trampoline,
-        trampoline_size: TRAMPOLINE_SIZE,
         stolen_len: p.plan.stolen_len,
         original_bytes: p.original_bytes.clone(),
         patched_len: layout.patch.len(),

@@ -592,8 +592,11 @@ mod win {
             .iter()
             .map(|e| e.api.api_id)
             .collect();
-        let inline_ids: std::collections::HashSet<u32> =
-            inline_outcome.installed.iter().map(|h| h.api_id).collect();
+        let inline_ids: std::collections::HashSet<u32> = inline_outcome
+            .installed
+            .iter()
+            .map(|h| h.api_id())
+            .collect();
         let hooked = iat_ids.union(&inline_ids).count();
         // L15: 内部 API (Nt*) は通常の Coverage 欠落に数えない（詳細調査
         // モードでの設置数は別欄で報告する）。
@@ -620,10 +623,10 @@ mod win {
             }
             for hook in outcome.installed.iter().rev() {
                 reasons.insert(
-                    hook.api_id,
+                    hook.api_id(),
                     if hook.maintenance_pending() {
                         "installed-restoration-pending"
-                    } else if !internal && !(caller_boundary && hook.caller_boundary) {
+                    } else if !internal && !(caller_boundary && hook.caller_boundary()) {
                         // Recorded, but Windows-internal callers cannot be excluded.
                         "installed-without-caller-boundary"
                     } else {

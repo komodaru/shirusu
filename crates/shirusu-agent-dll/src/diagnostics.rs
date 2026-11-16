@@ -230,7 +230,7 @@ pub fn report_inline(outcome: &shirusu_hook::engine::InlineInstallOutcome) {
     };
     let mut text = String::from("api\tresult\n");
     for hook in &outcome.installed {
-        text.push_str(&format!("{}\tinstalled\n", hook.api_id));
+        text.push_str(&format!("{}\tinstalled\n", hook.api_id()));
     }
     for (api, reason) in &outcome.skipped {
         text.push_str(&format!("{api}\t{reason}\n"));

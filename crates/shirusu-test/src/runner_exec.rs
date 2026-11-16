@@ -44,10 +44,15 @@ pub enum ParamKind {
     AnsiStr,
     /// ハンドル（`usize` 値）。
     Handle,
-    /// 生ポインタ（NULL・生アドレス・バッファ・out スロットのいずれか）。
-    Ptr,
     /// 入出力バッファ（ポインタを渡し、内容を読み戻す）。
     Bytes,
+    /// API が DWORD を書き込む先 (`LPDWORD`)。Runner の u32 スロットか NULL。
+    OutU32,
+    /// `LPSECURITY_ATTRIBUTES`。NULL だけを受け付ける (レビュー 2026-11-16 P1:
+    /// 旧 `Ptr` は 1 バイトのバッファでも通し、API が構造体の外を読みえた)。
+    SecurityAttributes,
+    /// `LPOVERLAPPED`。Runner は非同期完了の持ち主を持たないので NULL だけ。
+    Overlapped,
 }
 
 /// 呼び出し表の 1 引数。
@@ -67,7 +72,9 @@ pub struct CallSig {
 
 const P_U32: ParamKind = ParamKind::U32;
 const P_HANDLE: ParamKind = ParamKind::Handle;
-const P_PTR: ParamKind = ParamKind::Ptr;
+const P_OUT32: ParamKind = ParamKind::OutU32;
+const P_SA: ParamKind = ParamKind::SecurityAttributes;
+const P_OVL: ParamKind = ParamKind::Overlapped;
 const P_WSTR: ParamKind = ParamKind::WideStr;
 const P_BYTES: ParamKind = ParamKind::Bytes;
 
@@ -92,7 +99,7 @@ pub const CALL_TABLE: &[CallSig] = &[
             },
             ParamDef {
                 name: "lpSecurityAttributes",
-                kind: P_PTR,
+                kind: P_SA,
             },
             ParamDef {
                 name: "dwCreationDisposition",
@@ -126,11 +133,11 @@ pub const CALL_TABLE: &[CallSig] = &[
             },
             ParamDef {
                 name: "lpNumberOfBytesRead",
-                kind: P_PTR,
+                kind: P_OUT32,
             },
             ParamDef {
                 name: "lpOverlapped",
-                kind: P_PTR,
+                kind: P_OVL,
             },
         ],
     },
@@ -152,11 +159,11 @@ pub const CALL_TABLE: &[CallSig] = &[
             },
             ParamDef {
                 name: "lpNumberOfBytesWritten",
-                kind: P_PTR,
+                kind: P_OUT32,
             },
             ParamDef {
                 name: "lpOverlapped",
-                kind: P_PTR,
+                kind: P_OVL,
             },
         ],
     },
@@ -178,7 +185,7 @@ pub const CALL_TABLE: &[CallSig] = &[
             },
             ParamDef {
                 name: "lpFileSizeHigh",
-                kind: P_PTR,
+                kind: P_OUT32,
             },
         ],
     },
@@ -200,7 +207,7 @@ pub const CALL_TABLE: &[CallSig] = &[
             },
             ParamDef {
                 name: "lpSecurityAttributes",
-                kind: P_PTR,
+                kind: P_SA,
             },
         ],
     },
@@ -279,8 +286,6 @@ pub enum ArgValue {
     Buffer { size: usize, fill: Vec<u8> },
     /// u32 の out スロットへのポインタ。
     OutU32,
-    /// u64 の out スロットへのポインタ。
-    OutU64,
 }
 
 /// 戻り値への期待。
@@ -491,9 +496,6 @@ fn check_io_storage(
     if !matches!(function, "ReadFile" | "WriteFile") {
         return Ok(());
     }
-    if !matches!(args[4].value, ArgValue::Null | ArgValue::Int(0)) {
-        return Err("runner does not support asynchronous I/O: lpOverlapped must be null".into());
-    }
     let capacity = match &args[1].value {
         ArgValue::Buffer { size, .. } => Some(*size as u64),
         ArgValue::Text(text) => Some(text.len() as u64),
@@ -513,20 +515,22 @@ fn check_io_storage(
             ));
         }
     }
-    if matches!(args[3].value, ArgValue::Buffer { size, .. } if size < 4) {
-        return Err(format!(
-            "{function} byte-count output needs at least 4 bytes"
-        ));
-    }
     Ok(())
 }
 
 #[cfg(any(windows, test))]
 fn checked_slot(value: u64, kind: ParamKind) -> Result<usize, String> {
     let maximum = match kind {
-        ParamKind::U32 => u32::MAX as u64,
+        ParamKind::U32 => u64::from(u32::MAX),
         ParamKind::Bool => 1,
-        _ => usize::MAX as u64,
+        ParamKind::U64 | ParamKind::Handle => usize::MAX as u64,
+        // Pointers are never taken from numbers: only NULL reaches here.
+        ParamKind::WideStr
+        | ParamKind::AnsiStr
+        | ParamKind::Bytes
+        | ParamKind::OutU32
+        | ParamKind::SecurityAttributes
+        | ParamKind::Overlapped => 0,
     };
     if value > maximum {
         return Err(format!(
@@ -556,54 +560,96 @@ fn check_value_kind(
             param.name, value
         )
     };
-    match (param.kind, value) {
-        (ParamKind::U32, ArgValue::Int(v)) if *v <= u32::MAX as u64 => Ok(()),
-        (ParamKind::U64, ArgValue::Int(_)) => Ok(()),
-        (ParamKind::Bool, ArgValue::Bool(_)) => Ok(()),
-        (ParamKind::Bool, ArgValue::Int(v)) if *v <= 1 => Ok(()),
+    let reference = |name: &str| {
+        if !valid_name(name) {
+            return Err(format!("step {i}: invalid reference ${name:?}"));
+        }
+        if !stored.iter().any(|n| n == name) {
+            return Err(format!(
+                "step {i}: reference ${name:?} is not stored by an earlier step"
+            ));
+        }
+        Ok(())
+    };
+    // 種類ごとに受け付ける値を全て書く (`_` は無い)。新しい種類を足すと
+    // ここがコンパイルエラーになり、受け付ける値を決めるまで通らない。
+    match param.kind {
+        ParamKind::U32 => match value {
+            ArgValue::Int(v) if *v <= u64::from(u32::MAX) => Ok(()),
+            ArgValue::Null => Ok(()),
+            ArgValue::Ref(name) => reference(name),
+            ArgValue::Int(_)
+            | ArgValue::Text(_)
+            | ArgValue::Bool(_)
+            | ArgValue::Buffer { .. }
+            | ArgValue::OutU32 => Err(err("this kind of value")),
+        },
+        ParamKind::U64 => match value {
+            ArgValue::Int(_) | ArgValue::Null => Ok(()),
+            ArgValue::Ref(name) => reference(name),
+            ArgValue::Text(_) | ArgValue::Bool(_) | ArgValue::Buffer { .. } | ArgValue::OutU32 => {
+                Err(err("this kind of value"))
+            }
+        },
+        ParamKind::Bool => match value {
+            ArgValue::Bool(_) | ArgValue::Null => Ok(()),
+            ArgValue::Int(v) if *v <= 1 => Ok(()),
+            ArgValue::Ref(name) => reference(name),
+            ArgValue::Int(_) | ArgValue::Text(_) | ArgValue::Buffer { .. } | ArgValue::OutU32 => {
+                Err(err("this kind of value"))
+            }
+        },
         // A literal handle may only be one no live handle can have: closing
         // or reading an arbitrary value could hit the runner's own handles
         // (2026-11-14 review P3-17). Real handles come from `$name`.
-        (ParamKind::Handle, ArgValue::Int(v)) if is_inert_handle(*v) => Ok(()),
-        (ParamKind::Handle, ArgValue::Int(_)) => {
-            Err(err("a literal handle other than 0 or INVALID_HANDLE_VALUE"))
-        }
-        (ParamKind::WideStr, ArgValue::Text(_)) => Ok(()),
-        (ParamKind::AnsiStr, ArgValue::Text(_)) => Ok(()),
+        ParamKind::Handle => match value {
+            ArgValue::Int(v) if is_inert_handle(*v) => Ok(()),
+            ArgValue::Int(_) => Err(err("a literal handle other than 0 or INVALID_HANDLE_VALUE")),
+            ArgValue::Null => Ok(()),
+            ArgValue::Ref(name) => reference(name),
+            ArgValue::Text(_) | ArgValue::Bool(_) | ArgValue::Buffer { .. } | ArgValue::OutU32 => {
+                Err(err("this kind of value"))
+            }
+        },
+        ParamKind::WideStr | ParamKind::AnsiStr => match value {
+            ArgValue::Text(_) | ArgValue::Null => Ok(()),
+            ArgValue::Ref(name) => {
+                reference(name)?;
+                Err(err("a stored value (a number, not a string)"))
+            }
+            ArgValue::Int(_) | ArgValue::Bool(_) | ArgValue::Buffer { .. } | ArgValue::OutU32 => {
+                Err(err("this kind of value"))
+            }
+        },
+        ParamKind::Bytes => match value {
+            ArgValue::Buffer { size, fill } => check_buffer(i, param.name, *size, fill),
+            ArgValue::Text(_) | ArgValue::Null => Ok(()),
+            ArgValue::Ref(name) => {
+                reference(name)?;
+                Err(err("a stored value (a number, not a string)"))
+            }
+            ArgValue::Int(_) | ArgValue::Bool(_) | ArgValue::OutU32 => {
+                Err(err("this kind of value"))
+            }
+        },
         // Raw addresses are not passed to Win32: only NULL or storage the
-        // runner owns (P3-17).
-        (ParamKind::Ptr, ArgValue::Int(0)) => Ok(()),
-        (ParamKind::Ptr, ArgValue::Int(_)) => Err(err("a raw address")),
-        (ParamKind::Ptr, ArgValue::Ref(_)) => Err(err("a stored value used as an address")),
-        (ParamKind::Ptr, ArgValue::Buffer { size, fill }) => {
-            check_buffer(i, param.name, *size, fill)?;
-            Ok(())
-        }
-        (ParamKind::Ptr, ArgValue::OutU32) => Ok(()),
-        (ParamKind::Ptr, ArgValue::OutU64) => Ok(()),
-        (ParamKind::Bytes, ArgValue::Buffer { size, fill }) => {
-            check_buffer(i, param.name, *size, fill)?;
-            Ok(())
-        }
-        (ParamKind::Bytes, ArgValue::Text(_)) => Ok(()),
-        (_, ArgValue::Null) => Ok(()),
-        (_, ArgValue::Ref(name)) => {
-            if !valid_name(name) {
-                return Err(format!("step {i}: invalid reference ${name:?}"));
+        // runner owns, of the type the parameter points to (P3-17, review
+        // 2026-11-16 P1).
+        ParamKind::OutU32 => match value {
+            ArgValue::OutU32 | ArgValue::Null | ArgValue::Int(0) => Ok(()),
+            ArgValue::Int(_) => Err(err("a raw address")),
+            ArgValue::Ref(_) => Err(err("a stored value used as an address")),
+            ArgValue::Buffer { .. } => Err(err("a byte buffer (it points to a DWORD)")),
+            ArgValue::Text(_) | ArgValue::Bool(_) => Err(err("this kind of value")),
+        },
+        ParamKind::SecurityAttributes | ParamKind::Overlapped => match value {
+            ArgValue::Null | ArgValue::Int(0) => Ok(()),
+            ArgValue::Int(_) => Err(err("a raw address")),
+            ArgValue::Ref(_) => Err(err("a stored value used as an address")),
+            ArgValue::Buffer { .. } | ArgValue::OutU32 | ArgValue::Text(_) | ArgValue::Bool(_) => {
+                Err(err("anything but NULL (the runner has no such structure)"))
             }
-            if !stored.iter().any(|n| n == name) {
-                return Err(format!(
-                    "step {i}: reference ${name:?} is not stored by an earlier step"
-                ));
-            }
-            match param.kind {
-                ParamKind::WideStr | ParamKind::AnsiStr | ParamKind::Bytes => {
-                    Err(err("a stored value (a number, not a string)"))
-                }
-                _ => Ok(()),
-            }
-        }
-        _ => Err(err("this kind of value")),
+        },
     }
 }
 
@@ -631,7 +677,6 @@ fn check_expect(i: usize, expect: &Expect, args: &[PlannedArg]) -> Result<(), St
         match (&arg.value, expected) {
             (ArgValue::Buffer { .. }, ExpectedOutput::HexPrefix(_)) => {}
             (ArgValue::OutU32, ExpectedOutput::U64(_)) => {}
-            (ArgValue::OutU64, ExpectedOutput::U64(_)) => {}
             (ArgValue::Buffer { .. }, ExpectedOutput::U64(_)) => {
                 return Err(format!(
                     "step {i}: expect.outputs {name:?} is a buffer; expected value must be a hex string"
@@ -1140,13 +1185,11 @@ struct LiveStorage {
     narrow: Vec<Vec<u8>>,
     bufs: Vec<Vec<u8>>,
     out32: Vec<u32>,
-    out64: Vec<u64>,
 }
 
 #[cfg(windows)]
 enum ReadBack {
     OutU32(usize),
-    OutU64(usize),
     Buffer(usize),
 }
 
@@ -1157,7 +1200,6 @@ enum ReadBack {
 enum ArgSlot {
     Immediate(usize),
     OutU32(usize),
-    OutU64(usize),
 }
 
 #[cfg(windows)]
@@ -1245,7 +1287,6 @@ fn execute_one(
         narrow: Vec::new(),
         bufs: Vec::new(),
         out32: Vec::new(),
-        out64: Vec::new(),
     };
     let mut live: Vec<LiveArg> = Vec::with_capacity(call.args.len());
     for arg in &call.args {
@@ -1260,7 +1301,6 @@ fn execute_one(
         .map(|a| match a.slot {
             ArgSlot::Immediate(v) => v,
             ArgSlot::OutU32(slot) => storage.out32.as_ptr() as usize + slot * 4,
-            ArgSlot::OutU64(slot) => storage.out64.as_ptr() as usize + slot * 8,
         })
         .collect();
     if let Err(error) = check_io_storage(call.function, &call.args, Some(&values)) {
@@ -1281,9 +1321,6 @@ fn execute_one(
                     arg.name.clone(),
                     OutputValue::U64(storage.out32[*slot] as u64),
                 ));
-            }
-            Some(ReadBack::OutU64(slot)) => {
-                outputs.push((arg.name.clone(), OutputValue::U64(storage.out64[*slot])));
             }
             Some(ReadBack::Buffer(slot)) => {
                 let buf = &storage.bufs[*slot];
@@ -1378,86 +1415,113 @@ fn materialize(
         slot: ArgSlot::Immediate(value),
         read_back: None,
     };
-    match (&arg.kind, &arg.value) {
-        (ParamKind::WideStr, ArgValue::Text(s)) => {
-            let wide: Vec<u16> = s.encode_utf16().chain([0]).collect();
-            let value = wide.as_ptr() as usize;
-            storage.wide.push(wide);
-            Ok(immediate(value))
+    let buffer = |storage: &mut LiveStorage, buf: Vec<u8>| {
+        let value = buf.as_ptr() as usize;
+        storage.bufs.push(buf);
+        LiveArg {
+            name: name.clone(),
+            slot: ArgSlot::Immediate(value),
+            read_back: Some(ReadBack::Buffer(storage.bufs.len() - 1)),
         }
-        (ParamKind::AnsiStr, ArgValue::Text(s)) => {
-            let mut bytes = s.as_bytes().to_vec();
-            bytes.push(0);
-            let value = bytes.as_ptr() as usize;
-            storage.narrow.push(bytes);
-            Ok(immediate(value))
-        }
-        (ParamKind::Bytes, ArgValue::Buffer { size, fill }) => {
-            let mut buf = vec![0u8; *size];
-            buf[..fill.len()].copy_from_slice(fill);
-            let value = buf.as_ptr() as usize;
-            storage.bufs.push(buf);
-            let slot = storage.bufs.len() - 1;
-            Ok(LiveArg {
-                name,
-                slot: ArgSlot::Immediate(value),
-                read_back: Some(ReadBack::Buffer(slot)),
-            })
-        }
-        (ParamKind::Bytes, ArgValue::Text(s)) => {
-            let buf = s.as_bytes().to_vec();
-            let value = buf.as_ptr() as usize;
-            storage.bufs.push(buf);
-            let slot = storage.bufs.len() - 1;
-            Ok(LiveArg {
-                name,
-                slot: ArgSlot::Immediate(value),
-                read_back: Some(ReadBack::Buffer(slot)),
-            })
-        }
-        (ParamKind::Ptr, ArgValue::Buffer { size, fill }) => {
-            let mut buf = vec![0u8; *size];
-            buf[..fill.len()].copy_from_slice(fill);
-            let value = buf.as_ptr() as usize;
-            storage.bufs.push(buf);
-            let slot = storage.bufs.len() - 1;
-            Ok(LiveArg {
-                name,
-                slot: ArgSlot::Immediate(value),
-                read_back: Some(ReadBack::Buffer(slot)),
-            })
-        }
-        (ParamKind::Ptr, ArgValue::OutU32) => {
-            storage.out32.push(0);
-            let slot = storage.out32.len() - 1;
-            Ok(LiveArg {
-                name,
-                slot: ArgSlot::OutU32(slot),
-                read_back: Some(ReadBack::OutU32(slot)),
-            })
-        }
-        (ParamKind::Ptr, ArgValue::OutU64) => {
-            storage.out64.push(0);
-            let slot = storage.out64.len() - 1;
-            Ok(LiveArg {
-                name,
-                slot: ArgSlot::OutU64(slot),
-                read_back: Some(ReadBack::OutU64(slot)),
-            })
-        }
-        (_, ArgValue::Null) => Ok(immediate(0)),
-        (_, ArgValue::Int(v)) => Ok(immediate(checked_slot(*v, arg.kind)?)),
-        (_, ArgValue::Bool(b)) => Ok(immediate(if *b { 1 } else { 0 })),
-        (_, ArgValue::Ref(r)) => match stored.get(r) {
-            Some(v) => Ok(immediate(checked_slot(*v, arg.kind)?)),
-            None => Err(format!(
-                "reference ${r:?} is not stored (plan should have caught this)"
-            )),
-        },
-        _ => Err(format!(
-            "argument {:?} cannot be materialized from {:?}",
-            arg.name, arg.value
+    };
+    let number = |v: u64| checked_slot(v, arg.kind).map(immediate);
+    let stored_number = |r: &String| match stored.get(r) {
+        Some(v) => number(*v),
+        None => Err(format!(
+            "reference ${r:?} is not stored (plan should have caught this)"
         )),
+    };
+    let unplanned = || {
+        Err(format!(
+            "argument {:?} ({:?}) cannot be materialized from {:?} (plan should have caught this)",
+            arg.name, arg.kind, arg.value
+        ))
+    };
+    // 種類ごとに全ての値を書く (`_` は無い)。計画 (check_value_kind) が
+    // 通さない組み合わせは unplanned で止め、Win32 へ渡さない。
+    match arg.kind {
+        ParamKind::U32 | ParamKind::U64 | ParamKind::Handle => match &arg.value {
+            ArgValue::Int(v) => number(*v),
+            ArgValue::Null => Ok(immediate(0)),
+            ArgValue::Ref(r) => stored_number(r),
+            ArgValue::Text(_) | ArgValue::Bool(_) | ArgValue::Buffer { .. } | ArgValue::OutU32 => {
+                unplanned()
+            }
+        },
+        ParamKind::Bool => match &arg.value {
+            ArgValue::Bool(b) => Ok(immediate(usize::from(*b))),
+            ArgValue::Int(v) => number(*v),
+            ArgValue::Null => Ok(immediate(0)),
+            ArgValue::Ref(r) => stored_number(r),
+            ArgValue::Text(_) | ArgValue::Buffer { .. } | ArgValue::OutU32 => unplanned(),
+        },
+        ParamKind::WideStr => match &arg.value {
+            ArgValue::Text(s) => {
+                let wide: Vec<u16> = s.encode_utf16().chain([0]).collect();
+                let value = wide.as_ptr() as usize;
+                storage.wide.push(wide);
+                Ok(immediate(value))
+            }
+            ArgValue::Null => Ok(immediate(0)),
+            ArgValue::Int(_)
+            | ArgValue::Ref(_)
+            | ArgValue::Bool(_)
+            | ArgValue::Buffer { .. }
+            | ArgValue::OutU32 => unplanned(),
+        },
+        ParamKind::AnsiStr => match &arg.value {
+            ArgValue::Text(s) => {
+                let mut bytes = s.as_bytes().to_vec();
+                bytes.push(0);
+                let value = bytes.as_ptr() as usize;
+                storage.narrow.push(bytes);
+                Ok(immediate(value))
+            }
+            ArgValue::Null => Ok(immediate(0)),
+            ArgValue::Int(_)
+            | ArgValue::Ref(_)
+            | ArgValue::Bool(_)
+            | ArgValue::Buffer { .. }
+            | ArgValue::OutU32 => unplanned(),
+        },
+        ParamKind::Bytes => match &arg.value {
+            ArgValue::Buffer { size, fill } => {
+                let mut buf = vec![0u8; *size];
+                buf[..fill.len()].copy_from_slice(fill);
+                Ok(buffer(storage, buf))
+            }
+            ArgValue::Text(s) => Ok(buffer(storage, s.as_bytes().to_vec())),
+            ArgValue::Null => Ok(immediate(0)),
+            ArgValue::Int(_) | ArgValue::Ref(_) | ArgValue::Bool(_) | ArgValue::OutU32 => {
+                unplanned()
+            }
+        },
+        ParamKind::OutU32 => match &arg.value {
+            ArgValue::OutU32 => {
+                storage.out32.push(0);
+                let slot = storage.out32.len() - 1;
+                Ok(LiveArg {
+                    name: arg.name.clone(),
+                    slot: ArgSlot::OutU32(slot),
+                    read_back: Some(ReadBack::OutU32(slot)),
+                })
+            }
+            ArgValue::Null | ArgValue::Int(0) => Ok(immediate(0)),
+            ArgValue::Int(_)
+            | ArgValue::Ref(_)
+            | ArgValue::Text(_)
+            | ArgValue::Bool(_)
+            | ArgValue::Buffer { .. } => unplanned(),
+        },
+        ParamKind::SecurityAttributes | ParamKind::Overlapped => match &arg.value {
+            ArgValue::Null | ArgValue::Int(0) => Ok(immediate(0)),
+            ArgValue::Int(_)
+            | ArgValue::Ref(_)
+            | ArgValue::Text(_)
+            | ArgValue::Bool(_)
+            | ArgValue::Buffer { .. }
+            | ArgValue::OutU32 => unplanned(),
+        },
     }
 }
 
@@ -1777,7 +1841,9 @@ mod tests {
             size: 32,
             fill: vec![],
         };
-        assert!(plan_steps(&steps).unwrap_err().contains("asynchronous"));
+        assert!(plan_steps(&steps)
+            .unwrap_err()
+            .contains("anything but NULL"));
         // 計画済みの列は書き換えられない。写しを壊して検査器を直接試す。
         let mut calls = plan_steps(&file_flow()).unwrap().to_vec();
         calls[1].args[2].value = ArgValue::Ref("hFile".into());
@@ -1793,6 +1859,107 @@ mod tests {
             checked_slot(u32::MAX as u64, ParamKind::U32).unwrap(),
             u32::MAX as usize
         );
+    }
+
+    /// レビュー 2026-11-16 P1: 参照先の型と大きさが合わないポインタ引数は
+    /// 計画で拒む (旧 `Ptr` は `lpSecurityAttributes` に 1 バイトのバッファや
+    /// u32 スロットを通し、API が構造体の外を読みえた)。
+    #[test]
+    fn pointer_parameters_only_take_storage_of_their_type() {
+        let create_dir = |sa: ArgValue| Step {
+            call: "kernel32!CreateDirectoryW".into(),
+            args: vec![
+                ("lpPathName".into(), ArgValue::Text("d".into())),
+                ("lpSecurityAttributes".into(), sa),
+            ],
+            store: None,
+            expect: None,
+        };
+        for bad in [
+            ArgValue::Buffer {
+                size: 1,
+                fill: vec![],
+            },
+            ArgValue::Buffer {
+                size: 4096,
+                fill: vec![],
+            },
+            ArgValue::OutU32,
+            ArgValue::Int(0x1000),
+            ArgValue::Text("x".into()),
+        ] {
+            assert!(plan_steps(&[create_dir(bad.clone())]).is_err(), "{bad:?}");
+        }
+        assert!(plan_steps(&[create_dir(ArgValue::Null)]).is_ok());
+        // LPDWORD は u32 スロットか NULL だけ (3 バイトのバッファは通らない)。
+        let mut steps = file_flow();
+        steps[1].args[3].1 = ArgValue::Buffer {
+            size: 3,
+            fill: vec![],
+        };
+        assert!(plan_steps(&steps).unwrap_err().contains("DWORD"));
+        let mut steps = file_flow();
+        steps[1].args[3].1 = ArgValue::Null;
+        steps[1].expect = None;
+        assert!(plan_steps(&steps).is_ok());
+    }
+
+    /// 全ての呼び出し表の引数 × 全ての値の形を総当たりし、計画を通った
+    /// ポインタ引数は NULL か、その型の Runner 所有の実体だけであることを
+    /// 確かめる (表に API を足しても、この性質が崩れれば落ちる)。
+    #[test]
+    fn every_accepted_pointer_argument_is_null_or_typed_storage() {
+        let values = [
+            ArgValue::Int(0),
+            ArgValue::Int(1),
+            ArgValue::Int(u64::MAX),
+            ArgValue::Null,
+            ArgValue::Bool(true),
+            ArgValue::Text("t".into()),
+            ArgValue::Ref("h".into()),
+            ArgValue::Buffer {
+                size: 0,
+                fill: vec![],
+            },
+            ArgValue::Buffer {
+                size: 1,
+                fill: vec![1],
+            },
+            ArgValue::OutU32,
+        ];
+        let stored = vec!["h".to_string()];
+        for sig in CALL_TABLE {
+            for param in sig.params {
+                for value in &values {
+                    if check_value_kind(0, param, value, &stored).is_err() {
+                        continue;
+                    }
+                    let ok = match param.kind {
+                        ParamKind::SecurityAttributes | ParamKind::Overlapped => {
+                            matches!(value, ArgValue::Null | ArgValue::Int(0))
+                        }
+                        ParamKind::OutU32 => {
+                            matches!(value, ArgValue::Null | ArgValue::Int(0) | ArgValue::OutU32)
+                        }
+                        ParamKind::Bytes => matches!(
+                            value,
+                            ArgValue::Null | ArgValue::Buffer { .. } | ArgValue::Text(_)
+                        ),
+                        ParamKind::WideStr | ParamKind::AnsiStr => {
+                            matches!(value, ArgValue::Null | ArgValue::Text(_))
+                        }
+                        ParamKind::U32 | ParamKind::U64 | ParamKind::Bool | ParamKind::Handle => {
+                            !matches!(value, ArgValue::Buffer { .. } | ArgValue::OutU32)
+                        }
+                    };
+                    assert!(
+                        ok,
+                        "{}!{} {} accepted {value:?}",
+                        sig.dll, sig.function, param.name
+                    );
+                }
+            }
+        }
     }
 
     #[test]

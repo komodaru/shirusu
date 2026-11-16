@@ -85,7 +85,6 @@ fn arg_value_to_rust(value: &ArgValue) -> String {
             )
         }
         ArgValue::OutU32 => "ArgValue::OutU32".to_string(),
-        ArgValue::OutU64 => "ArgValue::OutU64".to_string(),
     }
 }
 

@@ -151,8 +151,7 @@ fn parse_arg_object(value: &JsonValue) -> Result<ArgValue, String> {
         check_keys(value, &["out"])?;
         return match as_str(out) {
             Some("u32") => Ok(ArgValue::OutU32),
-            Some("u64") => Ok(ArgValue::OutU64),
-            _ => Err("\"out\" must be \"u32\" or \"u64\"".to_string()),
+            _ => Err("\"out\" must be \"u32\"".to_string()),
         };
     }
     if let Some(name) = get(value, "ref") {
@@ -259,7 +258,6 @@ fn arg_value_to_json(value: &ArgValue) -> JsonValue {
             JsonValue::obj(pairs)
         }
         ArgValue::OutU32 => JsonValue::obj(vec![("out", JsonValue::Str("u32".into()))]),
-        ArgValue::OutU64 => JsonValue::obj(vec![("out", JsonValue::Str("u64".into()))]),
     }
 }
 

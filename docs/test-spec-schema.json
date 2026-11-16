@@ -92,8 +92,7 @@
       "properties": {
         "out": {
           "enum": [
-            "u32",
-            "u64"
+            "u32"
           ],
           "type": "string"
         }

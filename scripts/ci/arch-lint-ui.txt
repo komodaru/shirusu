@@ -1,0 +1,19 @@
+# scripts/ci/arch-lint.py compile-fail-kept: 型の守りを示す trybuild fixture (減らさない; 新しいものは足す)
+crates/shirusu-test/tests/ui/planned_call_is_read_only.rs
+crates/shirusu-test/tests/ui/planned_program_literal.rs
+crates/shirusu-transport-win/tests/ui/borrowed_handle_outlives_owner.rs
+crates/shirusu-transport-win/tests/ui/close_remote_handle_takes_no_pid.rs
+crates/shirusu-transport-win/tests/ui/portable/owned_handle_is_not_copy.rs
+crates/shirusu-transport-win/tests/ui/raw_value_is_not_a_handle.rs
+crates/shirusu-transport-win/tests/ui/remote_handle_has_no_literal.rs
+crates/shirusu-transport-win/tests/ui/remote_handle_is_not_local.rs
+crates/shirusu-transport-win/tests/ui/windows/owned_handle_is_not_copy.rs
+crates/shirusu-transport/tests/ui/backing_needs_unsafe_impl.rs
+crates/shirusu-transport/tests/ui/consumer_cannot_write_producer_word.rs
+crates/shirusu-transport/tests/ui/control_by_offset.rs
+crates/shirusu-transport/tests/ui/control_is_read_only.rs
+crates/shirusu-transport/tests/ui/copy_out_needs_unsafe.rs
+crates/shirusu-transport/tests/ui/no_borrowed_slice.rs
+crates/shirusu-transport/tests/ui/producer_control_needs_unsafe.rs
+crates/shirusu-transport/tests/ui/reader_needs_unsafe.rs
+crates/shirusu-transport/tests/ui/ring_config_literal.rs

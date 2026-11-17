@@ -3,6 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 export PATH="$HOME/.cargo/bin:$PATH"
+# 構造の lint (レビューで決めたことが戻っていないか) と、その各規則が退行で発火するか
+python3 scripts/ci/arch-lint.py
+python3 scripts/ci/arch-lint.py --self-test
 # L03: 生成表の最新性検査。winmd は NuGet の固定版から取得する。
 bash scripts/ci/fetch-winmd.sh
 cargo run -q -p shirusu-metadata-gen -- --winmd target/winmd/Windows.Win32.winmd --com-catalog crates/shirusu-trace/src/com_catalog_generated.inc --check

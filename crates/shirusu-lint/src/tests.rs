@@ -129,6 +129,10 @@ fn every_allow_spelling_is_found() {
     // (複数行、cfg_attr の中、マクロの本体の中: どれも一件ずつ)
     for one in fixture(Rule::NoLocalAllow).bad.chunks(1) {
         let found = Rule::NoLocalAllow.check(&made_up(one));
-        assert!(!found.is_empty(), "{}: no-local-allow が見つけない", one[0].0);
+        assert!(
+            !found.is_empty(),
+            "{}: no-local-allow が見つけない",
+            one[0].0
+        );
     }
 }

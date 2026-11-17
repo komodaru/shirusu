@@ -27,8 +27,8 @@ fn fixture(r: Rule) -> Fixture {
             mutate: ("Cargo.toml", |t| Some(t.replace("undocumented_unsafe_blocks = \"deny\"", "undocumented_unsafe_blocks = \"warn\""))),
         },
         Rule::NoLocalAllow => Fixture {
-            bad: &[("crates/shirusu-x/src/lib.rs", "#![expect(unsafe_op_in_unsafe_fn)]\n#[allow(clippy::undocumented_unsafe_blocks)]\nfn f() {}\n")],
-            good: &[("crates/shirusu-x/src/lib.rs", "// #[allow(clippy::undocumented_unsafe_blocks)] とは書かない\n#[allow(clippy::too_many_arguments)]\nfn f() { let _ = \"#[allow(unsafe_op_in_unsafe_fn)]\"; }\n")],
+            bad: &[("crates/shirusu-x/src/lib.rs", "#![expect(unsafe_op_in_unsafe_fn)]\n#[allow(clippy::undocumented_unsafe_blocks)]\nfn f() {}\n"), ("crates/shirusu-y/src/lib.rs", "#[cfg_attr(all(), allow(\n    clippy::undocumented_unsafe_blocks,\n))]\nfn f() {}\n"), ("crates/shirusu-z/src/lib.rs", "macro_rules! m {\n    () => {\n        #[allow(unsafe_op_in_unsafe_fn)]\n        unsafe fn f() {}\n    };\n}\n")],
+            good: &[("crates/shirusu-x/src/lib.rs", "// #[allow(clippy::undocumented_unsafe_blocks)] とは書かない\n#[allow(clippy::too_many_arguments)]\nfn f() { let _ = \"#[allow(unsafe_op_in_unsafe_fn)]\"; }\n#[cfg_attr(not(test), allow(dead_code))]\nfn g() {}\n")],
             mutate: ("crates/shirusu-transport/src/shm.rs", |t| Some(t + "\n#[allow(clippy::undocumented_unsafe_blocks)]\nfn _lint_regression() {}\n")),
         },
         Rule::ShmRawUnsafe => Fixture {
@@ -122,4 +122,13 @@ fn each_rule_finds_its_regression_put_back_into_the_real_tree() {
 fn the_tree_itself_passes() {
     let found = check(&Tree::repo(&root()));
     assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn every_allow_spelling_is_found() {
+    // (複数行、cfg_attr の中、マクロの本体の中: どれも一件ずつ)
+    for one in fixture(Rule::NoLocalAllow).bad.chunks(1) {
+        let found = Rule::NoLocalAllow.check(&made_up(one));
+        assert!(!found.is_empty(), "{}: no-local-allow が見つけない", one[0].0);
+    }
 }

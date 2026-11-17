@@ -214,21 +214,63 @@ fn words(ts: proc_macro2::TokenStream, out: &mut Vec<String>) {
 #[derive(Default)]
 struct Allows(Vec<(usize, String)>);
 
-impl<'a> Visit<'a> for Allows {
-    fn visit_attribute(&mut self, a: &'a syn::Attribute) {
-        if a.path().is_ident("allow") || a.path().is_ident("expect") {
-            if let syn::Meta::List(l) = &a.meta {
-                let mut w = vec![];
-                words(l.tokens.clone(), &mut w);
-                for d in DENY.iter().filter(|d| w.iter().any(|x| x == *d)) {
-                    self.0.push((
-                        line(a.pound_token.span),
-                        format!("#[{}({d})]", a.path().to_token_stream()),
-                    ));
+impl Allows {
+    /// `#[allow(..)]` / `#[expect(..)]`、または `#[cfg_attr(条件, allow(..))]` の中身
+    fn attr(&mut self, line: usize, name: &str, tokens: proc_macro2::TokenStream) {
+        let mut w = vec![];
+        words(tokens, &mut w);
+        let allows = name == "allow"
+            || name == "expect"
+            || (name == "cfg_attr" && w.iter().any(|x| x == "allow" || x == "expect"));
+        if !allows {
+            return;
+        }
+        for d in DENY.iter().filter(|d| w.iter().any(|x| x == *d)) {
+            self.0.push((line, format!("#[{name}(.. {d} ..)]")));
+        }
+    }
+
+    /// マクロの本体の中の属性 (syn は属性として読まない)
+    fn tokens(&mut self, ts: proc_macro2::TokenStream) {
+        use proc_macro2::{Delimiter, TokenTree};
+        let toks: Vec<TokenTree> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                TokenTree::Punct(p) if p.as_char() == '#' => {
+                    let mut j = i + 1;
+                    if matches!(toks.get(j), Some(TokenTree::Punct(b)) if b.as_char() == '!') {
+                        j += 1;
+                    }
+                    let Some(TokenTree::Group(g)) = toks.get(j) else {
+                        continue;
+                    };
+                    if g.delimiter() != Delimiter::Bracket {
+                        continue;
+                    }
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    if let (Some(TokenTree::Ident(n)), Some(TokenTree::Group(l))) =
+                        (inner.first(), inner.get(1))
+                    {
+                        self.attr(line(p.span()), &n.to_string(), l.stream());
+                    }
                 }
+                TokenTree::Group(g) => self.tokens(g.stream()),
+                TokenTree::Punct(_) | TokenTree::Ident(_) | TokenTree::Literal(_) => {}
             }
         }
+    }
+}
+
+impl<'a> Visit<'a> for Allows {
+    fn visit_attribute(&mut self, a: &'a syn::Attribute) {
+        if let (syn::Meta::List(l), Some(n)) = (&a.meta, a.path().get_ident()) {
+            self.attr(line(a.pound_token.span), &n.to_string(), l.tokens.clone());
+        }
         syn::visit::visit_attribute(self, a);
+    }
+    fn visit_macro(&mut self, m: &'a syn::Macro) {
+        self.tokens(m.tokens.clone());
+        syn::visit::visit_macro(self, m);
     }
 }
 

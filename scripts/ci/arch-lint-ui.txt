@@ -1,4 +1,4 @@
-# scripts/ci/arch-lint.py compile-fail-kept: 型の守りを示す trybuild fixture (減らさない; 新しいものは足す)
+# crates/shirusu-lint compile-fail-kept: 型の守りを示す trybuild fixture (減らさない; 新しいものは足す)
 crates/shirusu-test/tests/ui/planned_call_is_read_only.rs
 crates/shirusu-test/tests/ui/planned_program_literal.rs
 crates/shirusu-transport-win/tests/ui/borrowed_handle_outlives_owner.rs

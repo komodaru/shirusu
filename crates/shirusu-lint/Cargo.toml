@@ -1,0 +1,17 @@
+[package]
+name = "shirusu-lint"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "shirusu 構造の lint: レビューで型と構造に移した決まりが戻っていないかを検査する (cargo run -p shirusu-lint)"
+
+[dependencies]
+# (span-locations: 見つけた項目の行番号)
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", features = ["full", "visit"] }
+
+[lints]
+workspace = true

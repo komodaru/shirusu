@@ -19,6 +19,7 @@ members = [
     "crates/shirusu-conformance",
     "crates/shirusu-probe",
     "crates/shirusu-loom-tests",
+    "crates/shirusu-lint",
     "e2e",
 ]
 exclude = ["fuzz"]

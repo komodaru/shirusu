@@ -287,14 +287,16 @@ impl<W: DurableWrite> Emitter<W> {
         for def in set.schemas() {
             writer.register_schema(def)?;
         }
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let issuer = NEXT
-            .fetch_update(
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-                |id| id.checked_add(1),
-            )
-            .expect("emitter id space exhausted");
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let mut issuer = NEXT.load(Ordering::Relaxed);
+        loop {
+            let next = issuer.checked_add(1).expect("emitter id space exhausted");
+            match NEXT.compare_exchange_weak(issuer, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(current) => issuer = current,
+            }
+        }
         Ok(Emitter {
             issuer,
             writer,

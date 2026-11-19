@@ -110,6 +110,7 @@ foreach ($workload in @("gui", "high-load")) {
                     # Preserve exact Host queue/writer counters and capture
                     # settings beside the timing sample, not only in job logs.
                     capture_environment = $(if ($summary) { $summary.environment } else { $null })
+                    inspect_exit = $(if ($summary) { $inspectExit } else { $null })
                     integrity = $(if ($summary) { $summary.integrity } else { $null })
                     apis = $(if ($summary) { $summary.api_stats } else { $null })
                     required_api = $requiredApi; required_api_observed = $requiredApiObserved
@@ -132,7 +133,7 @@ foreach ($workload in @("gui", "high-load")) {
     $ratio = $captureNs / $baselineNs
     # Both workloads target 3x (high-load raised from 5x on 2026-11-13).
     $limit = 3.0
-    $complete = @($captured | Where-Object { $_.integrity.status -ne "complete" -or -not $_.integrity.finalized_cleanly }).Count -eq 0
+    $complete = @($captured | Where-Object { $_.inspect_exit -ne 0 -or $_.integrity.event_integrity -ne "Complete" -or -not $_.integrity.finalized_cleanly }).Count -eq 0
     $results += [ordered]@{
         workload = $workload; baseline_median_ns = $baselineNs; captured_median_ns = $captureNs
         ratio = $ratio; target_ratio = $limit; ratio_target_met = ($ratio -le $limit)

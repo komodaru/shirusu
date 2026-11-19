@@ -83,7 +83,11 @@ try {
     $summary = & $cli inspect $trace --json
     if ($LASTEXITCODE -ne 0) { throw "legacy trace inspection failed: $LASTEXITCODE" }
     $integrity = (($summary -join "`n") | ConvertFrom-Json).integrity
-    if ($integrity.status -ne "complete" -or -not $integrity.finalized_cleanly -or $integrity.total_loss_count -ne 0) {
+    # Filtered capture can have partial import coverage. The loop below checks
+    # each requested API independently.
+    if ($integrity.event_integrity -ne "Complete" -or $integrity.semantic_completeness -ne "Complete" -or
+        -not $integrity.has_finalization -or -not $integrity.finalized_cleanly -or
+        $integrity.degraded_events -ne 0 -or $integrity.total_loss_count -ne 0) {
         throw "legacy event integrity incomplete: $summary"
     }
     $json = & $cli export $trace --format jsonl

@@ -46,6 +46,8 @@ fn base() -> ReadTrace {
         vec![("data".into(), Ty::BlobRef, 0)],
     ))
     .unwrap();
+    w.register_schema(make_schema(4, "x!Z/leave", vec![]))
+        .unwrap();
     let blob = w.add_payload(b"referenced").unwrap();
     let args = shirusu_trace::compact::encode_values(
         &[Ty::BlobRef],
@@ -60,7 +62,7 @@ fn base() -> ReadTrace {
         raw_pid: 10,
         thread_id: 1,
         qpc_frequency: 10_000_000,
-        events: vec![ev(1, 1, 1, 1), ev(2, 2, 1, 2), with_ref, ev(2, 4, 2, 2)],
+        events: vec![ev(1, 1, 1, 1), ev(2, 2, 1, 2), with_ref, ev(2, 4, 2, 4)],
     })
     .unwrap();
     let bytes = w.finish(FinalizationInfo::default()).unwrap();

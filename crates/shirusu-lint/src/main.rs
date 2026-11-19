@@ -4,6 +4,7 @@
 //! Rust のファイルは syn で構文として読む (コメントや文字列に書かれた名前は数えない)。
 //!
 //!   cargo run -q -p shirusu-lint      検査 (CI: scripts/ci/linux.sh)
+//!   cargo run -q -p shirusu-lint -- --test-log FILE  Cargo の pretty 形式の結果で回帰テストの実行を確認
 //!   cargo test -p shirusu-lint        各規則が、退行を入れた架空の木と、実際のファイルに
 //!                                     退行を入れた木の両方で発火し、正しい書き方では
 //!                                     発火しないこと (tests.rs: 規則を足して fixture を
@@ -11,6 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+mod review;
 
 use quote::ToTokens;
 use syn::visit::Visit;
@@ -33,10 +36,12 @@ enum Rule {
     CompileFailKept,
     BuildOutput,
     Required,
+    OpaqueHandles,
+    ReviewTests,
 }
 
 impl Rule {
-    const ALL: [Rule; 7] = [
+    const ALL: [Rule; 9] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -44,6 +49,8 @@ impl Rule {
         Rule::CompileFailKept,
         Rule::BuildOutput,
         Rule::Required,
+        Rule::OpaqueHandles,
+        Rule::ReviewTests,
     ];
 
     fn id(self) -> &'static str {
@@ -55,6 +62,8 @@ impl Rule {
             Rule::CompileFailKept => "compile-fail-kept",
             Rule::BuildOutput => "build-output",
             Rule::Required => "required",
+            Rule::OpaqueHandles => "opaque-handles",
+            Rule::ReviewTests => "review-tests",
         }
     }
 
@@ -67,6 +76,8 @@ impl Rule {
             Rule::ShmRawUnsafe => "共有メモリの生コピーは unsafe のまま (レビュー 2026-11-16 P0): Shm::copy_out と snapshot は unsafe fn、Shm / Ring に借用の as_slice を戻さない",
             Rule::CompileFailKept => "型の守りを示す trybuild fixture は減らない (scripts/ci/arch-lint-ui.txt、各 .rs に .stderr、crate の tests が tests/ui を読む); 新しいものは一覧に足す",
             Rule::BuildOutput => "ビルド成果物を git に入れない (target/ 以下、コンパイル・圧縮済みのファイル)",
+            Rule::OpaqueHandles => "Token・Guard・Slot 登録権のフィールドと生成経路を隠す",
+            Rule::ReviewTests => "Trace・API・並行処理の回帰テストを残し、CI で実行する",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -80,6 +91,8 @@ impl Rule {
             Rule::CompileFailKept => compile_fail_kept(tree),
             Rule::BuildOutput => build_output(tree),
             Rule::Required => required(tree),
+            Rule::OpaqueHandles => review::opaque_handles(tree),
+            Rule::ReviewTests => review::registered_tests(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {
@@ -398,7 +411,7 @@ fn build_output(tree: &Tree) -> Hits {
         .collect()
 }
 
-const REQUIRED: [(&str, &str, &str); 5] = [
+const REQUIRED: [(&str, &str, &str); 6] = [
     (
         "scripts/ci/linux.sh",
         "cargo run -q -p shirusu-lint",
@@ -415,6 +428,11 @@ const REQUIRED: [(&str, &str, &str); 5] = [
         "deny した lint が CI で効く",
     ),
     (
+        "scripts/ci/linux.sh",
+        r#"cargo run -q -p shirusu-lint -- --test-log "$test_log""#,
+        "回帰テストの実行結果を検査する",
+    ),
+    (
         "crates/shirusu-hook/tests/generic_contract.rs",
         "engine_generated.inc",
         "生成 Detour 表の契約 (GENERIC_CONTRACT) の golden",
@@ -429,7 +447,21 @@ const REQUIRED: [(&str, &str, &str); 5] = [
 fn required(tree: &Tree) -> Hits {
     REQUIRED
         .iter()
-        .filter(|(p, t, _)| tree.has_or_real(p) && !tree.text(p).contains(t))
+        .filter(|&(p, t, _)| {
+            if !tree.has_or_real(p) {
+                return false;
+            }
+            let source = tree.text(p);
+            if p.ends_with(".sh") {
+                !source.lines().map(str::trim).any(|cmd| {
+                    cmd == *t
+                        || (*t == "cargo test --workspace"
+                            && cmd.starts_with("cargo test --workspace "))
+                })
+            } else {
+                !source.contains(t)
+            }
+        })
         .map(|(p, t, why)| ((*p).to_owned(), 1, format!("`{t}` がない: {why}")))
         .collect()
 }
@@ -443,6 +475,23 @@ fn root() -> PathBuf {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [] => {}
+        [flag, path] if flag == "--test-log" => {
+            return match std::fs::read_to_string(path) {
+                Ok(log) => review::check_log(&log),
+                Err(e) => {
+                    eprintln!("shirusu-lint: {path:?}: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        _ => {
+            eprintln!("usage: shirusu-lint [--test-log FILE]");
+            return ExitCode::FAILURE;
+        }
+    }
     let found = check(&Tree::repo(&root()));
     for f in &found {
         println!(

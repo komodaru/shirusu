@@ -92,6 +92,7 @@ const TARGET_PROCESS_ID: u64 = 1;
 
 pub struct LaunchedCapture {
     session: Option<CaptureSession>,
+    drain: Option<crate::background_drain::BackgroundDrain<CaptureSession, SessionError>>,
     /// 対象プロセス。`finish` が閉じたら None。
     process: Option<win::OwnedHandle>,
     pid: u32,
@@ -172,6 +173,7 @@ impl LaunchedCapture {
         let module_scan = start_module_scan(pid, pre_modules);
         Ok(Self {
             session: Some(session),
+            drain: None,
             process: Some(process),
             pid,
             shutdown_addr,
@@ -197,6 +199,7 @@ impl LaunchedCapture {
                 match finalize_session(trace_path, injected) {
                     Ok((session, shutdown_addr, data_ready)) => Ok(Self {
                         session: Some(session),
+                        drain: None,
                         process: Some(process),
                         pid,
                         shutdown_addr,
@@ -216,6 +219,32 @@ impl LaunchedCapture {
             }
             Err(e) => Err(e),
         }
+    }
+
+    fn start_tree_drain(&mut self, interval: Duration) -> Result<(), SessionError> {
+        let session = self.session.take().expect("ready session");
+        self.drain = Some(crate::background_drain::BackgroundDrain::start(
+            session,
+            interval,
+            |s| s.poll_once().map(|stats| stats.events != 0),
+        )?);
+        Ok(())
+    }
+
+    fn stop_tree_drain(&mut self) -> Result<(), SessionError> {
+        if let Some(drain) = self.drain.take() {
+            let (session, result) = drain.finish()?;
+            self.session = Some(session);
+            result?;
+        }
+        Ok(())
+    }
+
+    fn check_tree_drain(&mut self) -> Result<(), SessionError> {
+        if self.drain.as_ref().is_some_and(|d| d.is_finished()) {
+            self.stop_tree_drain()?;
+        }
+        Ok(())
     }
 
     pub fn pid(&self) -> u32 {
@@ -337,6 +366,7 @@ impl LaunchedCapture {
         // 続ける（対象が終了処理中などで応答しない場合がある）が、
         // 「正常終了として確定」はしない。
         let outcome = self.shutdown_once();
+        self.stop_tree_drain()?;
         // Take the last module snapshot now; the watcher ends after it.
         if let Some(scan) = &self.module_scan {
             scan.request_stop();
@@ -527,7 +557,7 @@ impl TreeCapture {
 
     /// プロセス一覧から新しい子を探し、見つけた子へ Agent を注入する。
     /// 注入に失敗した子は Coverage に残すため記録だけして続ける。
-    fn scan_once(&mut self) -> Result<(), SessionError> {
+    fn scan_once(&mut self, poll_interval: Duration) -> Result<(), SessionError> {
         let entries = win::enumerate_processes()?;
         let snapshot: Vec<ProcessEntry> = entries
             .iter()
@@ -582,7 +612,12 @@ impl TreeCapture {
                 let child_trace = child_trace_path(&self.root_trace, pid);
                 let child_cfg = child_launch_config(&self.launch_cfg, pid, self.root.pid());
                 match LaunchedCapture::attach(pid, &child_trace, child_cfg) {
-                    Ok(child) => self.children.push(child),
+                    Ok(mut child) => match child.start_tree_drain(poll_interval) {
+                        Ok(()) => self.children.push(child),
+                        Err(e) => self
+                            .uninjectable
+                            .push((pid, format!("cannot start ring reader: {e}"))),
+                    },
                     Err(e) => self.uninjectable.push((pid, e.to_string())),
                 }
             }
@@ -606,11 +641,14 @@ impl TreeCapture {
         mut self,
         poll_interval: Duration,
     ) -> Result<TreeSummary, SessionError> {
+        self.root.start_tree_drain(poll_interval)?;
         let mut last_scan: Option<Instant> = None;
         loop {
+            self.root.check_tree_drain()?;
             // 終了した子を回収して Trace を閉じる
             let mut i = 0;
             while i < self.children.len() {
+                self.children[i].check_tree_drain()?;
                 if self.children[i].target_exited()? {
                     let child = self.children.remove(i);
                     let pid = child.pid();
@@ -627,7 +665,7 @@ impl TreeCapture {
             if last_scan.is_none_or(|scan| scan.elapsed() >= poll_interval)
                 || (root_exited && self.children.is_empty())
             {
-                match self.scan_once() {
+                match self.scan_once(poll_interval) {
                     Ok(()) => self.scan_failures = 0,
                     Err(e) => {
                         self.scan_failures += 1;
@@ -638,10 +676,6 @@ impl TreeCapture {
                 }
                 last_scan = Some(Instant::now());
             }
-            let mut active = self.root.session().poll_once()?.events != 0;
-            for child in &mut self.children {
-                active |= child.session().poll_once()?.events != 0;
-            }
             // A failed final discovery sweep is not evidence that no live
             // descendants remain. Retry under the existing bounded failure policy.
             if root_exited && self.children.is_empty() && self.scan_failures == 0 {
@@ -649,17 +683,15 @@ impl TreeCapture {
             }
             // P1-5: 利用者の停止要求。残っている全プロセスの Trace を閉じる。
             if win::stop_requested() {
+                self.root.stop_tree_drain()?;
                 self.root.session().note_stopped_by_request();
                 for child in &mut self.children {
+                    child.stop_tree_drain()?;
                     child.session().note_stopped_by_request();
                 }
                 break;
             }
-            // Visit every captured process once before the next sweep. As in
-            // single-process capture, only idle sweeps need the polling delay.
-            if !active {
-                std::thread::sleep(poll_interval);
-            }
+            std::thread::sleep(poll_interval);
         }
         self.finish()
     }
@@ -667,6 +699,7 @@ impl TreeCapture {
     /// 注入できなかった子をルートの Coverage に残してから、ルートと
     /// 残っている子の Trace を閉じる。
     pub fn finish(mut self) -> Result<TreeSummary, SessionError> {
+        self.root.stop_tree_drain()?;
         for (pid, reason) in &self.uninjectable {
             self.root.session().note_uninjectable_child(*pid, reason);
         }
@@ -1349,6 +1382,7 @@ mod tests {
             ShutdownOutcome::ExportUnavailable,
         ] {
             let mut capture = LaunchedCapture {
+                drain: None,
                 session: None,
                 process: None,
                 pid: 123,

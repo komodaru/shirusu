@@ -344,7 +344,7 @@ fn event_count_bounds() {
 }
 
 #[test]
-fn uncaptured_dummy_and_stale_values_are_not_evidence() {
+fn uncaptured_fields_control_integrity_and_cannot_satisfy_value_rules() {
     use shirusu_trace::{compact::decode_values, schema::ValueCapture};
     for capture in [
         ValueCapture::Unreadable,
@@ -360,6 +360,11 @@ fn uncaptured_dummy_and_stale_values_are_not_evidence() {
         values[0].capture = capture;
         values[0].value = TypedValue::Str16("dummy".encode_utf16().collect());
         event.args = Some(encode_values(&types, &values).unwrap());
+        let integrity = spec(r#"{"rules":[{"type":"no-integrity-loss"}]}"#);
+        assert_eq!(
+            evaluate(&integrity, &trace).all_passed(),
+            capture == ValueCapture::Stale
+        );
         for condition in [r#""equals":"dummy""#, r#""contains":"dum""#] {
             let rule = spec(&format!(
                 r#"{{"rules":[{{"type":"api-called","api":"kernel32!CreateFileW","field":"lpFileName",{condition}}}]}}"#

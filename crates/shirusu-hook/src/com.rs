@@ -886,14 +886,14 @@ impl ComTracker {
                     self.groups.entry(canonical_key).or_default().push(ptr);
                 }
             }
-            if !self.objects.get(&out).is_some_and(|o| !o.destroyed) {
+            if self.objects.get(&out).is_none_or(|o| o.destroyed) {
                 let mut object =
                     ComObject::fresh(out, iid, ComDiscovery::QueryInterface { from: this });
                 object.identity_confirmed = true;
                 object.identity_group = canonical_group;
                 self.insert(object);
             }
-        } else if !self.objects.get(&out).is_some_and(|o| !o.destroyed) {
+        } else if self.objects.get(&out).is_none_or(|o| o.destroyed) {
             let mut object =
                 ComObject::fresh(out, iid, ComDiscovery::QueryInterface { from: this });
             if let Some((identity, confirmed, group)) = source_identity {

@@ -170,6 +170,7 @@ Loader Lockを持っているかは常に判定できるとは限らない。既
 
 Hostが共有メモリとRing Slotをあらかじめ用意し、Agentは初めて記録するスレッドのために空き SlotをCASで取得する（`FREE`→`CLAIMED`→`ACTIVE`）。共有のアトミック操作が要るのはこの取得時だけである。
 
+- Mapping の Slot 登録権は Control のオフセット 208 に置く。登録時に 64 bit の値を CAS で 0 から 1 に変え、同じ Mapping の別ビューからの二重登録も拒否する。登録済みの値は Ring の世代交代をまたいで保持する。
 - 初期Poolは32 Slotとし、総メモリ上限を設定できるようにする。Slotごとに約1.25MiBなので、32 Slotで約40MiB、256 Slotで約320MiBになる。ページファイルを元にしたFile Mappingは既定でMapping全体のCommitを消費するので、システム全体のCommit使用量にも注意する。
 - 空きが低水位（例：残り8）を下回ったらAgentは待たずにHostへ知らせ、Hostが非同期に新しいMappingを作る。MappingのHandleと情報をAgentへ渡し、Agentの管理スレッドが登録を完了して初めて使える。この登録はHookの中では行わない。Mappingの追加中にHostが止まっても、Agentは既存のRingで続ける。
 - それでもSlotが無いスレッドの呼び出しは記録せず、Capture Coverageの欠落としてプロセス共通のカウンタ（`fetch_add`のみ）を更新して元のAPIへ戻る。
@@ -193,7 +194,7 @@ v0.3の予備Queueは、確定しないセルをHostが10msで放棄して再利
 - RingにはGeneration番号を持たせ、同じThread IDを再利用した新しいスレッドと古いRingを混同しない。
 - Agentは`DLL_THREAD_DETACH`でRingの状態だけを変える（Loader Lock中なので待たない）。`TerminateThread`などで通知なしに終わったスレッドは、Agentがスレッドの複製Handle（`SYNCHRONIZE`）の終了で検出する（v0.5、下記「強制終了した書き手」）。Hostが公開済みデータを回収し終えるまで、SlotのGenerationを変えて再利用しない。
 - 対象プロセスがクラッシュしても、Hostが共有メモリのHandleを持っていれば公開済みのイベントを回収できる。
-- 再利用時、AgentはControlをゼロクリアしてから新しいGenerationとMagicを公開する。Hostの回収側は、Magicが0の間やGenerationが変わった後のControlを矛盾として扱わず、何も回収せずに次の回収で世代交代として旧Workerを外す（2026-11-14 レビュー P2-4）。旧Workerの確定（終了不明の確定、完全性報告、Loss の記録）は、その Worker 宛ての回収分を検証し終えた時点で行い、変換キュー全体の完了は待たない。
+- 再利用時、AgentはSlot登録権を除くControlをゼロクリアしてから新しいGenerationとMagicを公開する。Hostの回収側は、Magicが0の間やGenerationが変わった後のControlを矛盾として扱わず、何も回収せずに次の回収で世代交代として旧Workerを外す（2026-11-14 レビュー P2-4）。旧Workerの確定（終了不明の確定、完全性報告、Loss の記録）は、その Worker 宛ての回収分を検証し終えた時点で行い、変換キュー全体の完了は待たない。
 
 Ringを再利用できるのは、スレッドの終了をThread HandleのSignal（または終了通知）で確認し、Hostが公開済みデータを回収し終えた後だけである。`DLL_THREAD_DETACH`はDRAININGへの移行の合図にすぎない。DETACHの後も、他のDLLの終了処理がそのスレッドでHook対象のAPIを呼ぶことがあるためである。DETACH後の呼び出しは記録せず欠落として数える。
 

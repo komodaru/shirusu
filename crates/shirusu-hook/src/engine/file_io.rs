@@ -780,16 +780,17 @@ pub(super) unsafe extern "system-unwind" fn detour_get_queued_completion_status(
         // SAFETY: the original call wrote a valid OVERLAPPED pointer slot that the caller passed (non-null here).
         (unsafe { *overlapped }) as u64
     };
-    let transferred =
-        capture::read_overlapped_transferred(&ProcessMemory, bytes_transferred as u64, dequeued);
-    let values = capture::get_queued_completion_status_leave(ret, transferred, last_error);
+    let packet = capture::QueuedCompletion::observe(ret, dequeued, || {
+        capture::MemoryReader::read_u32(&ProcessMemory, bytes_transferred as u64)
+    });
+    let values = packet.leave_values(last_error);
     if let Ok(bytes) = capture::encode_leave(api, &values) {
         rt.emit_leave(tid, api, call_id, &bytes);
     }
     if dequeued != 0 {
         let signature = capture::read_overlapped_signature(&ProcessMemory, dequeued);
         if let Some(pending) = rt.take_matching_overlapped(dequeued, None, signature) {
-            if let Some(n) = transferred {
+            if let Some(n) = packet.transferred() {
                 record_overlapped_completion(&rt, tid, pending, n, ret != 0, last_error);
             }
         }

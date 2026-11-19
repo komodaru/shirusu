@@ -280,6 +280,8 @@ pub mod loss_kind {
     pub const COUNTERS: u32 = 2;
     pub const UNKNOWN_TERMINATION: u32 = 3;
     pub const INTEGRITY_LOST: u32 = 4;
+    /// Missing events whose exact count could not be recovered. count is a lower bound.
+    pub const UNKNOWN_LOSS_COUNT: u32 = 5;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

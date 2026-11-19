@@ -31,6 +31,8 @@ use crate::layout::{RingConfig, CONTROL_SIZE, LAYOUT_VERSION, MAGIC};
 
 /// Control の 64 bit 語の数。
 pub const CONTROL_WORDS: usize = CONTROL_SIZE / 8;
+// Shared by every view of a Mapping. It survives Ring generation changes.
+const SLOT_REGISTRATION_WORD: usize = 208 / 8;
 const _: () = assert!(CONTROL_WORDS * 8 == CONTROL_SIZE);
 
 /// 共有領域の実体。
@@ -127,6 +129,36 @@ impl std::fmt::Debug for Shm {
     }
 }
 
+/// A reservation rolls back on drop until the mapping is bound to a slot.
+/// ```compile_fail
+/// fn twice(reservation: shirusu_transport::shm::SlotRegistration) {
+///     reservation.bind();
+///     reservation.bind();
+/// }
+/// ```
+/// ```compile_fail,E0277
+/// fn require<T: Clone>() {}
+/// require::<shirusu_transport::shm::SlotRegistration>();
+/// ```
+pub struct SlotRegistration {
+    region: Option<Shm>,
+}
+
+impl SlotRegistration {
+    /// A registered slot reuses the same mapping across writer generations.
+    pub fn bind(mut self) -> Shm {
+        self.region.take().expect("registration consumed once")
+    }
+}
+
+impl Drop for SlotRegistration {
+    fn drop(&mut self) {
+        if let Some(region) = &self.region {
+            region.control().words[SLOT_REGISTRATION_WORD].store(0, Ordering::Release);
+        }
+    }
+}
+
 impl Shm {
     /// 実体を検証して包む。
     pub fn new(backing: Arc<dyn Backing>) -> Result<Self, ShmError> {
@@ -188,6 +220,16 @@ impl Shm {
     /// (確定前の範囲への書き込み、確定済みの範囲の読み出し) だけが使う。
     pub fn as_ptr(&self) -> *mut u8 {
         self.base.as_ptr()
+    }
+
+    /// Reserve this mapping for exactly one slot, including across mapped views.
+    pub fn reserve_slot(&self) -> Option<SlotRegistration> {
+        self.control().words[SLOT_REGISTRATION_WORD]
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .ok()?;
+        Some(SlotRegistration {
+            region: Some(self.clone()),
+        })
     }
 
     /// 同じ実体かどうか。
@@ -319,8 +361,10 @@ fn init_control(ctl: Control<'_>, cfg: RingConfig, generation: u64, owner_thread
 }
 
 fn init_fields(ctl: Control<'_>, cfg: RingConfig, generation: u64, owner_thread_id: u64) {
-    for w in ctl.words {
-        w.store(0, Ordering::Relaxed);
+    for (index, w) in ctl.words.iter().enumerate() {
+        if index != SLOT_REGISTRATION_WORD {
+            w.store(0, Ordering::Relaxed);
+        }
     }
     let set = |w: Word, v: u64| ctl.at(w).store(v, Ordering::Relaxed);
     set(Word::LayoutVersion, LAYOUT_VERSION);
@@ -424,6 +468,7 @@ const _: () = {
     let mut i = 0;
     while i < Word::ALL.len() {
         let off = Word::ALL[i].offset();
+        assert!(off / 8 != SLOT_REGISTRATION_WORD);
         assert!(off.is_multiple_of(8) && off + 8 <= CONTROL_SIZE);
         let mut j = i + 1;
         while j < Word::ALL.len() {

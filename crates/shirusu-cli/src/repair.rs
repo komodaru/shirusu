@@ -39,6 +39,7 @@ pub(crate) struct RepairReport {
     pub(crate) scanned: u64,
     pub(crate) recovered: u64,
     pub(crate) lost: u64,
+    unknown_loss: bool,
     pub(crate) batches_written: usize,
     pub(crate) batches_skipped: usize,
     pub(crate) blobs_carried: usize,
@@ -50,6 +51,16 @@ pub(crate) struct RepairReport {
     /// P1-3: 入力を Reader の上限で読み止めた (以降のイベントは数え
     /// られず、出力に含まれない)。
     pub(crate) stopped_at_limit: Option<&'static str>,
+}
+
+impl RepairReport {
+    fn loss_description(&self) -> String {
+        if self.unknown_loss {
+            format!("unknown (at least {})", self.lost)
+        } else {
+            self.lost.to_string()
+        }
+    }
 }
 
 pub(crate) fn add_lost(report: &mut RepairReport, cause: &str, n: u64) {
@@ -156,7 +167,7 @@ pub(crate) fn repair_trace(
         }
     }
     let mut carried: HashSet<BlobId> = HashSet::new();
-    let mut last_sequence_by_thread: HashMap<u64, u64> = HashMap::new();
+    let mut last_sequence_by_thread: HashMap<(u64, u64), u64> = HashMap::new();
     for batch in &trace.batches {
         if batch.events.is_empty() {
             report.batches_skipped += 1;
@@ -184,7 +195,9 @@ pub(crate) fn repair_trace(
         }
         // シーケンス退行の事前検査。Writer の validate_batch と同じ
         // 規則（スレッドごとに単調。書けた Batch だけが水位を進める）。
-        let mut prev = last_sequence_by_thread.get(&batch.thread_id).copied();
+        let mut prev = last_sequence_by_thread
+            .get(&(batch.process_id, batch.thread_id))
+            .copied();
         let mut regressed = false;
         for e in &kept {
             if let Some(p) = prev {
@@ -222,7 +235,8 @@ pub(crate) fn repair_trace(
                 report.batches_written += 1;
                 report.recovered += filtered.events.len() as u64;
                 if let Some(last) = filtered.events.last() {
-                    last_sequence_by_thread.insert(batch.thread_id, last.sequence);
+                    last_sequence_by_thread
+                        .insert((batch.process_id, batch.thread_id), last.sequence);
                 }
             }
             Err(err) => {
@@ -242,6 +256,65 @@ pub(crate) fn repair_trace(
         .write_loss_records(&trace.loss_records)
         .map_err(|e| ToolError::Runtime(format!("cannot write loss records: {e}")))?;
     report.loss_records = trace.loss_records.len();
+    if let Some(f) = &trace.finalization {
+        let missing = f.total_events.saturating_sub(report.scanned);
+        report.unknown_loss = f.total_loss_records > trace.loss_records.len() as u64
+            || (f.total_events < report.scanned
+                && trace.issues.iter().any(|issue| {
+                    matches!(
+                        issue,
+                        RecoveryIssue::CorruptBlock { .. } | RecoveryIssue::Resync { .. }
+                    )
+                }));
+        if missing == 0 && !trace.issues.is_empty() {
+            // An index entry or a CRC-verified but undecodable event block is
+            // independent evidence of skipped events, even if the total agrees.
+            let corrupt: HashSet<_> = trace
+                .issues
+                .iter()
+                .filter_map(|issue| match issue {
+                    RecoveryIssue::CorruptBlock { offset, .. } => Some(*offset),
+                    _ => None,
+                })
+                .collect();
+            let event = shirusu_trace::container::BlockType::EventChunk;
+            report.unknown_loss |= trace
+                .blocks
+                .iter()
+                .any(|b| b.block_type == event && corrupt.contains(&b.offset))
+                || trace.stored_index.as_ref().is_some_and(|index| {
+                    index.entries.iter().any(|entry| {
+                        entry.block_type == u32::from(event.code())
+                            && corrupt.contains(&entry.offset)
+                    })
+                });
+        }
+        if missing > 0 {
+            add_lost(&mut report, "unrecovered_events", missing);
+        }
+    } else {
+        // Even a clean block boundary can be an interrupted recording.
+        report.unknown_loss = true;
+    }
+    if report.lost > 0 || report.unknown_loss {
+        let record = shirusu_trace::proto::LossRecord {
+            kind: if report.unknown_loss {
+                shirusu_trace::proto::loss_kind::UNKNOWN_LOSS_COUNT
+            } else {
+                shirusu_trace::proto::loss_kind::INTEGRITY_LOST
+            },
+            count: report.lost,
+            reason: format!(
+                "repair: {} events lost, {} recovery issues",
+                report.loss_description(),
+                report.issues.len()
+            ),
+            ..Default::default()
+        };
+        writer
+            .write_loss_records(&[record])
+            .map_err(|e| ToolError::Runtime(format!("cannot record repair loss: {e}")))?;
+    }
     // P2-15: profile モードの Trace は ProfileSummary だけで中身が成り立つ。
     // 引き継がないと修復後は空になり、それでも "lost 0" と表示していた。
     if let Some(summary) = &trace.profile_summary {
@@ -249,7 +322,7 @@ pub(crate) fn repair_trace(
             .write_profile_summary(summary)
             .map_err(|e| ToolError::Runtime(format!("cannot write profile summary: {e}")))?;
     }
-    let (capture_coverage, mut event_integrity, semantic_completeness, mut notes) =
+    let (capture_coverage, mut event_integrity, mut semantic_completeness, mut notes) =
         match &trace.finalization {
             Some(f) => (
                 f.capture_coverage,
@@ -259,7 +332,16 @@ pub(crate) fn repair_trace(
             ),
             None => (3, 3, 3, Vec::new()),
         };
-    if report.lost > 0 && event_integrity == 0 {
+    let evidence = shirusu_analysis::IntegritySummary::of(trace);
+    if evidence.degraded_events > 0 && semantic_completeness == 0 {
+        semantic_completeness = 1;
+    }
+    if (report.lost > 0
+        || report.unknown_loss
+        || !trace.loss_records.is_empty()
+        || evidence.dropped_payload_events > 0)
+        && event_integrity == 0
+    {
         event_integrity = 1;
     }
     if let Some(what) = report.stopped_at_limit {
@@ -276,7 +358,7 @@ pub(crate) fn repair_trace(
         "repaired from {}: {} events recovered, {} lost; {} recovery issues",
         input,
         report.recovered,
-        report.lost,
+        report.loss_description(),
         report.issues.len()
     ));
     let bytes = writer
@@ -295,7 +377,9 @@ pub(crate) fn repair_lines(report: &RepairReport) -> Vec<String> {
     out.push(format!("repaired: {} -> {}", report.input, report.output));
     out.push(format!(
         "events: {} recovered, {} lost (scanned {})",
-        report.recovered, report.lost, report.scanned
+        report.recovered,
+        report.loss_description(),
+        report.scanned
     ));
     if let Some(what) = report.stopped_at_limit {
         out.push(format!(
@@ -334,7 +418,14 @@ pub(crate) fn repair_json(report: &RepairReport) -> JsonValue {
             "events",
             JsonValue::obj(vec![
                 ("recovered", JsonValue::U64(report.recovered)),
-                ("lost", JsonValue::U64(report.lost)),
+                (
+                    "lost",
+                    if report.unknown_loss {
+                        JsonValue::Null
+                    } else {
+                        JsonValue::U64(report.lost)
+                    },
+                ),
                 ("scanned", JsonValue::U64(report.scanned)),
             ]),
         ),
@@ -692,6 +783,46 @@ mod pbt {
             .collect()
     }
 
+    #[test]
+    fn middle_chunk_loss_survives_repair_and_index_damage_alone_preserves_events() {
+        let bytes = write(
+            &vec![
+                Op::Batch {
+                    thread: 1,
+                    refs: vec![0, 0]
+                };
+                3
+            ],
+            true,
+            0,
+        );
+        let input = read_trace(&bytes).unwrap();
+        use shirusu_trace::container::BlockType;
+        for (kind, nth, missing) in [(BlockType::EventChunk, 1, 2), (BlockType::Index, 0, 0)] {
+            let mut damaged = bytes.clone();
+            let at = input
+                .blocks
+                .iter()
+                .filter(|b| b.block_type == kind)
+                .nth(nth)
+                .unwrap()
+                .offset as usize;
+            damaged[at + HEADER_LEN] ^= 1;
+            let (fixed, report) = repair_trace("input", &read_trace(&damaged).unwrap()).unwrap();
+            let fixed = read_trace(&fixed).unwrap();
+            assert_eq!(report.lost, missing);
+            assert_eq!(fixed.total_events(), 6 - missing);
+            assert_eq!(
+                fixed.loss_records.iter().map(|r| r.count).sum::<u64>(),
+                missing
+            );
+            assert_eq!(
+                fixed.finalization.unwrap().event_integrity == 0,
+                missing == 0
+            );
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(
             std::env::var("SHIRUSU_PBT_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(256)
@@ -707,7 +838,7 @@ mod pbt {
             let data = apply(write(&ops, finish, integrity), &d);
             let Ok(input) = read_trace(&data) else { return Ok(()) };
             let (bytes, report) = repair_trace("in", &input).unwrap();
-            prop_assert_eq!(report.recovered + report.lost, report.scanned);
+            prop_assert_eq!(report.recovered + report.lost, report.scanned.max(input.finalization.as_ref().map_or(0, |f| f.total_events)));
             prop_assert_eq!(
                 report.lost_by_cause.iter().map(|(_, n)| n).sum::<u64>(),
                 report.lost
@@ -716,7 +847,8 @@ mod pbt {
             prop_assert!(out.issues.is_empty(), "{:?}", out.issues);
             prop_assert!(out.finalized_cleanly);
             prop_assert_eq!(out.total_events(), report.recovered);
-            prop_assert_eq!(&out.loss_records, &input.loss_records);
+            prop_assert!(out.loss_records.starts_with(&input.loss_records));
+            prop_assert_eq!(out.loss_records.len(), input.loss_records.len() + usize::from(report.lost > 0 || report.unknown_loss));
             // 出力イベントは入力イベントの部分列（順序を保つ）。
             let src = events(&input);
             let mut it = src.iter();

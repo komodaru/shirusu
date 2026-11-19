@@ -145,6 +145,9 @@ impl<W: DurableWrite> DurableWrite for std::io::BufWriter<W> {
 
 /// 書き出し先の空きが尽きた (`StorageFull`) ことによる失敗か (P2-10)。
 pub fn is_storage_full(error: &TraceError) -> bool {
+    if let TraceError::PartialBatch { cause, .. } = error {
+        return is_storage_full(cause);
+    }
     matches!(error, TraceError::Io(e) if e.kind() == std::io::ErrorKind::StorageFull)
 }
 
@@ -209,6 +212,7 @@ pub struct TraceWriter<W: DurableWrite> {
     /// many that checkpoint held (P3-11: amortized full copies).
     schemas_since_full_checkpoint: usize,
     last_full_checkpoint_len: usize,
+    checkpoint_pending: bool,
     /// 既知の Blob ID から内容長への写像。重複排除、イベントの参照検査、
     /// 更新の範囲検証（F18。派生版も含む。長さは更新で変わらない）を
     /// 1 つの表で賄う（2026-11-14 レビュー P3-10: ID の集合と長さの表を
@@ -267,6 +271,7 @@ impl<W: DurableWrite> TraceWriter<W> {
             unwritten_schemas: Vec::new(),
             schemas_since_full_checkpoint: 0,
             last_full_checkpoint_len: 0,
+            checkpoint_pending: false,
             blobs: HashMap::new(),
             pending_blobs: Vec::new(),
             pending_blob_raw: 0,
@@ -373,10 +378,13 @@ impl<W: DurableWrite> TraceWriter<W> {
             }
         }
         let payload = set.encode();
-        self.write_block(BlockType::SchemaCheckpoint, &payload, false)?;
-        self.last_full_checkpoint_len = set.schemas.len();
-        self.schemas_since_full_checkpoint = 0;
-        Ok(())
+        let result = self.write_block(BlockType::SchemaCheckpoint, &payload, false);
+        if block_written(&result) {
+            self.last_full_checkpoint_len = set.schemas.len();
+            self.schemas_since_full_checkpoint = 0;
+            self.checkpoint_pending = false;
+        }
+        result
     }
 
     /// Payload 本体を受け取り Blob ID を返す。既出の内容なら格納せず
@@ -456,16 +464,22 @@ impl<W: DurableWrite> TraceWriter<W> {
             data: data.to_vec(),
         };
         let payload = update.encode();
-        self.write_block(BlockType::BlobUpdate, &payload, true)?;
+        let result = self.write_block(BlockType::BlobUpdate, &payload, true);
         // 新版は「更新で生まれた Blob」として既知にする。長さは更新で
         // 変わらないため、基底長を引き継ぐ。
-        self.blobs.insert(new_version_id, base_len as u32);
-        Ok(())
+        if block_written(&result) {
+            self.blobs.insert(new_version_id, base_len as u32);
+        }
+        result
     }
 
     /// Event Batch を書く。先に未書出しの Schema と Blob を流し、
     /// 前方参照が起きない順序を保証する。大きな Batch は目安サイズで
     /// 複数の Event Chunk に分割する（各 Chunk が Batch 文脈を持つ）。
+    ///
+    /// On error, `written_events()` is the length of the accepted prefix.
+    /// Only the remaining events can be retried. A sync error means that
+    /// durability of the last accepted block could not be confirmed.
     pub fn write_batch(&mut self, batch: &EventBatch) -> Result<()> {
         self.write_batch_inner(batch, true)
     }
@@ -486,14 +500,26 @@ impl<W: DurableWrite> TraceWriter<W> {
             let (end, capacity) = self.chunk_end(batch, start);
             let payload =
                 compact::encode_event_chunk_slice(batch, &batch.events[start..end], capacity);
-            self.write_block(BlockType::EventChunk, &payload, compress_events)?;
-            start = end;
+            let result = self.write_block(BlockType::EventChunk, &payload, compress_events);
+            if block_written(&result) {
+                self.total_events += (end - start) as u64;
+                self.last_sequence_by_thread.insert(
+                    (batch.process_id, batch.thread_id),
+                    batch.events[end - 1].sequence,
+                );
+                start = end;
+            }
+            if let Err(cause) = result {
+                return Err(if start == 0 {
+                    cause
+                } else {
+                    TraceError::PartialBatch {
+                        written: start,
+                        cause: Box::new(cause),
+                    }
+                });
+            }
         }
-        if let Some(last) = batch.events.last() {
-            self.last_sequence_by_thread
-                .insert((batch.process_id, batch.thread_id), last.sequence);
-        }
-        self.total_events += batch.events.len() as u64;
         Ok(())
     }
 
@@ -503,9 +529,11 @@ impl<W: DurableWrite> TraceWriter<W> {
             return Ok(());
         }
         let payload = crate::proto::encode_loss_block(records);
-        self.write_block(BlockType::Loss, &payload, false)?;
-        self.total_loss_records += records.len() as u64;
-        Ok(())
+        let result = self.write_block(BlockType::Loss, &payload, false);
+        if block_written(&result) {
+            self.total_loss_records += records.len() as u64;
+        }
+        result
     }
 
     /// 記録モード `profile` の集計を ProfileSummary Block として書く
@@ -572,7 +600,7 @@ impl<W: DurableWrite> TraceWriter<W> {
         // `SyncPerBlock` でもここで 1 回 sync する（最終 flush が運んだ分
         // が Block 書き込み後の sync の後になるため）。
         if self.durability != Durability::Buffered {
-            self.inner.sync_all()?;
+            self.inner.sync_all().map_err(TraceError::Sync)?;
         }
         Ok(self.inner)
     }
@@ -681,6 +709,9 @@ impl<W: DurableWrite> TraceWriter<W> {
     }
 
     fn flush_schemas(&mut self) -> Result<()> {
+        if self.checkpoint_pending {
+            self.write_schema_checkpoint()?;
+        }
         if self.unwritten_schemas.is_empty() {
             return Ok(());
         }
@@ -690,7 +721,11 @@ impl<W: DurableWrite> TraceWriter<W> {
         let payload = set.encode();
         if let Err(e) = self.write_block(BlockType::Schema, &payload, false) {
             // Still unwritten (P2-10): a later flush must write them.
-            self.unwritten_schemas = set.schemas;
+            if matches!(e, TraceError::Sync(_)) {
+                self.checkpoint_pending = true;
+            } else {
+                self.unwritten_schemas = set.schemas;
+            }
             return Err(e);
         }
         // F22: Schema Block の直後に、その定義の複製を Schema Checkpoint
@@ -704,11 +739,16 @@ impl<W: DurableWrite> TraceWriter<W> {
         // 登録のたびに全定義を書くと定義数の二乗になる（2026-11-14
         // レビュー P3-11）。全体複製の大きさは毎回 2 倍以上になるため、
         // 複製の総量は定義数の 3 倍以内に収まる（全体複製で 2 倍、差分で 1 倍）。
+        self.checkpoint_pending = true;
         self.schemas_since_full_checkpoint += set.schemas.len();
         if self.schemas_since_full_checkpoint >= self.last_full_checkpoint_len {
             self.write_schema_checkpoint()?;
         } else {
-            self.write_block(BlockType::SchemaCheckpoint, &payload, false)?;
+            let result = self.write_block(BlockType::SchemaCheckpoint, &payload, false);
+            if block_written(&result) {
+                self.checkpoint_pending = false;
+            }
+            result?;
         }
         Ok(())
     }
@@ -725,6 +765,9 @@ impl<W: DurableWrite> TraceWriter<W> {
             if !cur.is_empty() && cur.len() + entry_len > self.chunk_raw_target {
                 let payload = std::mem::take(&mut cur);
                 result = self.write_block(BlockType::BlobChunk, &payload, true);
+                if matches!(result, Err(TraceError::Sync(_))) {
+                    first_unwritten = i;
+                }
                 if result.is_err() {
                     break;
                 }
@@ -736,7 +779,7 @@ impl<W: DurableWrite> TraceWriter<W> {
         }
         if result.is_ok() && !cur.is_empty() {
             result = self.write_block(BlockType::BlobChunk, &cur, true);
-            if result.is_ok() {
+            if block_written(&result) {
                 first_unwritten = pending.len();
             }
         } else if result.is_ok() {
@@ -893,10 +936,15 @@ impl<W: DurableWrite> TraceWriter<W> {
         self.offset += (HEADER_LEN + stored.len()) as u64;
         self.next_sequence += 1;
         if self.durability == Durability::SyncPerBlock {
-            self.inner.sync_all()?;
+            self.inner.sync_all().map_err(TraceError::Sync)?;
         }
         Ok(())
     }
+}
+
+/// A sync failure occurs after the complete block was accepted by the sink.
+fn block_written(result: &Result<()>) -> bool {
+    matches!(result, Ok(()) | Err(TraceError::Sync(_)))
 }
 
 /// `write_all` that counts the bytes `w` accepted, also on failure.

@@ -57,9 +57,19 @@ fn fixture(r: Rule) -> Fixture {
             good: &[("corpus/x.json", "x"), ("crates/shirusu-hook/src/target.rs", "x")],
             mutate: ("crates/shirusu-agent-dll/target/release/shirusu_agent.dll", |_| Some("x".into())),
         },
+        Rule::OpaqueHandles => Fixture {
+            bad: &[(review::EMITTER, "pub struct CallToken { pub call_id: u64 }")],
+            good: &[(review::EMITTER, "pub struct CallToken { call_id: u64 }")],
+            mutate: (review::EMITTER, |s| Some(s.replace("struct CallToken {", "struct CallToken { pub injected: u64,"))),
+        },
+        Rule::ReviewTests => Fixture {
+            bad: &[(review::DURABILITY, "/* #[test] fn partial_batches_report_the_exact_retry_suffix() {} */")],
+            good: &[(review::DURABILITY, "#[test] fn partial_batches_report_the_exact_retry_suffix() { verify(); }")],
+            mutate: (review::DURABILITY, |s| Some(s.replace("fn partial_batches_report_the_exact_retry_suffix", "#[ignore] fn partial_batches_report_the_exact_retry_suffix"))),
+        },
         Rule::Required => Fixture {
             bad: &[("scripts/ci/linux.sh", "cargo build\n")],
-            good: &[("scripts/ci/linux.sh", "cargo run -q -p shirusu-lint\ncargo clippy --workspace --all-targets -- -D warnings\ncargo test --workspace\n")],
+            good: &[("scripts/ci/linux.sh", "cargo run -q -p shirusu-lint\ncargo clippy --workspace --all-targets -- -D warnings\ncargo test --workspace\ncargo run -q -p shirusu-lint -- --test-log \"$test_log\"\n")],
             mutate: ("scripts/ci/linux.sh", |t| Some(t.replace("cargo run -q -p shirusu-lint", ""))),
         },
     }
@@ -134,5 +144,23 @@ fn every_allow_spelling_is_found() {
             "{}: no-local-allow が見つけない",
             one[0].0
         );
+    }
+}
+
+#[test]
+fn commenting_out_either_ci_lint_invocation_is_detected() {
+    let real = Tree::repo(&root());
+    let path = "scripts/ci/linux.sh";
+    let script = real.text(path);
+    for command in script
+        .lines()
+        .filter(|s| s.starts_with("cargo run -q -p shirusu-lint"))
+    {
+        let mut tree = Tree::repo(&root());
+        tree.overlay.insert(
+            path.into(),
+            Some(script.replace(&format!("\n{command}\n"), &format!("\n# {command}\n"))),
+        );
+        assert!(!Rule::Required.check(&tree).is_empty(), "{command}");
     }
 }

@@ -254,7 +254,7 @@ fn absorb_storage_full(
     match result {
         Err(e) if shirusu_trace::writer::is_storage_full(&e) => {
             totals.storage_full = true;
-            totals.storage_full_dropped_events += events;
+            totals.storage_full_dropped_events += events.saturating_sub(e.written_events() as u64);
             totals.storage_full_dropped_losses += losses;
             Ok(())
         }

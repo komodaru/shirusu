@@ -279,8 +279,14 @@ impl SlotPool {
     /// claim した直後の Slot を、Ring を作れなかった (領域の確保に失敗した)
     /// ために返す。ACTIVE→FREE。何も公開していないので Generation は進めない。
     /// 返した呼び出しは欠落として数える。
+    #[allow(
+        clippy::readonly_write_lock,
+        reason = "owner validation and cancellation must exclude concurrent reuse"
+    )]
     pub fn cancel_claim(&self, handle: SlotHandle) -> bool {
-        let slots = self.slots.read().unwrap();
+        // Serialize validation with reuse: a copied handle could otherwise see the
+        // previous owner, pause, and CAS a newly active slot into RECLAIMING.
+        let slots = self.slots.write().unwrap();
         let s = &slots[handle.index];
         if s.generation() != handle.generation
             || s.owner_thread_id.load(Ordering::Relaxed) != handle.thread_id
@@ -288,13 +294,17 @@ impl SlotPool {
             return false;
         }
         if s.state
-            .compare_exchange(SLOT_ACTIVE, SLOT_FREE, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(
+                SLOT_ACTIVE,
+                SLOT_RECLAIMING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_err()
         {
             return false;
         }
-        s.owner_thread_id.store(0, Ordering::Relaxed);
-        self.free_epoch.fetch_add(1, Ordering::Release);
+        self.publish_free(s);
         self.process_missing_calls.fetch_add(1, Ordering::Relaxed);
         true
     }
@@ -377,11 +387,16 @@ impl SlotPool {
             return false;
         }
         s.generation.fetch_add(1, Ordering::AcqRel);
-        s.owner_thread_id.store(0, Ordering::Release);
-        s.state.store(SLOT_FREE, Ordering::Release);
-        self.free_epoch.fetch_add(1, Ordering::Release);
+        self.publish_free(s);
         true
     }
+
+    fn publish_free(&self, slot: &Slot) {
+        slot.owner_thread_id.store(0, Ordering::Relaxed);
+        slot.state.store(SLOT_FREE, Ordering::Release);
+        self.free_epoch.fetch_add(1, Ordering::Release);
+    }
+
     /// Slot が FREE になった回数 (P1-1)。Slot 不足のスレッドが、空きが
     /// 出る見込みのない間に取得を繰り返さないための目印。
     pub fn free_epoch(&self) -> u64 {

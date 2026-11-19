@@ -77,7 +77,7 @@ pub fn stream_trace<R: Read + Seek>(
                 for e in &batch.events {
                     total_events += 1;
                     // 欠落 Blob は読み終えてから決まる (前方参照がある)。
-                    counts.note(e, |_| true);
+                    counts.note(stream.registry(), e, |_| true);
                     if let PayloadRef::Blob(id) = &e.payload {
                         *blob_refs.entry(*id).or_default() += 1;
                     }

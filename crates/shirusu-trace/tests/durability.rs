@@ -63,6 +63,8 @@ fn batch() -> EventBatch {
 struct CountingWriter {
     inner: Vec<u8>,
     syncs: Rc<Cell<usize>>,
+    fail_write: Rc<Cell<usize>>,
+    fail_sync: Rc<Cell<usize>>,
 }
 
 impl CountingWriter {
@@ -71,6 +73,8 @@ impl CountingWriter {
         (
             Self {
                 inner: Vec::new(),
+                fail_write: Rc::default(),
+                fail_sync: Rc::default(),
                 syncs: Rc::clone(&syncs),
             },
             syncs,
@@ -80,6 +84,7 @@ impl CountingWriter {
 
 impl Write for CountingWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        fail_on_countdown(&self.fail_write)?;
         self.inner.write(buf)
     }
 
@@ -90,6 +95,7 @@ impl Write for CountingWriter {
 
 impl DurableWrite for CountingWriter {
     fn sync_all(&mut self) -> io::Result<()> {
+        fail_on_countdown(&self.fail_sync)?;
         self.syncs.set(self.syncs.get() + 1);
         Ok(())
     }
@@ -181,4 +187,61 @@ fn file_sync_on_finish_roundtrip() {
     );
     assert!(trace.issues.is_empty());
     std::fs::remove_file(&path).unwrap();
+}
+
+fn fail_on_countdown(count: &Cell<usize>) -> io::Result<()> {
+    let n = count.get();
+    count.set(n.saturating_sub(1));
+    if n == 1 {
+        Err(io::Error::other("injected failure"))
+    } else {
+        Ok(())
+    }
+}
+
+#[test]
+fn partial_batches_report_the_exact_retry_suffix() {
+    for sync in [false, true] {
+        for position in 1..=3 {
+            for retry in [false, true] {
+                let (sink, _) = CountingWriter::new();
+                let fault = if sync {
+                    sink.fail_sync.clone()
+                } else {
+                    sink.fail_write.clone()
+                };
+                let options = WriterOptions {
+                    durability: Durability::SyncPerBlock,
+                    chunk_raw_target: 1,
+                    ..Default::default()
+                };
+                let mut writer = TraceWriter::with_options(sink, env(42), options).unwrap();
+                let mut b = batch();
+                b.events = (1..=3)
+                    .map(|sequence| TraceEvent {
+                        sequence,
+                        ..b.events[0].clone()
+                    })
+                    .collect();
+                fault.set(position);
+                let err = writer.write_batch(&b).unwrap_err();
+                let written = position - usize::from(!sync);
+                assert_eq!(err.written_events(), written);
+                if retry && written < 3 {
+                    b.events.drain(..written);
+                    writer.write_batch(&b).unwrap();
+                }
+                let sink = writer.finish(Default::default()).unwrap();
+                let trace = read_trace(&sink.inner).unwrap();
+                let end = if retry { 3 } else { written as u64 };
+                let sequences: Vec<_> = trace
+                    .batches
+                    .iter()
+                    .flat_map(|b| b.events.iter().map(|e| e.sequence))
+                    .collect();
+                assert_eq!(sequences, (1..=end).collect::<Vec<_>>());
+                assert_eq!(trace.finalization.unwrap().total_events, end);
+            }
+        }
+    }
 }

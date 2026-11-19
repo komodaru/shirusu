@@ -56,7 +56,7 @@ use shirusu_trace::blob::BlobId;
 use shirusu_trace::model::PayloadRef;
 use shirusu_trace::proto::integrity_level;
 use shirusu_trace::reader::{ReadTrace, RecoveryIssue};
-use shirusu_trace::schema::{EventCapture, TypedValue};
+use shirusu_trace::schema::TypedValue;
 use std::collections::{HashMap, HashSet};
 
 /// 検査 1 件の結果。
@@ -473,56 +473,62 @@ fn check_sequence_monotonic(trace: &ReadTrace) -> CheckFinding {
 fn check_enter_leave_pairing(trace: &ReadTrace, view: &TraceView) -> CheckFinding {
     let id = "enter-leave-pairing";
     // スレッドごとに、call_id の Enter が開いているかを数える。
-    let mut open: HashMap<ThreadKey, HashMap<u64, usize>> = HashMap::new();
+    type OpenApis<'a> = HashMap<u64, (u32, Option<&'a str>)>;
+    let mut open: HashMap<ThreadKey, OpenApis<'_>> = HashMap::new();
     for ev in &view.events {
         let key = thread_key(ev.session_id, ev.process_id, ev.thread_id);
+        let calls = open.entry(key).or_default();
+        let api = (ev.api_id, ev.api_name.as_deref());
         match ev.phase() {
             Phase::Enter => {
-                *open.entry(key).or_default().entry(ev.call_id).or_default() += 1;
-            }
-            Phase::Leave => {
-                let calls = open.entry(key).or_default();
-                match calls.get_mut(&ev.call_id) {
-                    Some(n) if *n > 0 => *n -= 1,
-                    _ => {
-                        return CheckFinding::fail(
-                            id,
-                            format!(
-                                "leave for call {} on thread {} has no matching enter",
-                                ev.call_id, ev.thread_id
-                            ),
-                        );
-                    }
+                if calls.insert(ev.call_id, api).is_some() {
+                    return CheckFinding::fail(
+                        id,
+                        format!(
+                            "duplicate open call {} on thread {}",
+                            ev.call_id, ev.thread_id
+                        ),
+                    );
                 }
             }
-            // L08: 中断した呼び出しは Leave と同じく開いた Enter を閉じる。
-            // 対応する Enter が無ければ Leave と同じく違反。
-            Phase::Aborted => {
-                let calls = open.entry(key).or_default();
-                match calls.get_mut(&ev.call_id) {
-                    Some(n) if *n > 0 => *n -= 1,
-                    _ => {
-                        return CheckFinding::fail(
-                            id,
-                            format!(
-                                "aborted for call {} on thread {} has no matching enter",
-                                ev.call_id, ev.thread_id
-                            ),
-                        );
-                    }
+            Phase::Leave | Phase::Aborted => match calls.remove(&ev.call_id) {
+                Some(enter)
+                    if enter.0 == api.0 && enter.1.zip(api.1).is_none_or(|(a, b)| a == b) => {}
+                Some(_) => {
+                    return CheckFinding::fail(
+                        id,
+                        format!(
+                            "API mismatch for call {} on thread {}",
+                            ev.call_id, ev.thread_id
+                        ),
+                    )
                 }
-            }
+                None => {
+                    return CheckFinding::fail(
+                        id,
+                        format!(
+                            "{} for call {} on thread {} has no matching enter",
+                            if ev.phase() == Phase::Leave {
+                                "leave"
+                            } else {
+                                "aborted"
+                            },
+                            ev.call_id,
+                            ev.thread_id
+                        ),
+                    )
+                }
+            },
             // F27: 完了した非同期 I/O。leave が既に Enter を閉じている
             // のが通常で、その場合は何もしない。leave が欠落してまだ
             // 開いている場合にだけ、同じスレッドの Enter を閉じる。
             // 完了は別スレッドで観測されることがあるが、その場合は
             // leave が既に閉じているため、ここでは対応付けしない。
             Phase::Completed => {
-                let calls = open.entry(key).or_default();
-                if let Some(n) = calls.get_mut(&ev.call_id) {
-                    if *n > 0 {
-                        *n -= 1;
-                    }
+                if calls.get(&ev.call_id).is_some_and(|enter| {
+                    enter.0 == api.0 && enter.1.zip(api.1).is_none_or(|(a, b)| a == b)
+                }) {
+                    calls.remove(&ev.call_id);
                 }
             }
             Phase::Other(_) => {}
@@ -537,20 +543,16 @@ fn check_enter_leave_pairing(trace: &ReadTrace, view: &TraceView) -> CheckFindin
             continue;
         }
         let key = thread_key(trace.header.session_id, rec.process_id, rec.thread_id);
-        if let Some(n) = open
-            .get_mut(&key)
-            .and_then(|calls| calls.get_mut(&rec.call_id))
-        {
-            *n = n.saturating_sub(1);
+        if let Some(calls) = open.get_mut(&key) {
+            calls.remove(&rec.call_id);
         }
     }
     let unclosed: Vec<String> = open
         .iter()
         .flat_map(|((_, _, tid), calls)| {
             calls
-                .iter()
-                .filter(|(_, n)| **n > 0)
-                .map(move |(cid, n)| format!("thread {tid} call {cid} x{n}"))
+                .keys()
+                .map(move |cid| format!("thread {tid} call {cid}"))
         })
         .collect();
     if unclosed.is_empty() {
@@ -693,11 +695,7 @@ fn check_integrity_consistency(trace: &ReadTrace, view: &TraceView) -> CheckFind
         }
     }
     if fin.semantic_completeness == integrity_level::COMPLETE {
-        let degraded = view
-            .events
-            .iter()
-            .filter(|e| e.capture != EventCapture::Captured)
-            .count();
+        let degraded = s.degraded_events;
         if degraded > 0 {
             problems.push(format!(
                 "semantic_completeness claims Complete but {degraded} event(s) are not fully captured"
@@ -894,6 +892,26 @@ mod tests {
         let report = check_trace(&t);
         assert_eq!(status(&report, "sequence-monotonic"), CheckStatus::Warn);
         assert!(report.conformant(), "warn does not break conformance");
+    }
+
+    #[test]
+    fn unreadable_required_value_contradicts_complete() {
+        let mut t = valid_trace();
+        t.batches[0].events[0].args = Some(vec![1, 0]); // unreadable u64
+        assert_eq!(
+            status(&check_trace(&t), "integrity-consistent"),
+            CheckStatus::Fail
+        );
+    }
+
+    #[test]
+    fn mismatched_leave_api_fails_pairing() {
+        let mut t = valid_trace();
+        t.batches[0].events[1].api_id += 1;
+        assert_eq!(
+            status(&check_trace(&t), "enter-leave-pairing"),
+            CheckStatus::Fail
+        );
     }
 
     #[test]

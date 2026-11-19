@@ -166,6 +166,7 @@ pub fn value_capture_name(capture: ValueCapture) -> &'static str {
         // F20: 値は読めたが生値が古い（この呼び出しのエラーではない）。
         // format_field は Captured 以外を `<stale>` と表示する。
         ValueCapture::Stale => "stale",
+        ValueCapture::NotApplicable => "not_applicable",
     }
 }
 
@@ -532,6 +533,7 @@ pub fn loss_kind_name(kind: u32) -> &'static str {
         2 => "counters",
         3 => "unknown_termination",
         4 => "integrity_lost",
+        5 => "unknown_loss_count",
         _ => "other",
     }
 }
@@ -545,6 +547,7 @@ pub struct IntegritySummary {
     pub finalized_cleanly: bool,
     /// Finalization 自体の有無（無い Trace は完全性を確定できない）。
     pub has_finalization: bool,
+    pub event_count_mismatch: bool,
     pub capture_coverage: Option<u32>,
     pub event_integrity: Option<u32>,
     pub semantic_completeness: Option<u32>,
@@ -568,6 +571,7 @@ pub struct IntegritySummary {
 /// イベントごとに数える完全性の材料（全体読み込みとストリーミングで共用）。
 #[derive(Debug, Default, Clone)]
 pub struct IntegrityCounts {
+    pub events: u64,
     pub dropped_payload_events: u64,
     pub dropped_payload_bytes: u64,
     pub degraded_events: u64,
@@ -576,12 +580,26 @@ pub struct IntegrityCounts {
 
 impl IntegrityCounts {
     /// 1 件を数える。`blob_present` は参照先 Blob がファイル内にあるか。
-    pub fn note(&mut self, e: &TraceEvent, blob_present: impl FnOnce(&BlobId) -> bool) {
+    pub fn note(
+        &mut self,
+        registry: &SchemaRegistry,
+        e: &TraceEvent,
+        blob_present: impl FnOnce(&BlobId) -> bool,
+    ) {
+        self.events += 1;
         if let PayloadRef::Dropped { original_len, .. } = &e.payload {
             self.dropped_payload_events += 1;
             self.dropped_payload_bytes = self.dropped_payload_bytes.saturating_add(*original_len);
         }
-        if e.capture != EventCapture::Captured {
+        let types = registry.types_ref(e.schema_id);
+        let values_complete = match (types, e.args.as_deref()) {
+            (_, None) => true, // Arguments are optional (e.g. an aborted call).
+            (Some(types), Some(bytes)) => {
+                shirusu_trace::compact::validate_values_completeness(types, bytes).unwrap_or(false)
+            }
+            (None, Some(_)) => false,
+        };
+        if e.capture != EventCapture::Captured || !values_complete {
             self.degraded_events += 1;
         }
         if let PayloadRef::Blob(id) = &e.payload {
@@ -593,11 +611,18 @@ impl IntegrityCounts {
 }
 
 impl IntegritySummary {
+    pub fn exact_loss_count(&self) -> Option<u64> {
+        (!self
+            .loss_records_by_kind
+            .contains_key(&shirusu_trace::proto::loss_kind::UNKNOWN_LOSS_COUNT))
+        .then_some(self.total_loss_count)
+    }
+
     pub fn of(trace: &ReadTrace) -> Self {
         let mut counts = IntegrityCounts::default();
         for batch in &trace.batches {
             for e in &batch.events {
-                counts.note(e, |id| trace.blobs.contains_key(id));
+                counts.note(&trace.registry, e, |id| trace.blobs.contains_key(id));
             }
         }
         Self::assemble(trace, &counts)
@@ -671,6 +696,10 @@ impl IntegritySummary {
         IntegritySummary {
             finalized_cleanly: trace.finalized_cleanly,
             has_finalization: trace.finalization.is_some(),
+            event_count_mismatch: trace
+                .finalization
+                .as_ref()
+                .is_some_and(|f| f.total_events != counts.events),
             capture_coverage: trace.finalization.as_ref().map(|f| f.capture_coverage),
             event_integrity: trace.finalization.as_ref().map(|f| f.event_integrity),
             semantic_completeness: trace.finalization.as_ref().map(|f| f.semantic_completeness),
@@ -691,11 +720,26 @@ impl IntegritySummary {
         }
     }
 
+    pub fn is_complete(&self) -> bool {
+        self.finalized_cleanly
+            && self.has_finalization
+            && !self.has_event_loss()
+            && self.degraded_events == 0
+            && [
+                self.capture_coverage,
+                self.event_integrity,
+                self.semantic_completeness,
+            ]
+            .iter()
+            .all(|level| *level == Some(0))
+    }
+
     /// Event Integrity に損失があるか（Loss Record・落ちた Payload・
     /// Finalization の非 Complete 宣言のいずれか）。shirusu-test の
     /// `no-integrity-loss` ルールの判定材料。
     pub fn has_event_loss(&self) -> bool {
-        !self.loss_records_by_kind.is_empty()
+        self.event_count_mismatch
+            || !self.loss_records_by_kind.is_empty()
             || self
                 .recovery_issues
                 .iter()

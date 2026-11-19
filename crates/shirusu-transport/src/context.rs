@@ -19,12 +19,23 @@ thread_local! {
 }
 
 /// 公開区間だけ張る再入ガード。Drop で必ず外れる。
-pub struct PublishGuard;
+/// ```compile_fail
+/// let guard = shirusu_transport::context::PublishGuard::enter();
+/// std::thread::spawn(move || drop(guard));
+/// ```
+/// ```compile_fail
+/// let _ = shirusu_transport::context::PublishGuard(std::marker::PhantomData);
+/// ```
+/// ```compile_fail,E0277
+/// fn require<T: Sync>() {}
+/// require::<shirusu_transport::context::PublishGuard>();
+/// ```
+pub struct PublishGuard(std::marker::PhantomData<std::rc::Rc<()>>);
 impl PublishGuard {
     #[inline]
     pub fn enter() -> Self {
         PUBLISH_DEPTH.with(|d| d.set(d.get() + 1));
-        Self
+        Self(std::marker::PhantomData)
     }
     #[inline]
     pub fn is_active() -> bool {

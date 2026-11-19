@@ -12,7 +12,7 @@ use shirusu_transport::RingConfig;
 use std::sync::Arc;
 
 #[test]
-fn agent_with_zero_initial_slots_records_into_registered_mapping() {
+fn duplicate_registration_preserves_events_in_the_registered_mapping() {
     let cfg = RingConfig::new(64, 4096);
     // Host 側が作った共有領域（プロセス内では SharedRegion で代用）
     let host_region = SharedRegion::new(cfg, 0, 0).unwrap();
@@ -41,6 +41,12 @@ fn agent_with_zero_initial_slots_records_into_registered_mapping() {
         agent.record_enter(7, 1, 1, 1, 0, b"args-bytes"),
         RecordResult::Written(_)
     ));
+    let duplicate = ExpansionDelivery {
+        len: cfg.required_len(),
+        mapping: DeliveredMapping::InProcess(base.clone()),
+        generation: shirusu_transport::EXPANDED_SLOT_GENERATION,
+    };
+    assert_eq!(agent.register_slot_mapping(duplicate), None);
     // SAFETY: the only reader of this Ring (SPSC).
     let mut reader = unsafe { RingReader::new(base.clone(), cfg) }.unwrap();
     let batch = reader.drain_all();

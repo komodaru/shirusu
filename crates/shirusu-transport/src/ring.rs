@@ -662,7 +662,7 @@ impl RingWriter {
         let len = payload.len() as u64;
         let leave_like = matches!(kind, EventKind::CallLeave | EventKind::CallAborted);
         let common = self.state == OverflowState::Normal
-            && !(leave_like && !self.dropped_enter_calls.is_empty())
+            && (!leave_like || self.dropped_enter_calls.is_empty())
             && len <= u32::MAX as u64
             && self.fits_cached(1, len);
         if !common {

@@ -118,6 +118,9 @@ fn eval_rule(rule: &Rule, trace: &ReadTrace, view: &TraceView) -> RuleResult {
         Rule::NoIntegrityLoss => {
             let s = &view.integrity;
             let mut problems: Vec<String> = Vec::new();
+            if s.event_count_mismatch {
+                problems.push("recorded event count differs from Finalization".into());
+            }
             if !s.has_finalization {
                 problems.push("no finalization block (integrity cannot be confirmed)".into());
             }

@@ -16,8 +16,7 @@
 //! を作れない）。これらは README の所感に記録する。
 
 use shirusu_emit::{
-    file_io_api_set, ApiSet, ApiSpec, CallToken, EmitError, Emitter, EventMeta, PayloadData,
-    SessionConfig,
+    file_io_api_set, ApiSet, ApiSpec, EmitError, Emitter, EventMeta, PayloadData, SessionConfig,
 };
 use shirusu_trace::error::{CompactError, TraceError};
 use shirusu_trace::proto::LossRecord;
@@ -115,20 +114,6 @@ fn getters_expose_api_set_and_session_config() {
 }
 
 #[test]
-fn end_call_with_unknown_api_id_is_unknown_api() {
-    let mut em = new_emitter();
-    let bogus = CallToken {
-        thread_id: 1,
-        call_id: 1,
-        api_id: 9999,
-    };
-    assert!(matches!(
-        em.end_call(bogus, &close_handle_leave(), 0, EventMeta::default()),
-        Err(EmitError::UnknownApi(_))
-    ));
-}
-
-#[test]
 fn end_call_with_wrong_leave_values_is_compact_error() {
     let mut em = new_emitter();
     let tok = em
@@ -148,40 +133,35 @@ fn end_call_with_wrong_leave_values_is_compact_error() {
 }
 
 #[test]
-fn abandon_call_unknown_thread_and_unknown_call() {
-    let mut em = new_emitter();
-    // スレッド自体が存在しない。
-    let bogus_thread = CallToken {
-        thread_id: 99,
-        call_id: 1,
-        api_id: 4,
-    };
-    assert!(matches!(
-        em.abandon_call(bogus_thread),
-        Err(EmitError::UnknownCall { .. })
-    ));
-    // スレッドは存在するが call_id がオープン中でない。
-    let tok = em
-        .begin_call(
+fn foreign_token_cannot_close_or_abandon_local_call() {
+    let mut local = new_emitter();
+    let mut foreign = new_emitter();
+    let begin = |em: &mut Emitter<Vec<u8>>| {
+        em.begin_call(
             1,
             "kernel32!CloseHandle",
             &close_handle_args(0x10),
             0,
             EventMeta::default(),
         )
-        .unwrap();
-    let bogus_call = CallToken {
-        thread_id: 1,
-        call_id: tok.call_id + 100,
-        api_id: 4,
+        .unwrap()
     };
+    let ours = begin(&mut local);
+    let theirs = begin(&mut foreign);
     assert!(matches!(
-        em.abandon_call(bogus_call),
+        local.end_call(
+            theirs.clone(),
+            &close_handle_leave(),
+            1,
+            EventMeta::default()
+        ),
         Err(EmitError::UnknownCall { .. })
     ));
-    // 正常系の abandon は通る（比較用）。
-    em.abandon_call(tok).unwrap();
-    assert_eq!(em.open_call_count(1), 0);
+    assert!(matches!(
+        local.abandon_call(theirs),
+        Err(EmitError::UnknownCall { .. })
+    ));
+    local.abandon_call(ours).unwrap();
 }
 
 #[test]
@@ -281,6 +261,7 @@ fn empty_field_api_encodes_no_args() {
 struct FailingWriter {
     inner: Vec<u8>,
     fail: std::rc::Rc<std::cell::Cell<bool>>,
+    writes_until_failure: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
 impl FailingWriter {
@@ -290,6 +271,7 @@ impl FailingWriter {
             FailingWriter {
                 inner: Vec::new(),
                 fail: fail.clone(),
+                writes_until_failure: Default::default(),
             },
             fail,
         )
@@ -298,6 +280,13 @@ impl FailingWriter {
 
 impl Write for FailingWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.writes_until_failure.get() > 0 {
+            let remaining = self.writes_until_failure.get() - 1;
+            self.writes_until_failure.set(remaining);
+            if remaining == 0 {
+                return Err(io::Error::other("injected chunk failure"));
+            }
+        }
         if self.fail.get() {
             return Err(io::Error::other("injected write failure"));
         }
@@ -509,7 +498,7 @@ fn auto_flush_on_end_with_failing_writer_is_trace_error() {
     // 呼び出しはオープンのままなので、書けるようになれば閉じられる。
     let tok = toks.pop().unwrap();
     assert!(matches!(
-        em.end_call(tok, &close_handle_leave(), 999, EventMeta::default()),
+        em.end_call(&tok, &close_handle_leave(), 999, EventMeta::default()),
         Err(EmitError::Trace(_))
     ));
     assert_eq!(em.open_call_count(1), 256);
@@ -614,4 +603,48 @@ fn calls_on_one_thread_get_distinct_ids_and_nest_by_parent() {
     assert_eq!(enters[0].parent_call_id, 0);
     assert_eq!(enters[1].parent_call_id, enters[0].call_id);
     assert_eq!(enters[2].parent_call_id, 0);
+}
+
+#[test]
+fn flush_retry_keeps_only_the_unwritten_events() {
+    let (sink, _) = FailingWriter::new();
+    let fault = sink.writes_until_failure.clone();
+    let mut em = Emitter::with_options(
+        sink,
+        file_io_api_set(),
+        SessionConfig::new(1, "retry-test"),
+        WriterOptions {
+            chunk_raw_target: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for i in 0..3 {
+        let token = em
+            .begin_call(
+                1,
+                "kernel32!CloseHandle",
+                &close_handle_args(1),
+                i,
+                EventMeta::default(),
+            )
+            .unwrap();
+        em.end_call(token, &close_handle_leave(), i, EventMeta::default())
+            .unwrap();
+        if i == 0 {
+            em.flush_thread(1).unwrap();
+        } // Flush the schema before arming the fault.
+    }
+    fault.set(2);
+    assert!(matches!(em.flush_thread(1), Err(EmitError::Trace(e)) if e.written_events() == 1));
+    em.flush_thread(1).unwrap();
+    let sink = em.finish(Default::default()).unwrap();
+    let trace = shirusu_trace::read_trace(&sink.inner).unwrap();
+    let seq: Vec<_> = trace
+        .batches
+        .iter()
+        .flat_map(|b| b.events.iter().map(|e| e.sequence))
+        .collect();
+    assert_eq!(seq, [1, 2, 3, 4, 5, 6]);
+    assert_eq!(trace.finalization.unwrap().total_events, 6);
 }

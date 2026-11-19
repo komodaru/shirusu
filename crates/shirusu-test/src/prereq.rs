@@ -261,7 +261,8 @@ fn check_finalization(view: &TraceView, items: &mut Vec<PrereqItem>) {
             format!(
                 "loss records present: {} ({} lost event(s) in total)",
                 parts.join(", "),
-                s.total_loss_count
+                s.exact_loss_count()
+                    .map_or_else(|| "unknown".into(), |n| n.to_string())
             ),
         ));
     }

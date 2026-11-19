@@ -348,9 +348,16 @@ pub enum ValueCapture {
     /// GetLastError の生値が、戻り値が成功を示す場合に残る残留値で
     /// あることを表す（F20）。値本体は生値を保持する。
     Stale,
+    /// The API defines no value for this output on the observed result.
+    NotApplicable,
 }
 
 impl ValueCapture {
+    /// A stale or undefined output carries no meaningful value for this result.
+    pub fn is_complete(self) -> bool {
+        matches!(self, Self::Captured | Self::Stale | Self::NotApplicable)
+    }
+
     pub fn code(self) -> u8 {
         match self {
             Self::Captured => 0,
@@ -359,6 +366,7 @@ impl ValueCapture {
             Self::Unsupported => 3,
             Self::LimitExceeded => 4,
             Self::Stale => 5,
+            Self::NotApplicable => 6,
         }
     }
     pub fn from_code(code: u8) -> Option<Self> {
@@ -369,6 +377,7 @@ impl ValueCapture {
             3 => Self::Unsupported,
             4 => Self::LimitExceeded,
             5 => Self::Stale,
+            6 => Self::NotApplicable,
             _ => return None,
         })
     }
@@ -743,6 +752,10 @@ mod tests {
         // として扱ってはならない。
         assert_eq!(ValueCapture::Stale.code(), 5);
         assert_eq!(ValueCapture::from_code(5), Some(ValueCapture::Stale));
-        assert_eq!(ValueCapture::from_code(6), None);
+        assert_eq!(
+            ValueCapture::from_code(6),
+            Some(ValueCapture::NotApplicable)
+        );
+        assert_eq!(ValueCapture::from_code(7), None);
     }
 }

@@ -433,7 +433,7 @@ fn sync_per_block_sync_error_propagates() {
     // Header Block の書き込み直後の `sync_all` で失敗する。
     match TraceWriter::with_options(w, env(42), options(Durability::SyncPerBlock, 0)) {
         Ok(_) => panic!("sync_all must fail"),
-        Err(e) => assert!(matches!(e, shirusu_trace::TraceError::Io(_))),
+        Err(e) => assert!(matches!(e, shirusu_trace::TraceError::Sync(_))),
     }
 }
 
@@ -453,7 +453,9 @@ fn buf_writer_sync_all_flush_error_propagates() {
     let err = w
         .write_batch(&batch(vec![event(1, PayloadRef::None)]))
         .expect_err("BufWriter sync_all flush must fail");
-    assert!(matches!(err, shirusu_trace::TraceError::Io(_)));
+    assert!(
+        matches!(err, shirusu_trace::TraceError::PartialBatch { written: 1, cause } if matches!(*cause, shirusu_trace::TraceError::Sync(_)))
+    );
 }
 
 #[test]

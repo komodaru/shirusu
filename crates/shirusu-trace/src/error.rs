@@ -99,6 +99,13 @@ impl std::error::Error for CompactError {}
 #[derive(Debug)]
 pub enum TraceError {
     Io(std::io::Error),
+    /// The block was accepted, but durable storage was not confirmed.
+    Sync(std::io::Error),
+    /// Only the suffix following this many events may be submitted again.
+    PartialBatch {
+        written: usize,
+        cause: Box<TraceError>,
+    },
     Proto(ProtoError),
     Compact(CompactError),
     /// ファイル先頭が Header Block ではない（Trace ではない入力）。
@@ -122,9 +129,20 @@ pub enum TraceError {
     LimitExceeded(&'static str),
 }
 
+impl TraceError {
+    pub fn written_events(&self) -> usize {
+        match self {
+            Self::PartialBatch { written, .. } => *written,
+            _ => 0,
+        }
+    }
+}
+
 impl fmt::Display for TraceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Sync(e) => write!(f, "block written but sync failed: {e}"),
+            Self::PartialBatch { written, cause } => write!(f, "{written} events written: {cause}"),
             Self::Io(e) => write!(f, "io error: {e}"),
             Self::Proto(e) => write!(f, "protobuf error: {e}"),
             Self::Compact(e) => write!(f, "compact binary error: {e}"),
@@ -144,7 +162,8 @@ impl fmt::Display for TraceError {
 impl std::error::Error for TraceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(e) => Some(e),
+            Self::PartialBatch { cause, .. } => Some(cause.as_ref()),
+            Self::Io(e) | Self::Sync(e) => Some(e),
             Self::Proto(e) => Some(e),
             Self::Compact(e) => Some(e),
             _ => None,

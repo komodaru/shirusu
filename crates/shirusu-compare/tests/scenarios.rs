@@ -23,6 +23,19 @@ fn kinds(report: &shirusu_compare::DiffReport) -> Vec<CandidateKind> {
 }
 
 #[test]
+fn unrelated_leave_does_not_match_a_valid_call() {
+    let left = standard(Env::default()).finish(Default::default(), &[]);
+    let mut right = standard(Env::default()).finish(Default::default(), &[]);
+    right.batches[0]
+        .events
+        .iter_mut()
+        .find(|e| e.kind == 2)
+        .unwrap()
+        .api_id += 1;
+    assert!(!compare_traces(&left, &right).is_identical());
+}
+
+#[test]
 fn identical_traces_have_no_candidates() {
     let left = standard(Env::default()).finish(FinalizationInfo::default(), &[]);
     let right = standard(Env::default()).finish(FinalizationInfo::default(), &[]);

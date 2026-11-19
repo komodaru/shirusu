@@ -991,3 +991,38 @@ fn sequential_blocks_are_read_without_seeking() {
     let seeks = stream.into_inner().seeks;
     assert!(seeks <= 2, "seeks: {seeks}");
 }
+
+#[test]
+fn long_chain_loads_with_bounded_work() {
+    let mut w = TraceWriter::new(Vec::new(), env()).unwrap();
+    let mut last = w.add_payload(&0u32.to_le_bytes()).unwrap();
+    for n in 1u32..=2000 {
+        let patch = n.to_le_bytes();
+        let next = BlobId::of_content(&patch);
+        w.write_blob_update(last, next, 0, &patch).unwrap();
+        last = next;
+    }
+    let bytes = w.finish(Default::default()).unwrap();
+    let mut limited = TraceStream::with_options(
+        Cursor::new(&bytes),
+        StreamOptions {
+            limits: ReaderLimits {
+                max_blob_bytes: 8,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    while limited.next_item().unwrap().is_some() {}
+    assert!(matches!(
+        limited.load_blob(&last),
+        Err(shirusu_trace::TraceError::LimitExceeded(_))
+    ));
+    let mut stream = TraceStream::open(Cursor::new(&bytes)).unwrap();
+    while stream.next_item().unwrap().is_some() {}
+    assert_eq!(
+        stream.load_blob(&last).unwrap().unwrap(),
+        2000u32.to_le_bytes()
+    );
+}

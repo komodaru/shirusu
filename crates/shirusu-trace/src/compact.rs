@@ -236,7 +236,7 @@ pub fn validate_values_completeness(types: &[Ty], data: &[u8]) -> Result<bool, C
     for ty in types {
         let code = cur.read_u8()?;
         let capture = ValueCapture::from_code(code).ok_or(CompactError::InvalidCapture(code))?;
-        complete &= matches!(capture, ValueCapture::Captured | ValueCapture::Stale);
+        complete &= capture.is_complete();
         match ty {
             Ty::Str => {
                 std::str::from_utf8(cur.read_len_bytes()?)

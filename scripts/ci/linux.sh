@@ -12,7 +12,10 @@ cargo run -q -p shirusu-metadata-gen -- --winmd target/winmd/Windows.Win32.winmd
 cargo run -q -p shirusu-metadata-gen -- --winmd target/winmd/Windows.Win32.winmd --refresh-broad --check
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+test_log=$(mktemp)
+trap 'rm -f "$test_log"' EXIT
+cargo test --workspace --color never -- --format pretty 2>&1 | tee "$test_log"
+cargo run -q -p shirusu-lint -- --test-log "$test_log"
 cargo test -p shirusu-loom-tests --release
 
 cargo run -q -p shirusu-metadata-gen -- --file-io-contracts --check

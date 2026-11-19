@@ -445,62 +445,42 @@ impl<R: Read + Seek> TraceStream<R> {
     }
 
     fn load_blob_inner(&mut self, id: &BlobId) -> Result<Option<Vec<u8>>> {
-        let all = self.updates.len();
-        self.load_version_before(id, all)
-    }
-
-    /// `id` の内容を、格納済みの Blob と `updates[..limit]` の更新だけから
-    /// 全体読み込み（`fold_blob_updates`）と同じ規則で復元する。
-    ///
-    /// 更新の `resource_id` が、それ以前の更新で具体化された派生版を指す
-    /// 場合（更新の連鎖）は、その派生版も同じ規則で再帰的に復元する。
-    /// 全体読み込みはリソースの作業中内容を「基底を引けた最初の更新」で
-    /// 基底のコピーから始め、以後そのリソースへの更新を順に重ねるため、
-    /// ここでも基底は各更新の位置より前の更新だけで探す（`limit` は再帰の
-    /// たびに厳密に小さくなるので停止する）。
-    fn load_version_before(&mut self, id: &BlobId, limit: usize) -> Result<Option<Vec<u8>>> {
         if let Some(&offset) = self.blob_offsets.get(id) {
             return self.read_blob_at(offset, id);
         }
-        // `id` を宣言する更新は複数あり得る（同じ版へ戻す更新、別リソース
-        // からの同じ内容）。ファイル順で最初の宣言が失敗しても（範囲外・
-        // ハッシュ不一致・破損）、後の宣言が成功すれば全体読み込みは具体化
-        // するので、宣言のあるリソースを順に試す。
-        let mut resources: Vec<BlobId> = Vec::new();
-        for u in &self.updates[..limit] {
-            if u.new_version_id == *id && !resources.contains(&u.resource_id) {
-                resources.push(u.resource_id);
-            }
-        }
-        for resource in resources {
-            if let Some(content) = self.fold_resource_until(&resource, id, limit)? {
-                return Ok(Some(content));
-            }
-        }
-        Ok(None)
-    }
 
-    /// `resource` への `updates[..limit]` の更新を全体読み込みと同じ規則で
-    /// 順に重ね、`id` を宣言する更新が成功した時点の内容を返す。
-    fn fold_resource_until(
-        &mut self,
-        resource: &BlobId,
-        id: &BlobId,
-        limit: usize,
-    ) -> Result<Option<Vec<u8>>> {
-        let chain: Vec<(usize, u64)> = self.updates[..limit]
-            .iter()
-            .enumerate()
-            .filter(|(_, u)| u.resource_id == *resource)
-            .map(|(i, u)| (i, u.offset))
-            .collect();
-        let mut working: Option<Vec<u8>> = None;
-        for (index, offset) in chain {
-            if working.is_none() {
-                working = self.load_version_before(resource, index)?;
-                if working.is_none() {
-                    continue;
+        // Walk dependencies backwards, then validate their patches in file order.
+        // Several resources can declare the same version, and a rejected patch
+        // must leave the previous working version available for the next one.
+        let mut needed = HashSet::from([*id]);
+        let mut resources = HashSet::new();
+        let mut patches = Vec::new();
+        for update in self.updates.iter().rev() {
+            if needed.contains(&update.new_version_id) || resources.contains(&update.resource_id) {
+                resources.insert(update.resource_id);
+                if !self.blob_offsets.contains_key(&update.resource_id) {
+                    needed.insert(update.resource_id);
                 }
+                patches.push((update.offset, update.resource_id));
+            }
+        }
+        let mut versions: HashMap<BlobId, Vec<u8>> = HashMap::new();
+        let mut current: HashMap<BlobId, BlobId> = HashMap::new();
+        let mut work_left = self.options.limits.max_decoded_bytes;
+        let mut bytes_left = self.options.limits.max_blob_bytes;
+        for (offset, resource) in patches.into_iter().rev() {
+            let base = current.get(&resource).copied().unwrap_or(resource);
+            if let std::collections::hash_map::Entry::Vacant(entry) = versions.entry(base) {
+                let Some(&at) = self.blob_offsets.get(&base) else {
+                    continue;
+                };
+                let Some(content) = self.read_blob_at(at, &base)? else {
+                    continue;
+                };
+                bytes_left = bytes_left
+                    .checked_sub(content.len() as u64)
+                    .ok_or(TraceError::LimitExceeded("blob reconstruction bytes"))?;
+                entry.insert(content);
             }
             let Some(update) = self
                 .read_block_payload(offset)?
@@ -508,13 +488,25 @@ impl<R: Read + Seek> TraceStream<R> {
             else {
                 continue;
             };
-            let current = working.as_mut().expect("seeded above");
-            if let Some(folded) = apply_update_to(current, update.offset, &update.data) {
-                if BlobId::of_content(&folded) == update.new_version_id {
-                    *current = folded;
-                    if update.new_version_id == *id {
-                        return Ok(working);
-                    }
+            let content = &versions[&base];
+            work_left = work_left
+                .checked_sub(content.len() as u64)
+                .ok_or(TraceError::LimitExceeded("blob reconstruction work"))?;
+            if let Some(folded) = apply_update_to(content, update.offset, &update.data) {
+                if BlobId::of_content(&folded) != update.new_version_id {
+                    continue;
+                }
+                if update.new_version_id == *id {
+                    return Ok(Some(folded));
+                }
+                current.insert(resource, update.new_version_id);
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    versions.entry(update.new_version_id)
+                {
+                    bytes_left = bytes_left
+                        .checked_sub(folded.len() as u64)
+                        .ok_or(TraceError::LimitExceeded("blob reconstruction bytes"))?;
+                    entry.insert(folded);
                 }
             }
         }

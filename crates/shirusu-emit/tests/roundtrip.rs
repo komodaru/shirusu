@@ -2,7 +2,7 @@
 //! 規約（Schema 登録、sequence 単調性、Enter/Leave 対応、Payload
 //! 解決、Finalization の整合）が実際に成立していることを確かめる。
 
-use shirusu_emit::{file_io_api_set, CallToken, Emitter, EventMeta, PayloadData, SessionConfig};
+use shirusu_emit::{file_io_api_set, Emitter, EventMeta, PayloadData, SessionConfig};
 use shirusu_trace::schema::{CapturedValue, TypedValue};
 use shirusu_trace::writer::FinalizationInfo;
 
@@ -193,21 +193,6 @@ fn call_pairing_is_enforced() {
         SessionConfig::new(1, "emit-test"),
     )
     .unwrap();
-    let bogus = CallToken {
-        thread_id: 1,
-        call_id: 99,
-        api_id: 4,
-    };
-    assert!(matches!(
-        em.end_call(
-            bogus,
-            &[cv(TypedValue::I32(1)), cv(TypedValue::U32(0))],
-            0,
-            EventMeta::default()
-        ),
-        Err(shirusu_emit::EmitError::UnknownCall { .. })
-    ));
-    // end 済みのトークンの再 end も弾く。
     let tok = em
         .begin_call(
             1,
@@ -218,7 +203,7 @@ fn call_pairing_is_enforced() {
         )
         .unwrap();
     em.end_call(
-        tok,
+        tok.clone(),
         &[cv(TypedValue::I32(1)), cv(TypedValue::U32(0))],
         1,
         EventMeta::default(),

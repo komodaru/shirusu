@@ -178,7 +178,16 @@ pub(crate) fn native_tls_available() -> bool {
 /// 起きた場合は、従来どおり親子として記録される (A43)。
 /// ガードは同時に 1 つだけ保持できる（suspend 中の入れ子は別のガード）。
 /// Drop で必ず外れる（suspend したまま drop しても深さは 0 のまま）。
+/// ```compile_fail
+/// let guard = shirusu_hook::runtime::ReentrancyGuard::try_enter().unwrap();
+/// std::thread::spawn(move || drop(guard));
+/// ```
+/// ```compile_fail,E0277
+/// fn require<T: Sync>() {}
+/// require::<shirusu_hook::runtime::ReentrancyGuard>();
+/// ```
 pub struct ReentrancyGuard {
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
     suspended: bool,
 }
 
@@ -201,7 +210,10 @@ impl ReentrancyGuard {
             })
         });
         match entered {
-            Some(true) => Some(Self { suspended: false }),
+            Some(true) => Some(Self {
+                suspended: false,
+                _thread: std::marker::PhantomData,
+            }),
             Some(false) => None,
             None => Self::try_enter_full(),
         }
@@ -253,7 +265,10 @@ impl ReentrancyGuard {
                 // and allocate. Protect that initialization too: HeapAlloc's
                 // detour must see an active guard before it touches more TLS.
                 d.set(1);
-                let guard = Self { suspended: false };
+                let guard = Self {
+                    suspended: false,
+                    _thread: std::marker::PhantomData,
+                };
                 available().then_some(guard)
             })
             .ok()

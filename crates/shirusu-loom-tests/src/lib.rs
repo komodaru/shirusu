@@ -573,6 +573,32 @@ mod tests {
     }
 
     #[test]
+    fn loom_cancel_publishes_free_after_clearing_owner() {
+        loom::model(|| {
+            let slot = Arc::new(MiniSlot::new_reclaimable());
+            slot.state.store(MINI_ACTIVE, Ordering::Relaxed);
+            let old = slot.clone();
+            let cancel = loom::thread::spawn(move || {
+                old.state
+                    .compare_exchange(
+                        MINI_ACTIVE,
+                        MINI_RECLAIMING,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .unwrap();
+                old.owner.store(0, Ordering::Relaxed);
+                old.state.store(MINI_FREE, Ordering::Release);
+            });
+            let claimed = slot.claim(99).is_some();
+            cancel.join().unwrap();
+            if claimed {
+                assert_eq!(slot.owner.load(Ordering::Acquire), 99);
+            }
+        });
+    }
+
+    #[test]
     fn loom_slot_reclaim_publishes_generation_before_free() {
         // R3 の性質: FREE が公開された後に claim した側は、回収で進んだ
         // Generation を必ず観測しなければならない。進む前の Generation を

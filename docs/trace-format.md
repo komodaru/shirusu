@@ -251,12 +251,13 @@ message BatchHeader {
   bool has_global_order = 9;        // L11: 真のとき各イベントに global_order あり（false のとき書かないので旧ファイルと同じバイト列）
 }
 message LossRecord {
-  uint32 kind = 1;                  // 1=SequenceGap 2=Counters 3=UnknownTermination 4=IntegrityLost
+  // UnknownLossCount の count は、確定できた欠落数の下限。
+  uint32 kind = 1;                  // 1=SequenceGap 2=Counters 3=UnknownTermination 4=IntegrityLost 5=UnknownLossCount
   uint64 count = 2;                 // SequenceGap の欠番数 / Counters の dropped_events
   uint64 dropped_payload_bytes = 3; // Counters のみ
   uint64 degraded_events = 4;       // Counters のみ
   uint64 call_id = 5;               // UnknownTermination のみ
-  string reason = 6;                // IntegrityLost のみ
+  string reason = 6;                // IntegrityLost / UnknownLossCount の原因
   uint64 process_id = 7;
   uint64 thread_id = 8;
 }
@@ -435,7 +436,7 @@ Schema が型と順序を定め、値ごとの型タグは持たない（overvie
 1 レコード（1 イベントの引数列など）は、Schema のフィールド数と同じ
 個数の値を順に並べたもの。各値は「取得状態 1 バイト＋値本体」。
 取得状態: 0 = Captured、1 = Unreadable、2 = Truncated、
-3 = Unsupported、4 = LimitExceeded、5 = Stale。Unreadable / Unsupported
+3 = Unsupported、4 = LimitExceeded、5 = Stale、6 = NotApplicable（この結果では出力が未定義。値本体はダミー）。Unreadable / Unsupported
 の場合も本体は符号化する（ダミー 0 / 空）。Stale だけは例外で、本体に
 読み取った生値を保持する（再検証のため）。復号側は余分なバイト列の残りを
 不正として拒否する。

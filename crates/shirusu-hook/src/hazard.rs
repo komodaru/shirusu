@@ -182,7 +182,10 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(count(rt), 0, "a terminated thread's hazard was counted");
-        assert!(!SLOTS[index as usize].claimed.load(Ordering::Acquire));
+        assert_ne!(
+            SLOTS[index as usize].runtime.load(Ordering::Acquire),
+            rt.cast_mut()
+        );
         // A live publisher is still counted.
         let live = claim().unwrap();
         publish(live, rt);

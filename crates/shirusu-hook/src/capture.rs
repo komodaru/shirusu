@@ -337,25 +337,67 @@ pub fn get_queued_completion_status_enter(
     ]
 }
 
-/// GetQueuedCompletionStatus の leave。転送バイト数が読めなければ
-/// Unsupported。
-pub fn get_queued_completion_status_leave(
-    success: i32,
-    transferred: Option<u32>,
-    last_error: u32,
-) -> Vec<CapturedValue> {
-    vec![
-        i32v(success),
-        match transferred {
-            Some(n) => u32v(n),
-            None => unsupported_u32(),
-        },
-        last_error_value(
-            LastErrorMeaning::WhenReturnIsFalse,
-            success as u64,
-            last_error,
-        ),
-    ]
+/// GetQueuedCompletionStatus distinguishes a failed I/O packet from no packet.
+#[derive(Debug, Copy, Clone)]
+pub struct QueuedCompletion(CompletionPacket);
+
+#[derive(Debug, Copy, Clone)]
+enum CompletionPacket {
+    Success {
+        result: i32,
+        transferred: Option<u32>,
+    },
+    FailedIo {
+        transferred: Option<u32>,
+    },
+    NoPacket,
+}
+
+impl QueuedCompletion {
+    pub fn observe(result: i32, overlapped: u64, read: impl FnOnce() -> Option<u32>) -> Self {
+        Self(if result != 0 {
+            CompletionPacket::Success {
+                result,
+                transferred: read(),
+            }
+        } else if overlapped != 0 {
+            CompletionPacket::FailedIo {
+                transferred: read(),
+            }
+        } else {
+            CompletionPacket::NoPacket
+        })
+    }
+
+    pub fn transferred(self) -> Option<u32> {
+        match self.0 {
+            CompletionPacket::Success { transferred, .. }
+            | CompletionPacket::FailedIo { transferred } => transferred,
+            CompletionPacket::NoPacket => None,
+        }
+    }
+
+    pub fn leave_values(self, last_error: u32) -> Vec<CapturedValue> {
+        let result = match self.0 {
+            CompletionPacket::Success { result, .. } => result,
+            _ => 0,
+        };
+        let bytes = match self.0 {
+            CompletionPacket::NoPacket => cap(TypedValue::U32(0), ValueCapture::NotApplicable),
+            _ => self
+                .transferred()
+                .map_or_else(|| cap(TypedValue::U32(0), ValueCapture::Unreadable), u32v),
+        };
+        vec![
+            i32v(result),
+            bytes,
+            last_error_value(
+                LastErrorMeaning::WhenReturnIsFalse,
+                result as u64,
+                last_error,
+            ),
+        ]
+    }
 }
 
 /// Win32 の非同期 I/O 完了関連のエラー値（F27）。
@@ -1049,6 +1091,24 @@ mod tests {
                 };
             }
             true
+        }
+    }
+
+    #[test]
+    fn completion_byte_count_is_read_only_for_dequeued_packets() {
+        let empty = QueuedCompletion::observe(0, 0, || panic!("undefined output read"));
+        assert_eq!(
+            empty.leave_values(258)[1].capture,
+            ValueCapture::NotApplicable
+        );
+        for (ret, overlapped) in [(1, 0), (1, 1), (0, 1)] {
+            let packet = QueuedCompletion::observe(ret, overlapped, || Some(37));
+            assert_eq!(packet.leave_values(0)[1], u32v(37));
+            let unreadable = QueuedCompletion::observe(ret, overlapped, || None);
+            assert_eq!(
+                unreadable.leave_values(0)[1].capture,
+                ValueCapture::Unreadable
+            );
         }
     }
 
@@ -1830,7 +1890,7 @@ mod tests {
         let bytes = encode_enter(gqcs, &enter).expect("encode");
         let types = schema_types(&gqcs.enter_schema()).unwrap();
         assert_eq!(decode_values(&types, &bytes).unwrap(), enter);
-        let leave = get_queued_completion_status_leave(1, Some(9), 0);
+        let leave = QueuedCompletion::observe(1, 0, || Some(9)).leave_values(0);
         let bytes = encode_leave(gqcs, &leave).expect("encode");
         let types = schema_types(&gqcs.leave_schema()).unwrap();
         assert_eq!(decode_values(&types, &bytes).unwrap(), leave);

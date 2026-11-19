@@ -143,12 +143,12 @@ fn emit(ops: &[Op]) -> Vec<u8> {
                 // 契約（Emitter::abandon_call）: 痕跡は呼び出し側が
                 // UNKNOWN_TERMINATION の Loss Record として残す。
                 if let Some((token, _)) = open.get_mut(thread).and_then(|v| v.pop()) {
-                    em.abandon_call(token).unwrap();
+                    em.abandon_call(token.clone()).unwrap();
                     let process_id = em.session_config().process_id;
                     em.write_loss_records(&[shirusu_trace::proto::LossRecord {
                         kind: shirusu_trace::proto::loss_kind::UNKNOWN_TERMINATION,
-                        call_id: token.call_id,
-                        thread_id: token.thread_id,
+                        call_id: token.call_id(),
+                        thread_id: token.thread_id(),
                         process_id,
                         ..Default::default()
                     }])
@@ -261,7 +261,7 @@ fn unknown_termination_closes_only_its_own_open_call() {
                 EventMeta::default(),
             )
             .unwrap();
-        em.abandon_call(token).unwrap();
+        em.abandon_call(token.clone()).unwrap();
         let process_id = em.session_config().process_id;
         for &(thread_id, call_id) in records {
             em.write_loss_records(&[shirusu_trace::proto::LossRecord {
@@ -281,7 +281,7 @@ fn unknown_termination_closes_only_its_own_open_call() {
             .unwrap();
         let trace = shirusu_trace::read_trace(&bytes).unwrap();
         (
-            token.call_id,
+            token.call_id(),
             check_trace(&trace)
                 .finding("enter-leave-pairing")
                 .unwrap()

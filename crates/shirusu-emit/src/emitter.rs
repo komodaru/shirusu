@@ -187,11 +187,30 @@ impl SessionConfig {
 
 /// begin_call が返す呼び出しトークン。end_call / abandon_call は
 /// このトークンで対応する Enter を特定する。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// ```compile_fail,E0277
+/// fn require<T: Copy>() {}
+/// require::<shirusu_emit::CallToken>();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CallToken {
-    pub thread_id: u64,
-    pub call_id: u64,
-    pub api_id: u32,
+    issuer: u64,
+    thread_id: u64,
+    call_id: u64,
+}
+
+impl CallToken {
+    pub fn call_id(&self) -> u64 {
+        self.call_id
+    }
+    pub fn thread_id(&self) -> u64 {
+        self.thread_id
+    }
+}
+
+#[derive(Debug)]
+struct OpenCall {
+    id: u64,
+    api_id: u32,
 }
 
 #[derive(Debug)]
@@ -200,7 +219,7 @@ struct ThreadState {
     next_call_id: u64,
     /// オープン中の call_id（begin 順）。親子関係と finish 時の
     /// 未終了検出に使う。end の順序は LIFO でなくてよい。
-    open_calls: Vec<u64>,
+    open_calls: Vec<OpenCall>,
     pending: Vec<TraceEvent>,
 }
 
@@ -225,6 +244,7 @@ impl ThreadState {
 /// 規約に沿ったイベント列の構築だけを担う。
 pub struct Emitter<W: DurableWrite> {
     writer: TraceWriter<W>,
+    issuer: u64,
     set: ApiSet,
     cfg: SessionConfig,
     threads: HashMap<u64, ThreadState>,
@@ -267,7 +287,16 @@ impl<W: DurableWrite> Emitter<W> {
         for def in set.schemas() {
             writer.register_schema(def)?;
         }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let issuer = NEXT
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |id| id.checked_add(1),
+            )
+            .expect("emitter id space exhausted");
         Ok(Emitter {
+            issuer,
             writer,
             set,
             cfg,
@@ -308,10 +337,13 @@ impl<W: DurableWrite> Emitter<W> {
         let state = self.threads.entry(thread_id).or_default();
         let call_id = state.next_call_id;
         state.next_call_id += 1;
-        let parent_call_id = state.open_calls.last().copied().unwrap_or(0);
+        let parent_call_id = state.open_calls.last().map_or(0, |call| call.id);
         let sequence = state.next_sequence;
         state.next_sequence += 1;
-        state.open_calls.push(call_id);
+        state.open_calls.push(OpenCall {
+            id: call_id,
+            api_id,
+        });
         state.pending.push(TraceEvent {
             kind: KIND_ENTER,
             sequence,
@@ -326,44 +358,33 @@ impl<W: DurableWrite> Emitter<W> {
             global_order: None,
         });
         Ok(CallToken {
+            issuer: self.issuer,
             thread_id,
             call_id,
-            api_id,
         })
     }
 
     /// 呼び出しの終了（CallLeave）を記録する。トークンが指す
     /// 呼び出しがオープン中でなければならない（対応の保証）。
+    /// Pass a borrowed token to retain it if validation or a buffered write fails.
     pub fn end_call(
         &mut self,
-        token: CallToken,
+        token: impl std::borrow::Borrow<CallToken>,
         values: &[CapturedValue],
         timestamp_qpc: u64,
         meta: EventMeta,
     ) -> Result<()> {
+        let token = token.borrow();
+        let (pos, api_id) = self.open_call(token)?;
         let spec = self
             .set
-            .spec(token.api_id)
-            .ok_or_else(|| EmitError::UnknownApi(format!("api_id {}", token.api_id)))?;
+            .spec(api_id)
+            .expect("open call uses a registered API");
         let types: Vec<Ty> = spec.leave_fields.iter().map(|(_, t, _, _)| *t).collect();
         let args = encode_args(&types, values)?;
         self.flush_if_full(token.thread_id)?;
         let payload = self.resolve_payload(meta.payload)?;
-        let state = self
-            .threads
-            .get_mut(&token.thread_id)
-            .ok_or(EmitError::UnknownCall {
-                thread_id: token.thread_id,
-                call_id: token.call_id,
-            })?;
-        let pos = state
-            .open_calls
-            .iter()
-            .position(|&c| c == token.call_id)
-            .ok_or(EmitError::UnknownCall {
-                thread_id: token.thread_id,
-                call_id: token.call_id,
-            })?;
+        let state = self.threads.get_mut(&token.thread_id).expect("open thread");
         state.open_calls.remove(pos);
         let sequence = state.next_sequence;
         state.next_sequence += 1;
@@ -373,8 +394,8 @@ impl<W: DurableWrite> Emitter<W> {
             timestamp_qpc,
             call_id: token.call_id,
             parent_call_id: 0,
-            api_id: token.api_id,
-            schema_id: ApiSet::leave_schema_id(token.api_id),
+            api_id,
+            schema_id: ApiSet::leave_schema_id(api_id),
             capture: meta.capture,
             payload,
             args,
@@ -399,23 +420,32 @@ impl<W: DurableWrite> Emitter<W> {
     /// write_loss_records で UNKNOWN_TERMINATION として残すこと
     /// （勝手に Leave を捏造しないための区別）。
     pub fn abandon_call(&mut self, token: CallToken) -> Result<()> {
-        let state = self
-            .threads
+        let (pos, _) = self.open_call(&token)?;
+        self.threads
             .get_mut(&token.thread_id)
-            .ok_or(EmitError::UnknownCall {
-                thread_id: token.thread_id,
-                call_id: token.call_id,
-            })?;
-        let pos = state
+            .expect("open thread")
             .open_calls
-            .iter()
-            .position(|&c| c == token.call_id)
-            .ok_or(EmitError::UnknownCall {
-                thread_id: token.thread_id,
-                call_id: token.call_id,
-            })?;
-        state.open_calls.remove(pos);
+            .remove(pos);
         Ok(())
+    }
+
+    fn open_call(&self, token: &CallToken) -> Result<(usize, u32)> {
+        if token.issuer == self.issuer {
+            if let Some(thread) = self.threads.get(&token.thread_id) {
+                if let Some((pos, call)) = thread
+                    .open_calls
+                    .iter()
+                    .enumerate()
+                    .find(|(_, c)| c.id == token.call_id)
+                {
+                    return Ok((pos, call.api_id));
+                }
+            }
+        }
+        Err(EmitError::UnknownCall {
+            thread_id: token.thread_id,
+            call_id: token.call_id,
+        })
     }
 
     /// そのスレッドで現在オープン中の呼び出し数。
@@ -452,11 +482,7 @@ impl<W: DurableWrite> Emitter<W> {
             events,
         };
         if let Err(e) = self.writer.write_batch(&batch) {
-            // Keep the events: the Writer is back at a Block boundary, so a
-            // later flush (or finish) can still write them.
-            if let Some(state) = self.threads.get_mut(&thread_id) {
-                state.pending = batch.events;
-            }
+            state.pending = batch.events.into_iter().skip(e.written_events()).collect();
             return Err(e.into());
         }
         Ok(())
@@ -474,7 +500,7 @@ impl<W: DurableWrite> Emitter<W> {
                 if !state.open_calls.is_empty() {
                     return Err(EmitError::OpenCallsAtFinish {
                         thread_id: *tid,
-                        call_ids: state.open_calls.clone(),
+                        call_ids: state.open_calls.iter().map(|call| call.id).collect(),
                     });
                 }
             }

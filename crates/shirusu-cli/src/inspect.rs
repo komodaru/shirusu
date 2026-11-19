@@ -239,7 +239,7 @@ pub(crate) fn inspect_lines(path: &str, d: &InspectData) -> Vec<String> {
     out.push("integrity:".into());
     out.push(format!(
         "  status: {}",
-        if d.integrity.has_event_loss() {
+        if !d.integrity.is_complete() {
             "incomplete"
         } else {
             "complete"
@@ -275,7 +275,8 @@ pub(crate) fn inspect_lines(path: &str, d: &InspectData) -> Vec<String> {
             out.push(format!(
                 "  loss_records: {} x{records} (total count {})",
                 loss_kind_name(*kind),
-                s.total_loss_count
+                s.exact_loss_count()
+                    .map_or_else(|| "unknown".into(), |n| n.to_string())
             ));
         }
     }
@@ -495,7 +496,7 @@ pub(crate) fn inspect_json(path: &str, d: &InspectData) -> JsonValue {
                 (
                     "status",
                     JsonValue::Str(
-                        if s.has_event_loss() {
+                        if !s.is_complete() {
                             "incomplete"
                         } else {
                             "complete"
@@ -509,7 +510,10 @@ pub(crate) fn inspect_json(path: &str, d: &InspectData) -> JsonValue {
                 ("finalized_cleanly", JsonValue::Bool(s.finalized_cleanly)),
                 ("has_finalization", JsonValue::Bool(s.has_finalization)),
                 ("loss_records", JsonValue::Array(loss)),
-                ("total_loss_count", JsonValue::U64(s.total_loss_count)),
+                (
+                    "total_loss_count",
+                    s.exact_loss_count().map_or(JsonValue::Null, JsonValue::U64),
+                ),
                 (
                     "dropped_payload_events",
                     JsonValue::U64(s.dropped_payload_events),

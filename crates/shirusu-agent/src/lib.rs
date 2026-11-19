@@ -852,6 +852,7 @@ impl Agent {
         if region.check_fits(self.config).is_err() {
             return Err(());
         }
+        let reservation = region.reserve_slot().ok_or(())?;
         let published = region.clone();
         let index = self.pool.add_slot().ok_or(())?;
         self.expanded_regions.lock().unwrap().insert(index, region);
@@ -861,6 +862,7 @@ impl Agent {
             self.expanded_regions.lock().unwrap().remove(&index);
             return Err(());
         }
+        reservation.bind();
         self.published_bases.push(published);
         // 管理パス: 新しい Slot を、待っているスレッドへ回す。
         self.serve_adoptions();
@@ -935,7 +937,7 @@ impl Agent {
             }
             // 確保に失敗したら Slot を返して記録しない (対象プロセスを止めない)。
             None => match SharedRegion::new(self.config, handle.generation, thread_id) {
-                Ok(r) => r.shm().clone(),
+                Ok(r) => r.shm().reserve_slot().expect("fresh local mapping").bind(),
                 Err(_) => {
                     let _ = self.pool.cancel_claim(handle);
                     return None;

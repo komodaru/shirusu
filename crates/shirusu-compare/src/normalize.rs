@@ -347,7 +347,7 @@ impl NormTrace {
         let mut thread_ordinals: HashMap<(u64, u64, u64), usize> = HashMap::new();
         let mut threads: Vec<Vec<usize>> = Vec::new();
         let mut calls: Vec<NormCall> = Vec::new();
-        let mut pending: HashMap<(usize, u64), usize> = HashMap::new();
+        let mut pending: HashMap<(usize, u64, u32), usize> = HashMap::new();
         let mut object_calls: HashMap<ObjectKey, Vec<usize>> = HashMap::new();
         // Calls by raw call_id, in creation order (review 2026-11-14 P2-13:
         // each completion scanned every call so far).
@@ -386,7 +386,8 @@ impl NormTrace {
                 source_index: ev.index,
                 sequence: ev.sequence,
                 fully_captured: ev.capture == shirusu_trace::schema::EventCapture::Captured
-                    && ev.args_error.is_none(),
+                    && ev.args_error.is_none()
+                    && ev.fields.iter().all(|field| field.capture.is_complete()),
                 fields,
                 payload,
             }
@@ -475,7 +476,7 @@ impl NormTrace {
                 }
                 continue;
             }
-            let pkey = (thread, ev.call_id);
+            let pkey = (thread, ev.call_id, ev.api_id);
             let call_idx = match phase {
                 Phase::Enter => {
                     if let Some(&existing) = pending.get(&pkey) {
@@ -493,6 +494,14 @@ impl NormTrace {
                 }
                 _ => pending.get(&pkey).copied(),
             };
+            // When both schemas name an API, their names must agree as well.
+            // Aborted events can omit their schema.
+            let call_idx = call_idx.filter(|&idx| {
+                let origin = calls[idx].enter.as_ref().or(calls[idx].leave.as_ref());
+                let name =
+                    origin.and_then(|n| view.events[rank[&n.source_index]].api_name.as_ref());
+                name.zip(ev.api_name.as_ref()).is_none_or(|(a, b)| a == b)
+            });
             let idx = match call_idx {
                 Some(i) => i,
                 None => {

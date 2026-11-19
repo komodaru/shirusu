@@ -722,7 +722,7 @@ fn repair_truncated_tail_recovers_events() {
     assert_eq!(code, Some(0), "stderr: {stderr}");
     assert!(stdout.contains("truncated_tail"), "{stdout}");
     assert!(
-        stdout.contains("events: 4 recovered, 0 lost (scanned 4)"),
+        stdout.contains("events: 4 recovered, unknown (at least 0) lost (scanned 4)"),
         "{stdout}"
     );
     let repaired = std::fs::read(dir.join("repaired.trace")).unwrap();

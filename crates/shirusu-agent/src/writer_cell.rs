@@ -546,12 +546,14 @@ mod tests {
                     let (c, b) = (Arc::clone(&cell), Arc::clone(&barrier));
                     std::thread::spawn(move || {
                         b.wait();
-                        let won = c.try_owner().is_some();
+                        drop(c.try_owner());
+                        let won = c.owned_by_current_thread();
                         if !won {
                             c.exclusive(|_| ())
                                 .done()
                                 .expect("owner alive or exited cleanly");
                         }
+                        b.wait(); // Keep owner thread identities live until all observations finish.
                         usize::from(won)
                     })
                 })

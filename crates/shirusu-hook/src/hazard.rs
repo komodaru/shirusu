@@ -194,31 +194,41 @@ mod tests {
         release(live);
     }
 
-    /// Scanners racing over one terminated hazard withdraw it once and never
-    /// touch a slot that was claimed anew meanwhile (no lock orders them).
+    /// Only one scanner withdraws a terminated owner's publication.
     #[test]
     fn racing_scanners_withdraw_a_dead_hazard_once() {
-        const RT: usize = 0x2000; // compared, never dereferenced
         for _ in 0..20 {
-            let index = std::thread::spawn(|| {
-                let index = claim().unwrap();
-                publish(index, RT as *const HookRuntime);
-                index
-            })
-            .join()
-            .unwrap();
-            let withdrawn: usize = (0..4)
-                .map(|_| {
-                    std::thread::spawn(move || {
-                        usize::from(reap_if_terminated(&SLOTS[index as usize]))
+            // Keep this slot private so another test cannot claim it between
+            // two scans and legitimately cause a second withdrawal.
+            let slot = HazardSlot::new();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    slot.claimed.store(true, Ordering::Relaxed);
+                    slot.owner
+                        .store(ThreadKey::current().unwrap().to_bits(), Ordering::Release);
+                    slot.runtime
+                        .store(std::ptr::dangling_mut(), Ordering::Release);
+                });
+            });
+            let start = std::sync::Barrier::new(4);
+            let withdrawn = std::thread::scope(|scope| {
+                let scanners: Vec<_> = (0..4)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            usize::from(reap_if_terminated(&slot))
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-                .map(|t| t.join().unwrap())
-                .sum();
+                    .collect();
+                scanners
+                    .into_iter()
+                    .map(|t| t.join().unwrap())
+                    .sum::<usize>()
+            });
             assert_eq!(withdrawn, 1);
-            assert_eq!(count(RT as *const HookRuntime), 0);
+            assert!(slot.runtime.load(Ordering::Acquire).is_null());
+            assert!(!slot.claimed.load(Ordering::Acquire));
+            assert_eq!(slot.owner.load(Ordering::Acquire), 0);
         }
     }
 }

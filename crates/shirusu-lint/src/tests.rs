@@ -152,15 +152,22 @@ fn commenting_out_either_ci_lint_invocation_is_detected() {
     let real = Tree::repo(&root());
     let path = "scripts/ci/linux.sh";
     let script = real.text(path);
-    for command in script
-        .lines()
-        .filter(|s| s.starts_with("cargo run -q -p shirusu-lint"))
-    {
-        let mut tree = Tree::repo(&root());
-        tree.overlay.insert(
-            path.into(),
-            Some(script.replace(&format!("\n{command}\n"), &format!("\n# {command}\n"))),
-        );
-        assert!(!Rule::Required.check(&tree).is_empty(), "{command}");
+    let lines: Vec<_> = script.lines().collect();
+    let commands: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("cargo run -q -p shirusu-lint"))
+        .collect();
+    assert_eq!(commands.len(), 2);
+    for (index, command) in commands {
+        let commented = format!("# {command}");
+        let mut modified = lines.clone();
+        modified[index] = &commented;
+        for newline in ["\n", "\r\n"] {
+            let mut tree = Tree::repo(&root());
+            tree.overlay
+                .insert(path.into(), Some(modified.join(newline)));
+            assert!(!Rule::Required.check(&tree).is_empty(), "{command}");
+        }
     }
 }

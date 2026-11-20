@@ -599,15 +599,15 @@ mod win {
         };
         // L01: Inline Hook を IAT の後で設置する。IAT が 0 件でも
         // GetProcAddress 経由の呼び出しは Inline で捕捉できるため、
-        // NoTargets の場合も試みる。Inline は API ごとの best-effort
-        // であり、見送りがあっても初期化は成功として継続する。
+        // NoTargets の場合も試みる。Inline は API ごとに独立に
+        // 設置し、設置できない API があっても初期化は成功として継続する。
         // SAFETY: 初期化専用スレッドからの呼び出し。対象のメイン
         // スレッドは Host が停止させたままか、アタッチ時は他スレッドを
         // 一時停止してからパッチするため、競合しない。
         let inline_outcome = unsafe { engine::install_inline_hooks(&rt) };
         crate::diagnostics::report_inline(&inline_outcome);
         // L02: COM Factory 関数の Inline Hook を Inline の後で設置する。
-        // Inline と同じく best-effort であり、見送りがあっても初期化は
+        // Inline と同じく API ごとに独立であり、見送りがあっても初期化は
         // 成功として継続する。Factory 関数が 1 つもフックできなくても、
         // Win32 API の記録は続く（COM メソッドの記録だけが無い）。
         // SAFETY: 初期化専用スレッドからの呼び出し（L01 と同じ前提）。
@@ -617,7 +617,7 @@ mod win {
         // SAFETY: called from the dedicated initialization thread, outside DllMain, before any factory hook exists (same premise as L01).
         let com_factory_outcome = unsafe { engine::install_com_factory_hooks(&rt) };
         // L14: WinRT アクティベーション関数の Inline Hook を COM Factory
-        // の後で設置する。COM Factory と同じく best-effort であり、
+        // の後で設置する。COM Factory と同じく API ごとに独立であり、
         // 見送りがあっても初期化は成功として継続する。アクティベーション
         // 関数が 1 つもフックできなくても、Win32 API と COM の記録は続く
         // （WinRT の記録だけが無い）。
@@ -625,7 +625,7 @@ mod win {
         let winrt_activation_outcome = unsafe { engine::install_winrt_activation_hooks(&rt) };
         // L15: 内部 API (Nt*) の Inline Hook を詳細調査モードでのみ設置
         // する。無効な場合は設置自体をしない（通常モードの Detour
-        // オーバーヘッドは増えない）。Inline と同じく best-effort であり、
+        // オーバーヘッドは増えない）。Inline と同じく API ごとに独立であり、
         // 見送りがあっても初期化は成功として継続する。内部 API が 1 つも
         // フックできなくても、Win32 API の記録は続く（内部呼び出しの記録
         // だけが無い）。詳細調査モードが有効でも、記録可否はランタイムの
@@ -638,7 +638,7 @@ mod win {
             engine::InlineInstallOutcome::default()
         };
         // L16: コールバック検出フック関数の Inline Hook を WinRT の後で
-        // 設置する。COM Factory と同じく best-effort であり、見送りが
+        // 設置する。COM Factory と同じく API ごとに独立であり、見送りが
         // あっても初期化は成功として継続する。1 つもフックできなくても、
         // Win32 API と COM の記録は続く（コールバックの記録だけが無い）。
         // SAFETY: 初期化専用スレッドからの呼び出し（L01 と同じ前提）。

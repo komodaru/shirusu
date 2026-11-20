@@ -52,7 +52,7 @@ pub mod flags {
     pub const CAPTURE_LIMIT_EXCEEDED: u16 = 1 << 3;
     /// 背圧で落とした。
     pub const DROPPED_BY_BACKPRESSURE: u16 = 1 << 4;
-    /// 未対応の取得。
+    /// 取得の手段を持たない値（記録は値の種類だけ）。
     pub const UNSUPPORTED: u16 = 1 << 5;
     /// Snapshot の同時点性は保証されない（Fragment 取得中の書換えがあり得る）。
     pub const SNAPSHOT_NOT_COHERENT: u16 = 1 << 6;

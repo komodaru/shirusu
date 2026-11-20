@@ -149,7 +149,7 @@ pub(super) fn write_usize(addr: u64, value: usize) -> Result<(), ()> {
 /// （KNOWN_FACTORIES の `hookable` が false）。
 ///
 /// IAT フックの後・Inline Hook とは別に呼ぶこと。設置は Factory 関数
-/// ごとの best-effort: 1 件の見送りは他に影響しない。ただし他スレッドの
+/// ごとに独立: 1 件の見送りは他に影響しない。ただし他スレッドの
 /// 停止に失敗した場合は全体を見送る（L01 と同じ理由）。
 ///
 /// # Safety
@@ -221,7 +221,7 @@ pub struct WinRtActivationOutcome {
 ///
 /// COM Factory 関数と同じ手順（全スレッド一時停止＋命令ポインタ検査＋
 /// トランポリン近傍確保）で、IAT フックの後・Inline Hook とは別に呼ぶ
-/// こと。設置は関数ごとの best-effort で、見送りがあっても初期化は
+/// こと。設置は関数ごとに独立で、見送りがあっても初期化は
 /// 成功として継続する（COM Factory と同じ扱い）。
 ///
 /// # Safety
@@ -294,7 +294,7 @@ pub struct CallbackOutcome {
 ///
 /// COM Factory 関数・WinRT アクティベーション関数と同じ手順（全スレッド
 /// 一時停止＋命令ポインタ検査＋トランポリン近傍確保）で、IAT フックの後・
-/// Inline Hook とは別に呼ぶこと。設置は関数ごとの best-effort で、見送りが
+/// Inline Hook とは別に呼ぶこと。設置は関数ごとに独立で、見送りが
 /// あっても初期化は成功として継続する（COM Factory と同じ扱い）。
 ///
 /// # Safety

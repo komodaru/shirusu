@@ -46,7 +46,7 @@ function Get-StepTimeout {
     return [Math]::Min($Requested, $left)
 }
 
-# Dump a process and all its descendants (best effort). Children are found
+# Dump a process and all its descendants (a failed dump does not fail the step). Children are found
 # before anything is dumped, so a dump never races the tree's exit.
 function Save-ProcessTree {
     param(
@@ -105,7 +105,7 @@ function Invoke-NativeWithTimeout {
     } finally { $process.Dispose() }
 }
 
-# Write a full minidump of a running process (best effort, review 2026-11-14
+# Write a full minidump of a running process (a failure does not fail the step, review 2026-11-14
 # V4/V11): a hang then leaves something to read instead of only a timeout.
 function Save-ProcessDump {
     param(

@@ -106,6 +106,17 @@ fn fixture(r: Rule) -> Fixture {
             ],
             mutate: ("Cargo.toml", |t| Some(t + "\n[profile.release]\npanic = \"abort\"\n")),
         },
+        Rule::EscapeComment => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/lib.rs", "// TO\x44O: 残り\nfn f() {} // for now\n/// コールバックは未対応。\nfn g() { eprintln!(\"not implemented\"); }\n"),
+                ("scripts/ci/x.ps1", "# best effort\n"),
+            ],
+            good: &[
+                ("crates/shirusu-x/src/lib.rs", "// Unsupported (値の種類の名前)\n// (not supported, as on Windows)\nfn f() { let s = r\"for now\"; }\n"),
+                ("scripts/ci/x.sh", "echo \"# for now\"  # 実測どおり\n"),
+            ],
+            mutate: ("crates/shirusu-transport/src/shm.rs", |t| Some(t + "\n// for now: 0\nfn _later() {}\n")),
+        },
         Rule::ShellSpecialVar => Fixture {
             bad: &[
                 ("scripts/ci/x.sh", "#!/bin/bash\nGROUPS=gdi\nexport RANDOM=4\nSECONDS=0 cargo test\nPIPESTATUS+=(1)\n"),
@@ -232,7 +243,12 @@ fn commenting_out_either_ci_lint_invocation_is_detected() {
 #[test]
 fn each_regression_spelling_alone_is_found() {
     // (一つの綴りが見つかっても、見逃した別の綴りが隠れないように一件ずつ)
-    for r in [Rule::RwxPages, Rule::PanicUnwindKept, Rule::ShellSpecialVar] {
+    for r in [
+        Rule::RwxPages,
+        Rule::PanicUnwindKept,
+        Rule::ShellSpecialVar,
+        Rule::EscapeComment,
+    ] {
         for one in fixture(r).bad.chunks(1) {
             assert!(
                 !r.check(&made_up(one)).is_empty(),
@@ -266,4 +282,75 @@ fn bash_drops_an_assignment_to_groups() {
     {
         assert_ne!(String::from_utf8_lossy(&o.stdout).trim(), "gdi");
     }
+}
+
+#[test]
+fn each_escape_word_is_found_alone() {
+    for w in [
+        concat!("TO", "DO: later"),
+        concat!("FIX", "ME"),
+        concat!("HA", "CK"),
+        "zero for now",
+        "for the moment",
+        "a simplified model",
+        "not implemented",
+        "unimplemented",
+        "not ported",
+        "not modelled yet",
+        "best effort",
+        "best-effort install",
+        "good enough",
+        "stubbed",
+        "a logged stub",
+        "a workaround",
+        "とりあえず",
+        "簡略化",
+        "未実装",
+        "未対応",
+        "暫定",
+        "ひとまず",
+        "手抜き",
+        "近似",
+        "仮実装",
+        "dropped: unsupported",
+        "not supported",
+        "an approximation",
+    ] {
+        assert!(escape::is_escape(w, w), "{w:?} が見つからない");
+    }
+}
+
+#[test]
+fn windows_answers_with_evidence_pass() {
+    for w in [
+        "binary labels: not supported, as on Windows",
+        "Unsupported (ValueKind の名前)",
+        "RCP: approximations, each vendor's own (x86)",
+        "D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES",
+        "Simplify(options)",
+        "既定値は省略する",
+        "not supported (実測)",
+    ] {
+        assert!(!escape::is_escape(w, w), "{w:?} を誤って見つけた");
+    }
+}
+
+#[test]
+fn a_known_site_covers_as_many_as_it_is_listed() {
+    let one = made_up(&[
+        ("crates/shirusu-x/src/lib.rs", "// for now\n"),
+        (
+            escape::KNOWN,
+            "crates/shirusu-x/src/lib.rs\t// for now\t直す\n",
+        ),
+    ]);
+    assert!(escape::escape_comment(&one).is_empty());
+    let two = made_up(&[
+        ("crates/shirusu-x/src/lib.rs", "// for now\n// for now\n"),
+        (
+            escape::KNOWN,
+            "crates/shirusu-x/src/lib.rs\t// for now\t直す\n",
+        ),
+    ]);
+    assert_eq!(escape::escape_comment(&two).len(), 1);
 }

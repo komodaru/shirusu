@@ -334,7 +334,7 @@ proptest! {
     ) {
         let (_rg, mut w, mut rd) = setup(3, 64);
         let mut writer_dropped_enters: HashSet<u64> = HashSet::new();
-        let mut open: HashMap<u64, u64> = HashMap::new(); // call -> 未対応 Enter 数
+        let mut open: HashMap<u64, u64> = HashMap::new(); // call -> 対応する Leave の無い Enter 数
         let mut received_enters = 0u64;
         let mut received_leaves = 0u64;
         let mut last_seq = 0u64;
@@ -408,7 +408,7 @@ proptest! {
                 _ => {}
             }
         }
-        // 会計: 受信 Enter = 受信 Leave + 終了不明 (未対応) の合計と一致する
+        // 会計: 受信 Enter = 受信 Leave + 終了不明 (Leave の無いもの) の合計と一致する
         let unterminated: u64 = open.values().sum();
         prop_assert_eq!(received_enters, received_leaves + unterminated);
     }

@@ -332,7 +332,7 @@ impl CommittedChunk {
     pub fn descriptor_count(&self) -> usize {
         self.descriptors.len() / 64
     }
-    /// Approximate owned bytes (for queue budgets).
+    /// The bytes it owns: control, descriptors and payload (for queue budgets).
     pub fn owned_bytes(&self) -> usize {
         self.control.len() + self.descriptors.len() + self.payload.len()
     }

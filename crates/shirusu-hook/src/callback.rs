@@ -170,7 +170,7 @@ impl<const N: usize> CallbackProcTable<N> {
     /// 元の WndProc をスロットへ登録し、スロット番号を返す。既に登録済みの
     /// 元プロシージャは既存のスロットを返す（重複登録・二重ラップを防ぐ）。
     /// 空きが無ければ None を返す（呼び出し側はラップせず素通しすること）。
-    /// 0 は登録しない。並行する同一プロシージャの登録は best-effort で
+    /// 0 は登録しない。並行する同一プロシージャの登録は
     /// 重複しうる（どちらも正しい対応であり、実害は無い）。
     pub fn wrap(&self, original: usize) -> Option<usize> {
         self.wrap_with(original, false)

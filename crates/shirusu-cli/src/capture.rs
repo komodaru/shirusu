@@ -279,7 +279,7 @@ pub(crate) fn default_attach_output(pid: u32) -> String {
 /// 側の仕事のため、ここでは `microsoft_signed: None` の証拠で分類する
 /// （対象 exe はシステム配置でない限り Application になる）。
 /// L23: Host が capture 開始時に全モジュールを列挙・署名検証して
-/// `modules` を置き換えるため、ここのエントリは暫定のものである
+/// `modules` を置き換えるため、ここのエントリは置き換えまでの初期値である
 /// （列挙に失敗した場合はこちらが残る。CLI の上書きは置き換え時にも
 /// 温存される）。
 /// L13: 起動対象の exe の PE インポートテーブルから静的依存を読み、

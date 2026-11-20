@@ -1,0 +1,12 @@
+# shirusu-lint escape-comment の既知の箇所 (2026-11-20、スレッド「コメントで逃げた実装を作りきる」): ファイル<TAB>コメント<TAB>直すこと。直したら行を消す (減る一方)
+crates/shirusu-compare/src/diff.rs	// --- オブジェクト非関与と未対応の生成呼び出し: スレッドごとの整列比較 ---	逃げ: 正しい動作まで実装する
+crates/shirusu-hook/src/callback.rs	//!   タイマープロシージャ、列挙コールバックは未対応。`CallbackKind` に	逃げ: 正しい動作まで実装する
+crates/shirusu-hook/src/callback.rs	//! - `GetClassInfoW/A` / `GetClassInfoExW/A` 経由の読み戻しは未対応。	逃げ: 正しい動作まで実装する
+crates/shirusu-hook/src/com.rs	//! tables and derived methods remain unsupported; Host reports partial Coverage.	逃げ: 正しい動作まで実装する
+crates/shirusu-hook/src/com.rs	// 未知の IID は None。カスタムインターフェイスは未対応。	逃げ: 正しい動作まで実装する
+crates/shirusu-hook/src/engine/com_install.rs	/// Detour は設置しない。カスタムインターフェイスは未対応）。	逃げ: 正しい動作まで実装する
+crates/shirusu-probe/src/reduce.rs	/// Timeout, capture loss, unsupported operation or invalid prerequisites.	逃げ: 正しい動作まで実装する
+crates/shirusu-probe/src/replay.rs	/// Validate the entire source first: unsupported side effects cannot be discarded	逃げ: 正しい動作まで実装する
+crates/shirusu-test/src/prereq.rs	//!   `resolve` と同じ近似）。	逃げ: 正しい動作まで実装する
+crates/shirusu-test/src/runner_exec.rs	/// BOOL and void returns. None means an unsupported signature; Some(None)	逃げ: 正しい動作まで実装する
+crates/shirusu-test/src/runner_exec.rs	/// しない）。引数の個数違いは未対応として呼ばない。	逃げ: 正しい動作まで実装する

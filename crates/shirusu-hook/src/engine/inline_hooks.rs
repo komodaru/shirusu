@@ -1156,7 +1156,7 @@ pub unsafe fn install_inline_hooks(rt: &HookRuntime) -> InlineInstallOutcome {
 /// ntdll を直接インポートしていなくても、Inline Hook で捕捉できる）。
 /// 詳細調査モードが無効な場合、Agent DLL はこれを呼ばない（設置自体を
 /// しないため、通常モードの Detour オーバーヘッドは増えない）。
-/// 設置は API ごとの best-effort であり、見送りがあっても初期化は成功
+/// 設置は API ごとに独立で、見送りがあっても初期化は成功
 /// として継続する（L01 と同じ扱い）。
 ///
 /// # Safety
@@ -1173,7 +1173,7 @@ pub unsafe fn install_internal_inline_hooks(rt: &HookRuntime) -> InlineInstallOu
 /// `original` を呼ぶため、IAT 経由・`GetProcAddress` 経由のどちらの
 /// 呼び出しもトランポリン経由で元の関数へ届く。
 ///
-/// 設置は API ごとの best-effort: 1 件の見送りは他に影響しない。
+/// 設置は API ごとに独立: 1 件の見送りは他に影響しない。
 /// ただし他スレッドの停止に失敗した場合は全体を見送る（パッチ中の
 /// 実行と競合させないため）。呼び出し側は `skipped` を Coverage へ写す。
 ///

@@ -41,7 +41,7 @@ pub enum InlineRefusal {
     DecodeFailed,
     /// 再配置できない命令を含む（BlockEncoder の拒否）。
     Unrelocatable(String),
-    /// 未対応のビット数。
+    /// 32 と 64 以外のビット数。
     InvalidBitness(u32),
 }
 

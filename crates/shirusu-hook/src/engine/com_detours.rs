@@ -94,7 +94,7 @@ pub(super) type CoGetClassObjectFn = unsafe extern "system-unwind" fn(
 
 /// Factory 呼び出しが返したインターフェイスを追跡対象に加え、既知
 /// インターフェイスなら vtable 複製による Detour を設置する。
-/// 設置の成否は呼び出しの成否に影響しない（best-effort）。
+/// 設置の成否は呼び出しの成否に影響しない（呼び出しは常に元の結果を返す）。
 pub(super) fn on_factory_result(
     rt: &Arc<HookRuntime>,
     factory: &'static str,

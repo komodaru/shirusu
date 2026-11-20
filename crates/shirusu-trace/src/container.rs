@@ -250,8 +250,8 @@ pub fn raw_header_crc_matches(raw: &RawBlockHeader, header_bytes: &[u8], payload
 }
 
 /// チャンクを Zstd フレームへ圧縮する。ruzstd の符号化は `Fastest`
-/// （実 LZ 圧縮）と `Uncompressed`（Raw ブロック）のみが実装されて
-/// おり、`Default` 等は unimplemented になるため使わない。
+/// （実 LZ 圧縮）と `Uncompressed`（Raw ブロック）の符号化器だけを
+/// 持ち、`Default` 等は ruzstd が panic するため使わない。
 pub fn compress_chunk(raw: &[u8]) -> Vec<u8> {
     ruzstd::encoding::compress_to_vec(raw, ruzstd::encoding::CompressionLevel::Fastest)
 }

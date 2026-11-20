@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod escape;
 mod regress;
 mod review;
 
@@ -43,10 +44,11 @@ enum Rule {
     RwxPages,
     PanicUnwindKept,
     ShellSpecialVar,
+    EscapeComment,
 }
 
 impl Rule {
-    const ALL: [Rule; 13] = [
+    const ALL: [Rule; 14] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -60,6 +62,7 @@ impl Rule {
         Rule::RwxPages,
         Rule::PanicUnwindKept,
         Rule::ShellSpecialVar,
+        Rule::EscapeComment,
     ];
 
     fn id(self) -> &'static str {
@@ -77,6 +80,7 @@ impl Rule {
             Rule::RwxPages => "rwx-pages",
             Rule::PanicUnwindKept => "panic-unwind-kept",
             Rule::ShellSpecialVar => "shell-special-var",
+            Rule::EscapeComment => "escape-comment",
         }
     }
 
@@ -95,6 +99,7 @@ impl Rule {
             Rule::RwxPages => "書き込みと実行が同時にできるページを作らない (a12dc8e、レビュー 2026-11-14 P3-6: トランポリンが RWX のまま残った): 書いてから PAGE_EXECUTE_READ に。例外はパッチを書く間だけの inline_hooks.rs の一か所",
             Rule::PanicUnwindKept => "panic=abort にしない: Agent DLL の contain_panic と CallGuard の catch_unwind は巻き戻しで panic を止める (masu の 82cdd0d0 は panic=abort で catch_unwind が効かず落ちた)",
             Rule::ShellSpecialVar => "bash の特殊変数 (GROUPS、RANDOM、SECONDS..) と PowerShell の自動変数 ($input、$args、$Host、$PID、$Error..) に代入しない (masu の bench.yml が入力を GROUPS で渡していた): 自分の名前を付ける",
+            Rule::EscapeComment => "正しい動作の代わりに近道をコメントに書かない (ユーザーの決まり 2026-11-20): to-do の印、for now、簡略化、not implemented、スタブ、近似、best effort を書かずに実装する。not supported / 近似 / 無視は同じコメントに Windows の根拠 (実測、golden、仕様) があるときだけ。既にある箇所は scripts/ci/escape-known.txt (減る一方)",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -114,6 +119,7 @@ impl Rule {
             Rule::RwxPages => regress::rwx_pages(tree),
             Rule::PanicUnwindKept => regress::panic_unwind_kept(tree),
             Rule::ShellSpecialVar => regress::shell_special_var(tree),
+            Rule::EscapeComment => escape::escape_comment(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {

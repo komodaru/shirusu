@@ -156,7 +156,7 @@ pub(super) fn mutation_cases(tree: &Tree) -> Hits {
     if !tree.has_or_real(SCRIPT) {
         return hits;
     }
-    let cases = match cases(&tree.text(SCRIPT)) {
+    let cases = match cases(&tree.text(SCRIPT).replace("\r\n", "\n")) {
         Ok(c) if !c.is_empty() => c,
         Ok(_) => {
             hits.push((SCRIPT.into(), 1, "cases の表が空".into()));
@@ -181,7 +181,8 @@ pub(super) fn mutation_cases(tree: &Tree) -> Hits {
                 format!("{}: {} がない", c.label, c.file),
             ));
         } else {
-            let text = tree.text(&c.file);
+            // Windows の checkout は CRLF になる。夜間の表は Linux で動くので、改行を LF に揃えて数える
+            let text = tree.text(&c.file).replace("\r\n", "\n");
             for (old, _) in &c.replacements {
                 let n = text.matches(old.as_str()).count();
                 if n != 1 {
@@ -242,6 +243,20 @@ mod tests {
             .contains("}\n    generated_detour(86,"));
         let process = cases.iter().find(|c| c.label == "process").unwrap();
         assert_eq!(process.replacements.len(), 2);
+    }
+
+    #[test]
+    fn crlf_checkouts_count_replacements_like_lf() {
+        let mut tree = super::super::Tree::repo(&super::super::root());
+        for file in [SCRIPT, "crates/shirusu-hook/src/engine_generated.inc"] {
+            let crlf = tree.text(file).replace("\r\n", "\n").replace('\n', "\r\n");
+            tree.overlay.insert(file.into(), Some(crlf));
+        }
+        assert!(
+            mutation_cases(&tree).is_empty(),
+            "{:?}",
+            mutation_cases(&tree)
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@ use shirusu_trace::model::{EventBatch, TraceEvent};
 use shirusu_trace::proto::{CaptureEnvironment, LossRecord, SessionMetadata};
 use shirusu_trace::reader::ReadTrace;
 use shirusu_trace::schema::{
-    make_schema, CapturedValue, EventCapture, Ty, TypedValue, ValueCapture,
+    make_schema, CapturedValue, EventCapture, LastErrorMeaning, Ty, TypedValue, ValueCapture,
 };
 use shirusu_trace::writer::FinalizationInfo;
 use shirusu_trace::{PayloadRef, TraceWriter};
@@ -414,6 +414,9 @@ impl Builder {
     }
 }
 
+/// last_error の flags は LastError の意味条件を宣言する: 成功時の値を Stale と書くには
+/// Schema の宣言が要る (`ValueCapture::is_complete_for`)。宣言のない Field の Stale は
+/// 取得失敗と同じく数えられ、規則が「取得できていない」ことで黙って通ってしまう。
 pub fn all_schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
     vec![
         make_schema(
@@ -430,7 +433,11 @@ pub fn all_schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
             "kernel32!CreateFileW/leave",
             vec![
                 ("return".into(), Ty::U64, 0),
-                ("last_error".into(), Ty::U32, 0),
+                (
+                    "last_error".into(),
+                    Ty::U32,
+                    LastErrorMeaning::WhenReturnIsInvalidHandle.flags(),
+                ),
             ],
         ),
         make_schema(
@@ -449,7 +456,11 @@ pub fn all_schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
                 ("return".into(), Ty::I32, 0),
                 ("lpNumberOfBytesRead".into(), Ty::U32, 0),
                 ("data".into(), Ty::Bytes, 0),
-                ("last_error".into(), Ty::U32, 0),
+                (
+                    "last_error".into(),
+                    Ty::U32,
+                    LastErrorMeaning::WhenReturnIsFalse.flags(),
+                ),
             ],
         ),
         make_schema(
@@ -467,7 +478,11 @@ pub fn all_schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
             vec![
                 ("return".into(), Ty::I32, 0),
                 ("lpNumberOfBytesWritten".into(), Ty::U32, 0),
-                ("last_error".into(), Ty::U32, 0),
+                (
+                    "last_error".into(),
+                    Ty::U32,
+                    LastErrorMeaning::WhenReturnIsFalse.flags(),
+                ),
             ],
         ),
         make_schema(
@@ -480,7 +495,11 @@ pub fn all_schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
             "kernel32!CloseHandle/leave",
             vec![
                 ("return".into(), Ty::I32, 0),
-                ("last_error".into(), Ty::U32, 0),
+                (
+                    "last_error".into(),
+                    Ty::U32,
+                    LastErrorMeaning::WhenReturnIsFalse.flags(),
+                ),
             ],
         ),
         make_schema(17, "test!Ping/enter", vec![("x".into(), Ty::U32, 0)]),

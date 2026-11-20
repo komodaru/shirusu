@@ -52,7 +52,7 @@ use shirusu_transport_win::{
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordResult {
@@ -456,9 +456,14 @@ impl Agent {
         let clock = Arc::new(EventClock::new(notify));
         self.space_clocks
             .write()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(thread_id, Arc::clone(&clock));
-        let state = self.threads.read().unwrap().get(&thread_id).cloned();
+        let state = self
+            .threads
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&thread_id)
+            .cloned();
         if let Some(state) = state {
             if !state.retired.load(Ordering::Acquire) {
                 let _ = state
@@ -487,7 +492,10 @@ impl Agent {
     }
     /// その Ring に `space_available` を受け取り済みかどうか。
     pub fn space_available_attached(&self, thread_id: u64) -> bool {
-        self.space_clocks.read().unwrap().contains_key(&thread_id)
+        self.space_clocks
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(&thread_id)
     }
     pub fn pool(&self) -> &Arc<SlotPool> {
         &self.pool
@@ -797,7 +805,12 @@ impl Agent {
         served
     }
     fn state_for_slow(&self, thread_id: u64) -> Option<Arc<ThreadSlotState>> {
-        let found = self.threads.read().unwrap().get(&thread_id).cloned();
+        let found = self
+            .threads
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&thread_id)
+            .cloned();
         if let Some(s) = found {
             if !s.retired.load(Ordering::Acquire) {
                 if !s.writer.owner_terminated() {
@@ -855,11 +868,17 @@ impl Agent {
         let reservation = region.reserve_slot().ok_or(())?;
         let published = region.clone();
         let index = self.pool.add_slot().ok_or(())?;
-        self.expanded_regions.lock().unwrap().insert(index, region);
+        self.expanded_regions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(index, region);
         if !self.pool.publish_slot(index) {
             // 公開に失敗したら紐付けを取り消す (Slot は PREPARING のまま
             // 残るため claim はされず、記録が誤って始まることはない)。
-            self.expanded_regions.lock().unwrap().remove(&index);
+            self.expanded_regions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&index);
             return Err(());
         }
         reservation.bind();
@@ -904,7 +923,7 @@ impl Agent {
     /// 管理パス: Slot を取得し、共有領域と書き手を作って登録する。
     /// 登録表の書きロックはこの初期化の間だけ保持する (記録経路ではない)。
     fn begin_thread_state(&self, thread_id: u64) -> Option<Arc<ThreadSlotState>> {
-        let mut map = self.threads.write().unwrap();
+        let mut map = self.threads.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(s) = map.get(&thread_id) {
             if !s.retired.load(Ordering::Acquire) {
                 return Some(Arc::clone(s));
@@ -918,7 +937,7 @@ impl Agent {
         let expanded = self
             .expanded_regions
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&handle.index)
             .cloned();
         let region = match expanded {
@@ -949,7 +968,7 @@ impl Agent {
         let clock = self
             .space_clocks
             .read()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&thread_id)
             .map(|c| Arc::clone(c) as Arc<dyn Clock>)
             .unwrap_or_else(|| Arc::clone(&self.default_clock));
@@ -988,7 +1007,7 @@ impl Agent {
     /// テスト/Host 連携用: スレッドの共有領域。実体を共有するので、
     /// thread_end の後も返した値が生きている間は解放されない。
     pub fn thread_region(&self, thread_id: u64) -> Option<Shm> {
-        let map = self.threads.read().unwrap();
+        let map = self.threads.read().unwrap_or_else(PoisonError::into_inner);
         map.get(&thread_id).map(|s| s.region.clone())
     }
     pub fn thread_config(&self) -> RingConfig {
@@ -1378,7 +1397,12 @@ impl Agent {
     /// DLL_THREAD_DETACH 相当: DRAINING へ移行するだけ（待たない）。領域は Host 回収まで保持する。
     /// 管理操作であり、対象 Ring の書き手 Mutex だけを短く取る (全体ロックは使わない)。
     pub fn thread_detach(&self, thread_id: u64) -> bool {
-        let state = self.threads.read().unwrap().get(&thread_id).map(Arc::clone);
+        let state = self
+            .threads
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&thread_id)
+            .map(Arc::clone);
         if let Some(s) = state {
             let _ = s.writer.exclusive(|w| w.mark_detached());
             return self.pool.begin_detach(&s.handle);
@@ -1391,7 +1415,11 @@ impl Agent {
     /// 外し、進行中の記録があればその Ring の書き手ロックで完了を待つ。
     /// TLS キャッシュは引退印の確認で自動的に無効化される。
     pub fn thread_forget(&self, thread_id: u64) {
-        let removed = self.threads.write().unwrap().remove(&thread_id);
+        let removed = self
+            .threads
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&thread_id);
         if let Some(state) = removed {
             state.retired.store(true, Ordering::Release);
             // Exclusive access waits for an in-flight record to finish (or
@@ -1421,7 +1449,11 @@ impl Agent {
         if let Some(t) = adoption::AdoptTid::new(thread_id) {
             self.adoptions.clear(t);
         }
-        let removed = self.threads.write().unwrap().remove(&thread_id);
+        let removed = self
+            .threads
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&thread_id);
         let Some(state) = removed else {
             return false;
         };
@@ -1441,9 +1473,15 @@ impl Agent {
         }
         // この Ring への space_available 結線はこの incarnation の
         // ものであるため外す (再利用時は ensure 経路が結び直す)。
-        self.space_clocks.write().unwrap().remove(&thread_id);
+        self.space_clocks
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&thread_id);
         self.pool.begin_detach(&state.handle);
-        self.pending_reclaim.lock().unwrap().push(state);
+        self.pending_reclaim
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(state);
     }
 
     /// 強制終了したスレッドの Ring を隔離して回収待ちへ送る (レビュー P0)。
@@ -1468,7 +1506,7 @@ impl Agent {
         let terminated: Vec<(u64, Arc<ThreadSlotState>)> = self
             .threads
             .read()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .filter(|(_, s)| s.writer.owner_terminated())
             .map(|(tid, s)| (*tid, Arc::clone(s)))
@@ -1484,7 +1522,7 @@ impl Agent {
     /// False when another state replaced it meanwhile.
     fn reap_thread(&self, tid: u64, state: &Arc<ThreadSlotState>) -> bool {
         let removed = {
-            let mut map = self.threads.write().unwrap();
+            let mut map = self.threads.write().unwrap_or_else(PoisonError::into_inner);
             match map.get(&tid) {
                 Some(s) if Arc::ptr_eq(s, state) => map.remove(&tid),
                 _ => None,
@@ -1531,7 +1569,10 @@ impl Agent {
         reclaimed
     }
     fn poll_reclaims_locked(&self) -> usize {
-        let mut pending = self.pending_reclaim.lock().unwrap();
+        let mut pending = self
+            .pending_reclaim
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let mut reclaimed = 0usize;
         let mut i = 0;
         while i < pending.len() {
@@ -1561,7 +1602,10 @@ impl Agent {
 
     /// 回収待ちの Slot 数 (観測用)。
     pub fn pending_reclaim_count(&self) -> usize {
-        self.pending_reclaim.lock().unwrap().len()
+        self.pending_reclaim
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 }
 

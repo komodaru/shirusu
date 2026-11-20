@@ -91,7 +91,7 @@ impl Rule {
             Rule::BuildOutput => "ビルド成果物を git に入れない (target/ 以下、コンパイル・圧縮済みのファイル)",
             Rule::OpaqueHandles => "Token・Guard・Slot 登録権のフィールドと生成経路を隠す",
             Rule::ReviewTests => "Trace・API・並行処理の回帰テストを残し、CI で実行する",
-            Rule::HookLockPoison => "hook のテストでないコードでロックの結果を unwrap / expect しない (55e6774、レビュー 2026-11-14 P2-9: 毒されたロックで以後の Detour がすべて panic した): `.unwrap_or_else(std::sync::PoisonError::into_inner)` で取り戻す",
+            Rule::HookLockPoison => "hook・agent・agent-dll (対象プロセスの中で動く crate) のテストでないコードでロックの結果を unwrap / expect しない (55e6774、レビュー 2026-11-14 P2-9: 毒されたロックで以後の Detour がすべて panic した): `.unwrap_or_else(std::sync::PoisonError::into_inner)` で取り戻す",
             Rule::RwxPages => "書き込みと実行が同時にできるページを作らない (a12dc8e、レビュー 2026-11-14 P3-6: トランポリンが RWX のまま残った): 書いてから PAGE_EXECUTE_READ に。例外はパッチを書く間だけの inline_hooks.rs の一か所",
             Rule::PanicUnwindKept => "panic=abort にしない: Agent DLL の contain_panic と CallGuard の catch_unwind は巻き戻しで panic を止める (masu の 82cdd0d0 は panic=abort で catch_unwind が効かず落ちた)",
             Rule::ShellSpecialVar => "bash の特殊変数 (GROUPS、RANDOM、SECONDS..) と PowerShell の自動変数 ($input、$args、$Host、$PID、$Error..) に代入しない (masu の bench.yml が入力を GROUPS で渡していた): 自分の名前を付ける",

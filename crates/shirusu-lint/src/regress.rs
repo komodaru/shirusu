@@ -60,8 +60,13 @@ fn product_rs(tree: &Tree, prefix: &str) -> Vec<String> {
 
 // --- hook-lock-poison ---------------------------------------------------------------------------
 
-/// Detour の中で動く crate (対象プロセスの中で、どのスレッドからでも呼ばれる)
-pub(super) const HOOK: &str = "crates/shirusu-hook/src/";
+/// 対象プロセスの中で動く crate (Detour、Agent、Agent DLL: どのスレッドからでも呼ばれ、
+/// 一つの panic でロックが毒されると以後のすべての呼び出しが panic する)
+pub(super) const IN_TARGET: [&str; 3] = [
+    "crates/shirusu-hook/src/",
+    "crates/shirusu-agent/src/",
+    "crates/shirusu-agent-dll/src/",
+];
 
 /// テストでない場所の `x.lock().unwrap()` / `.read().expect(..)` / `.write().unwrap()`
 #[derive(Default)]
@@ -96,7 +101,7 @@ impl<'a> Visit<'a> for LockUnwrap {
 
 pub(super) fn hook_lock_poison(tree: &Tree) -> Hits {
     let mut out = Hits::new();
-    for f in product_rs(tree, HOOK) {
+    for f in IN_TARGET.iter().flat_map(|p| product_rs(tree, p)) {
         let Ok(file) = syn::parse_file(&tree.text(&f)) else {
             continue;
         };

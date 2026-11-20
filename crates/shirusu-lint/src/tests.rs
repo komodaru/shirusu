@@ -66,7 +66,7 @@ fn fixture(r: Rule) -> Fixture {
             bad: &[(
                 "crates/shirusu-hook/src/runtime.rs",
                 "fn f(&self) { let g = self.state.lock().unwrap(); let r = self.map.read().expect(\"r\"); }\nimpl X {\n    fn g(&self) { self.slot.write().unwrap().take(); }\n}\n",
-            )],
+            ), ("crates/shirusu-agent-dll/src/lib.rs", "fn shutdown() { STATE.lock().expect(\"state\").take(); }\n")],
             good: &[
                 (
                     "crates/shirusu-hook/src/runtime.rs",
@@ -74,8 +74,9 @@ fn fixture(r: Rule) -> Fixture {
                 ),
                 ("crates/shirusu-hook/src/engine/tests.rs", "fn t() { X.lock().unwrap(); }\n"),
                 ("crates/shirusu-host/src/trace_pipeline.rs", "fn f() { X.lock().unwrap(); }\n"),
+                ("crates/shirusu-agent/src/lib.rs", "fn f(&self) { self.threads.read().unwrap_or_else(PoisonError::into_inner).len(); }\n#[cfg(test)]\nmod tests {\n    fn t() { X.lock().unwrap(); }\n}\n"),
             ],
-            mutate: ("crates/shirusu-hook/src/caller.rs", |t| Some(t + "\nfn poisoned(m: &std::sync::Mutex<u32>) -> u32 { *m.lock().unwrap() }\n")),
+            mutate: ("crates/shirusu-agent/src/lib.rs", |t| Some(t.replacen(".read().unwrap_or_else(PoisonError::into_inner)", ".read().unwrap()", 1))),
         },
         Rule::RwxPages => Fixture {
             bad: &[
@@ -252,7 +253,7 @@ fn each_regression_spelling_alone_is_found() {
         Rule::HookLockPoison
             .check(&made_up(fixture(Rule::HookLockPoison).bad))
             .len(),
-        3
+        4
     );
 }
 

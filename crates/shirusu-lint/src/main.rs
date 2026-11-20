@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod regress;
 mod review;
 
 use quote::ToTokens;
@@ -38,10 +39,14 @@ enum Rule {
     Required,
     OpaqueHandles,
     ReviewTests,
+    HookLockPoison,
+    RwxPages,
+    PanicUnwindKept,
+    ShellSpecialVar,
 }
 
 impl Rule {
-    const ALL: [Rule; 9] = [
+    const ALL: [Rule; 13] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -51,6 +56,10 @@ impl Rule {
         Rule::Required,
         Rule::OpaqueHandles,
         Rule::ReviewTests,
+        Rule::HookLockPoison,
+        Rule::RwxPages,
+        Rule::PanicUnwindKept,
+        Rule::ShellSpecialVar,
     ];
 
     fn id(self) -> &'static str {
@@ -64,6 +73,10 @@ impl Rule {
             Rule::Required => "required",
             Rule::OpaqueHandles => "opaque-handles",
             Rule::ReviewTests => "review-tests",
+            Rule::HookLockPoison => "hook-lock-poison",
+            Rule::RwxPages => "rwx-pages",
+            Rule::PanicUnwindKept => "panic-unwind-kept",
+            Rule::ShellSpecialVar => "shell-special-var",
         }
     }
 
@@ -78,6 +91,10 @@ impl Rule {
             Rule::BuildOutput => "ビルド成果物を git に入れない (target/ 以下、コンパイル・圧縮済みのファイル)",
             Rule::OpaqueHandles => "Token・Guard・Slot 登録権のフィールドと生成経路を隠す",
             Rule::ReviewTests => "Trace・API・並行処理の回帰テストを残し、CI で実行する",
+            Rule::HookLockPoison => "hook のテストでないコードでロックの結果を unwrap / expect しない (55e6774、レビュー 2026-11-14 P2-9: 毒されたロックで以後の Detour がすべて panic した): `.unwrap_or_else(std::sync::PoisonError::into_inner)` で取り戻す",
+            Rule::RwxPages => "書き込みと実行が同時にできるページを作らない (a12dc8e、レビュー 2026-11-14 P3-6: トランポリンが RWX のまま残った): 書いてから PAGE_EXECUTE_READ に。例外はパッチを書く間だけの inline_hooks.rs の一か所",
+            Rule::PanicUnwindKept => "panic=abort にしない: Agent DLL の contain_panic と CallGuard の catch_unwind は巻き戻しで panic を止める (masu の 82cdd0d0 は panic=abort で catch_unwind が効かず落ちた)",
+            Rule::ShellSpecialVar => "bash の特殊変数 (GROUPS、RANDOM、SECONDS..) と PowerShell の自動変数 ($input、$args、$Host、$PID、$Error..) に代入しない (masu の bench.yml が入力を GROUPS で渡していた): 自分の名前を付ける",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -93,6 +110,10 @@ impl Rule {
             Rule::Required => required(tree),
             Rule::OpaqueHandles => review::opaque_handles(tree),
             Rule::ReviewTests => review::registered_tests(tree),
+            Rule::HookLockPoison => regress::hook_lock_poison(tree),
+            Rule::RwxPages => regress::rwx_pages(tree),
+            Rule::PanicUnwindKept => regress::panic_unwind_kept(tree),
+            Rule::ShellSpecialVar => regress::shell_special_var(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {

@@ -62,6 +62,62 @@ fn fixture(r: Rule) -> Fixture {
             good: &[(review::EMITTER, "pub struct CallToken { call_id: u64 }")],
             mutate: (review::EMITTER, |s| Some(s.replace("struct CallToken {", "struct CallToken { pub injected: u64,"))),
         },
+        Rule::HookLockPoison => Fixture {
+            bad: &[(
+                "crates/shirusu-hook/src/runtime.rs",
+                "fn f(&self) { let g = self.state.lock().unwrap(); let r = self.map.read().expect(\"r\"); }\nimpl X {\n    fn g(&self) { self.slot.write().unwrap().take(); }\n}\n",
+            )],
+            good: &[
+                (
+                    "crates/shirusu-hook/src/runtime.rs",
+                    "fn f(&self) { let g = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner); let n = s.read(&mut b).unwrap(); }\n#[cfg(all(test, windows))]\nmod tests {\n    fn t() { X.lock().unwrap(); }\n}\n",
+                ),
+                ("crates/shirusu-hook/src/engine/tests.rs", "fn t() { X.lock().unwrap(); }\n"),
+                ("crates/shirusu-host/src/trace_pipeline.rs", "fn f() { X.lock().unwrap(); }\n"),
+            ],
+            mutate: ("crates/shirusu-hook/src/caller.rs", |t| Some(t + "\nfn poisoned(m: &std::sync::Mutex<u32>) -> u32 { *m.lock().unwrap() }\n")),
+        },
+        Rule::RwxPages => Fixture {
+            bad: &[
+                ("crates/shirusu-hook/src/engine/trampoline.rs", "fn alloc() { unsafe { VirtualAlloc(null(), n, MEM_COMMIT, PAGE_EXECUTE_READWRITE) }; }\n"),
+                (regress::RWX_HOME, "fn write() { protect(t, n, PAGE_EXECUTE_READWRITE, &mut old); protect(t, n, PAGE_EXECUTE_READWRITE, &mut old); finish_inline_write(t); }\n"),
+                ("crates/shirusu-agent/src/x.rs", "const P: u32 = windows_sys::Win32::System::Memory::PAGE_EXECUTE_WRITECOPY;\n"),
+            ],
+            good: &[
+                (regress::RWX_HOME, "use x::PAGE_EXECUTE_READWRITE;\nfn write() { protect(t, n, PAGE_EXECUTE_READWRITE, &mut old); finish_inline_write(t); }\n"),
+                ("crates/shirusu-hook/src/engine.rs", "use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE};\nfn alloc() { VirtualAlloc(p, n, MEM_COMMIT, PAGE_READWRITE); VirtualProtect(p, n, PAGE_EXECUTE_READ, &mut o); }\n"),
+                ("crates/shirusu-hook/src/caller.rs", "#[cfg(all(test, windows))]\nmod tests {\n    fn t() { VirtualAlloc(p, n, MEM_COMMIT, PAGE_EXECUTE_READWRITE); }\n}\n"),
+                ("crates/shirusu-hook/src/engine/tests.rs", "fn t() { VirtualAlloc(p, n, MEM_COMMIT, PAGE_EXECUTE_READWRITE); }\n"),
+            ],
+            mutate: ("crates/shirusu-hook/src/caller.rs", |t| Some(t + "\nfn rwx() -> u32 { windows_sys::Win32::System::Memory::PAGE_EXECUTE_READWRITE }\n")),
+        },
+        Rule::PanicUnwindKept => Fixture {
+            bad: &[
+                ("Cargo.toml", "[profile.release]\npanic = \"abort\"\n"),
+                (".cargo/config.toml", "[target.x86_64-pc-windows-msvc]\nrustflags = [\"-C\", \"panic=abort\"]\n"),
+                ("scripts/ci/windows.ps1", "$env:RUSTFLAGS = '-C panic=abort'\n"),
+                (".github/workflows/ci.yml", "      - run: cargo build -Zbuild-std=std,panic_abort\n"),
+            ],
+            good: &[
+                ("Cargo.toml", "[profile.release]\nlto = true\n# panic = \"abort\" では contain_panic が効かない\n"),
+                ("scripts/ci/linux.sh", "RUSTFLAGS=\"-D warnings\" cargo test\n"),
+                ("docs/x.md", "panic=abort\n"),
+            ],
+            mutate: ("Cargo.toml", |t| Some(t + "\n[profile.release]\npanic = \"abort\"\n")),
+        },
+        Rule::ShellSpecialVar => Fixture {
+            bad: &[
+                ("scripts/ci/x.sh", "#!/bin/bash\nGROUPS=gdi\nexport RANDOM=4\nSECONDS=0 cargo test\nPIPESTATUS+=(1)\n"),
+                ("scripts/ci/x.ps1", "$input = Get-Content a\nparam([string]$Host)\nforeach ($args in $list) { }\n$PID += 1\n$Error = @()\n"),
+                (".github/workflows/ci.yml", "      - env:\n          GROUPS: ${{ inputs.groups }}\n        run: echo\n      - shell: pwsh\n        run: $input = 1\n"),
+            ],
+            good: &[
+                ("scripts/ci/x.sh", "MY_GROUPS=1\necho \"$SECONDS $UID\"\nwhile IFS=$'\\t' read -r a; do :; done\n# GROUPS=1 は捨てられる\n[ \"$x\" = RANDOM ]\n"),
+                ("scripts/ci/x.ps1", "$inputPath = 'a'\n$hostName = hostname\nif ($args.Count -eq 0) { }\nWrite-Host $PID\nif ($Error -eq $null) { }\n[int]$args[0]\n$LASTEXITCODE = 0\n# $input = 1\n"),
+                (".github/workflows/ci.yml", "      - env:\n          ASKED: ${{ inputs.groups }}\n        run: echo $GROUPS\n"),
+            ],
+            mutate: ("scripts/ci/windows.ps1", |t| Some(t + "\n$input = 'regression'\n")),
+        },
         Rule::ReviewTests => Fixture {
             bad: &[(review::DURABILITY, "/* #[test] fn partial_batches_report_the_exact_retry_suffix() {} */")],
             good: &[(review::DURABILITY, "#[test] fn partial_batches_report_the_exact_retry_suffix() { verify(); }")],
@@ -169,5 +225,44 @@ fn commenting_out_either_ci_lint_invocation_is_detected() {
                 .insert(path.into(), Some(modified.join(newline)));
             assert!(!Rule::Required.check(&tree).is_empty(), "{command}");
         }
+    }
+}
+
+#[test]
+fn each_regression_spelling_alone_is_found() {
+    // (一つの綴りが見つかっても、見逃した別の綴りが隠れないように一件ずつ)
+    for r in [Rule::RwxPages, Rule::PanicUnwindKept, Rule::ShellSpecialVar] {
+        for one in fixture(r).bad.chunks(1) {
+            assert!(
+                !r.check(&made_up(one)).is_empty(),
+                "{}: {} に見つけない",
+                r.id(),
+                one[0].0
+            );
+        }
+    }
+    // (それぞれの行が一件: bash 4 行、PowerShell 5 行、ワークフロー 2 行)
+    assert_eq!(
+        Rule::ShellSpecialVar
+            .check(&made_up(fixture(Rule::ShellSpecialVar).bad))
+            .len(),
+        11
+    );
+    assert_eq!(
+        Rule::HookLockPoison
+            .check(&made_up(fixture(Rule::HookLockPoison).bad))
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn bash_drops_an_assignment_to_groups() {
+    // (shell-special-var の理由を、この機械の bash で示す)
+    if let Ok(o) = std::process::Command::new("bash")
+        .args(["-c", "GROUPS=gdi; echo \"$GROUPS\""])
+        .output()
+    {
+        assert_ne!(String::from_utf8_lossy(&o.stdout).trim(), "gdi");
     }
 }

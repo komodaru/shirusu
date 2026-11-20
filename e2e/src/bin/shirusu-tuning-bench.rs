@@ -32,6 +32,7 @@ use shirusu_transport_win::ProcessNotify;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use shirusu_e2e::perf::{median, p95};
 
 const PAYLOAD_256: [u8; 256] = [0xAB; 256];
 
@@ -48,21 +49,6 @@ impl XorShift {
     }
 }
 
-fn median(mut v: Vec<u64>) -> u64 {
-    if v.is_empty() {
-        return 0;
-    }
-    v.sort_unstable();
-    v[v.len() / 2]
-}
-fn p95(mut v: Vec<u64>) -> u64 {
-    if v.is_empty() {
-        return 0;
-    }
-    v.sort_unstable();
-    let idx = ((v.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
-    v[idx.min(v.len() - 1)]
-}
 
 // ---------------------------------------------------------------- S1: Ring 容量
 

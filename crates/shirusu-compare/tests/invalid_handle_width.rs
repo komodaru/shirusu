@@ -12,13 +12,15 @@
 //! ハンドル値であり、生成として扱われなければならない。
 
 use shirusu_compare::{compare_traces, NormTrace, NormValue};
-use shirusu_trace::compact::encode_values;
-use shirusu_trace::model::{EventBatch, TraceEvent};
+use shirusu_trace::model::EventBatch;
 use shirusu_trace::proto::{CaptureEnvironment, SessionMetadata};
 use shirusu_trace::reader::ReadTrace;
-use shirusu_trace::schema::{make_schema, CapturedValue, EventCapture, Ty, TypedValue, ValueKind};
+use shirusu_trace::schema::{make_schema, CapturedValue, Ty, TypedValue, ValueKind};
 use shirusu_trace::writer::FinalizationInfo;
-use shirusu_trace::{PayloadRef, TraceWriter};
+use shirusu_trace::TraceWriter;
+#[path = "common/events.rs"]
+mod events;
+use events::Events;
 
 const X86_INVALID: u64 = 0x0000_0000_FFFF_FFFF;
 const X64_INVALID: u64 = u64::MAX;
@@ -55,47 +57,21 @@ fn schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
 }
 
 struct B {
-    events: Vec<TraceEvent>,
-    seq: u64,
+    log: Events,
     pointer_width: u32,
 }
 
 impl B {
     fn new(pointer_width: u32) -> Self {
         B {
-            events: Vec::new(),
-            seq: 0,
+            log: Events::new(),
             pointer_width,
         }
     }
-    fn push(
-        &mut self,
-        kind: u16,
-        call: u64,
-        api_id: u32,
-        schema_id: u32,
-        types: &[Ty],
-        values: Vec<CapturedValue>,
-    ) {
-        self.seq += 1;
-        self.events.push(TraceEvent {
-            kind,
-            sequence: self.seq,
-            timestamp_qpc: 1000 + self.seq * 10,
-            call_id: call,
-            parent_call_id: 0,
-            api_id,
-            schema_id,
-            capture: EventCapture::Captured,
-            payload: PayloadRef::None,
-            args: Some(encode_values(types, &values).unwrap()),
-            global_order: None,
-        });
-    }
     /// CreateFileW の呼び出し。err は last_error (失敗時 5 など)。
     fn create_file(&mut self, call: u64, ret: u64, err: u32) {
-        self.push(1, call, 60, 201, &[], vec![]);
-        self.push(
+        self.log.push(1, call, 60, 201, &[], vec![]);
+        self.log.push(
             2,
             call,
             60,
@@ -105,8 +81,8 @@ impl B {
         );
     }
     fn use_handle(&mut self, call: u64, h: u64) {
-        self.push(1, call, 61, 203, &[Ty::U64], vec![cv(TypedValue::U64(h))]);
-        self.push(
+        self.log.push(1, call, 61, 203, &[Ty::U64], vec![cv(TypedValue::U64(h))]);
+        self.log.push(
             2,
             call,
             61,
@@ -135,7 +111,7 @@ impl B {
             raw_pid: 100,
             thread_id: 55,
             qpc_frequency: 10_000_000,
-            events: self.events,
+            events: self.log.events,
         })
         .unwrap();
         let bytes = w.finish(FinalizationInfo::default()).unwrap();

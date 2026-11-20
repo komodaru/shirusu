@@ -21,6 +21,7 @@ use shirusu_transport_win::{EventClock, RingNotify};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use shirusu_e2e::perf::{median, p95};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Strategy {
@@ -186,21 +187,6 @@ fn run_round(strategy: Strategy) -> RoundResult {
     }
 }
 
-fn median(mut v: Vec<u64>) -> u64 {
-    if v.is_empty() {
-        return 0;
-    }
-    v.sort_unstable();
-    v[v.len() / 2]
-}
-fn p95(mut v: Vec<u64>) -> u64 {
-    if v.is_empty() {
-        return 0;
-    }
-    v.sort_unstable();
-    let idx = ((v.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
-    v[idx.min(v.len() - 1)]
-}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

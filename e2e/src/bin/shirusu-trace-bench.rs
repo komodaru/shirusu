@@ -48,6 +48,7 @@ use shirusu_transport::ring::SharedRegion;
 use shirusu_transport::slot::SlotPool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use shirusu_e2e::perf::median;
 
 const N_EVENTS: usize = 20_000;
 const BATCH_EVENTS: usize = 10_000;
@@ -67,13 +68,6 @@ impl XorShift {
     }
 }
 
-fn median(mut v: Vec<u64>) -> u64 {
-    if v.is_empty() {
-        return 0;
-    }
-    v.sort_unstable();
-    v[v.len() / 2]
-}
 
 fn env(session_id: u64) -> CaptureEnvironment {
     CaptureEnvironment {

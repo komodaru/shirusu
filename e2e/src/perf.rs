@@ -202,8 +202,45 @@ pub fn evaluate(workload: WorkloadKind, ratio: f64) -> PerfVerdict {
     }
 }
 
+/// 測定値の中央値（偶数個なら上側）。空なら 0。ベンチ各本が同じ定義で報告する。
+pub fn median(mut v: Vec<u64>) -> u64 {
+    if v.is_empty() {
+        return 0;
+    }
+    v.sort_unstable();
+    v[v.len() / 2]
+}
+
+/// 測定値の 95 パーセンタイル（ceil(0.95 n) 番目、1 始まり）。空なら 0。
+pub fn p95(mut v: Vec<u64>) -> u64 {
+    if v.is_empty() {
+        return 0;
+    }
+    v.sort_unstable();
+    let idx = ((v.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
+    v[idx.min(v.len() - 1)]
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{median, p95};
+
+    /// 中央値と 95 パーセンタイルを、並べ替えた列の定義どおりの位置と全長 0..=64 で比べる
+    /// （並びは長さごとに変える）。
+    #[test]
+    fn median_and_p95_are_the_sorted_positions() {
+        for n in 0usize..=64 {
+            let v: Vec<u64> = (0..n as u64).map(|i| (i * 7919 + n as u64) % 101).collect();
+            let mut s = v.clone();
+            s.sort_unstable();
+            let want_median = if n == 0 { 0 } else { s[n / 2] };
+            // (ceil(0.95 n) 番目を整数だけで: 95 n / 100 の切り上げ)
+            let want_p95 = if n == 0 { 0 } else { s[(95 * n).div_ceil(100) - 1] };
+            assert_eq!(median(v.clone()), want_median, "n={n}");
+            assert_eq!(p95(v), want_p95, "n={n}");
+        }
+    }
+
     use super::*;
 
     #[test]

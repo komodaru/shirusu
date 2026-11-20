@@ -19,40 +19,16 @@ use shirusu_transport::notify::NotifySignal;
 use shirusu_transport::ring::*;
 use shirusu_transport::shm::Word;
 use shirusu_transport::Clock;
-use shirusu_transport::RingConfig;
 use std::sync::Arc;
 use std::time::Duration;
+#[path = "common/ring_setup.rs"]
+mod ring_setup;
+use ring_setup::{setup, input};
 
-fn setup(
-    desc: usize,
-    pay: usize,
-    policy: WriterPolicy,
-) -> (SharedRegion, RingWriter, RingReader, Arc<ManualClock>) {
-    let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
-    let clock = Arc::new(ManualClock::new());
-    // SAFETY: the only writer of this region (SPSC).
-    let w = unsafe { region.writer(policy, clock.clone() as Arc<dyn Clock>) };
-    // SAFETY: the only reader of this region (SPSC).
-    let r = unsafe { region.reader() };
-    (region, w, r, clock)
-}
 fn no_wait() -> WriterPolicy {
     WriterPolicy {
         max_wait: Duration::ZERO,
         ..Default::default()
-    }
-}
-fn input(kind: EventKind, call: u64, payload: &[u8]) -> EventInput<'_> {
-    EventInput {
-        kind,
-        api_id: 10,
-        schema_id: 20,
-        call_id: call,
-        parent_call_id: 0,
-        payload,
-        capture_state: CaptureState::Captured,
-        global_order: 0,
     }
 }
 fn kind_of(o: &WriteOutcome) -> &'static str {

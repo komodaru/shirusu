@@ -5,6 +5,8 @@
 //!
 //!   cargo run -q -p shirusu-lint      検査 (CI: scripts/ci/linux.sh)
 //!   cargo run -q -p shirusu-lint -- --test-log FILE  Cargo の pretty 形式の結果で回帰テストの実行を確認
+//!   cargo run -q -p shirusu-lint -- --dup-list     dup が見つける写しを既知のものも含めてすべて出す
+//!   cargo run -q -p shirusu-lint -- --dup-update   消えた写しを scripts/ci/dup-known.tsv から除く
 //!   cargo test -p shirusu-lint        各規則が、退行を入れた架空の木と、実際のファイルに
 //!                                     退行を入れた木の両方で発火し、正しい書き方では
 //!                                     発火しないこと (tests.rs: 規則を足して fixture を
@@ -16,6 +18,7 @@ use std::process::ExitCode;
 mod escape;
 mod mutations;
 mod regress;
+mod dup;
 mod review;
 
 use quote::ToTokens;
@@ -48,10 +51,11 @@ enum Rule {
     EscapeComment,
     MutationCases,
     NoUnwrap,
+    Dup,
 }
 
 impl Rule {
-    const ALL: [Rule; 16] = [
+    const ALL: [Rule; 17] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -68,6 +72,7 @@ impl Rule {
         Rule::EscapeComment,
         Rule::MutationCases,
         Rule::NoUnwrap,
+        Rule::Dup,
     ];
 
     fn id(self) -> &'static str {
@@ -88,6 +93,7 @@ impl Rule {
             Rule::EscapeComment => "escape-comment",
             Rule::MutationCases => "mutation-cases",
             Rule::NoUnwrap => "no-unwrap",
+            Rule::Dup => "dup",
         }
     }
 
@@ -109,6 +115,7 @@ impl Rule {
             Rule::EscapeComment => "正しい動作の代わりに近道をコメントに書かない (ユーザーの決まり 2026-11-20): to-do の印、for now、簡略化、not implemented、スタブ、近似、best effort を書かずに実装する。not supported / 近似 / 無視は同じコメントに Windows の根拠 (実測、golden、仕様) があるときだけ。既にある箇所は scripts/ci/escape-known.txt (減る一方)",
             Rule::MutationCases => "夜間の review-mutations.py の表が木と合う: 置換元は対象ファイルに 1 回、テスト名の絞り込みは有効な #[test] 1 個に当たる (2026-11-20 の夜間 CI 失敗)",
             Rule::NoUnwrap => "crates/ のテストでないコード (build.rs も。e2e/ と examples/ はテストと同じく外す) に .unwrap() / .expect(..) を書かない (2026-11-20「unwrapを根絶する」): 失敗しうるものは ? と型付きのエラー、起きない前提は型 (配列の長さ、shirusu_bytes の固定位置の読み出し、enum の状態) で表す。expect への言い換えも同じく禁止",
+            Rule::Dup => "同じコードを二度書かない (2026-11-20): 関数・表の写し (名前違い、局所変数の改名を含む) は一つにして呼ぶ。テスト間はテストの common/ に置いて #[path] で取り込む。意図した写し (独立した参照実装など) は scripts/ci/dup-known.tsv に理由と書く",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -131,6 +138,7 @@ impl Rule {
             Rule::EscapeComment => escape::escape_comment(tree),
             Rule::MutationCases => mutations::mutation_cases(tree),
             Rule::NoUnwrap => regress::no_unwrap(tree),
+            Rule::Dup => dup_copies(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {
@@ -504,6 +512,34 @@ fn required(tree: &Tree) -> Hits {
         .collect()
 }
 
+/// dup の既知の写し (理由つき)
+const DUP_KNOWN: &str = "scripts/ci/dup-known.tsv";
+
+/// 追跡している Rust ファイル (path, text)
+fn rust_files(tree: &Tree) -> Vec<(String, String)> {
+    tree.paths()
+        .into_iter()
+        .filter(|p| p.ends_with(".rs") && tree.has_or_real(p))
+        .map(|p| {
+            let t = tree.text(&p);
+            (p, t)
+        })
+        .collect()
+}
+
+fn dup_copies(tree: &Tree) -> Hits {
+    let found = dup::find(&rust_files(tree));
+    let known = dup::load_known(&tree.text(DUP_KNOWN));
+    dup::fresh(&found, &known)
+        .into_iter()
+        .map(|g| {
+            let first = g.members.first().map(|m| m.file.clone()).unwrap_or_default();
+            let line = g.lines.first().copied().unwrap_or(0);
+            (first, line, dup::report(&[g], DUP_KNOWN).trim_end().to_owned())
+        })
+        .collect()
+}
+
 fn check(tree: &Tree) -> Vec<Finding> {
     Rule::ALL.iter().flat_map(|r| r.check(tree)).collect()
 }
@@ -516,6 +552,21 @@ fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
         [] => {}
+        [flag] if flag == "--dup-list" => {
+            print!("{}", dup::list(&dup::find(&rust_files(&Tree::repo(&root())))));
+            return ExitCode::SUCCESS;
+        }
+        [flag] if flag == "--dup-update" => {
+            let tree = Tree::repo(&root());
+            let text = dup::updated(&tree.text(DUP_KNOWN), &dup::find(&rust_files(&tree)));
+            return match std::fs::write(root().join(DUP_KNOWN), text) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("shirusu-lint: {DUP_KNOWN}: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         [flag, path] if flag == "--test-log" => {
             return match std::fs::read_to_string(path) {
                 Ok(log) => review::check_log(&log),
@@ -526,7 +577,7 @@ fn main() -> ExitCode {
             };
         }
         _ => {
-            eprintln!("usage: shirusu-lint [--test-log FILE]");
+            eprintln!("usage: shirusu-lint [--test-log FILE | --dup-list | --dup-update]");
             return ExitCode::FAILURE;
         }
     }

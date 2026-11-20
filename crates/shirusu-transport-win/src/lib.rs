@@ -196,6 +196,45 @@ mod imp {
             _owner: std::marker::PhantomData,
         }
     }
+    /// `handle` を対象プロセスへ DuplicateHandle で渡す（Mapping と Event の共通）。返した値は
+    /// 対象プロセス側のハンドル値。
+    fn duplicate_to_process(handle: BorrowedHandle<'_>, target_pid: u32) -> Result<RemoteHandle> {
+        // SAFETY: OpenProcess takes only values; failure returns null, checked below.
+        let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
+        if target.is_null() {
+            return Err(last_err("OpenProcess"));
+        }
+        let mut dup: HANDLE = std::ptr::null_mut();
+        // SAFETY: `handle` and `target` are open handles and `dup` is a writable local.
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                h(handle),
+                target,
+                &mut dup,
+                0,
+                0,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        // SAFETY: `target` was opened above, is not used after this, and is closed once.
+        unsafe { CloseHandle(target) };
+        if ok == 0 {
+            return Err(last_err("DuplicateHandle"));
+        }
+        Ok(remote(dup, target_pid))
+    }
+
+    /// `handle` を継承可能にする（CreateProcess で子へ渡す）。`what` は失敗時の名前。
+    fn make_inheritable(handle: BorrowedHandle<'_>, what: &'static str) -> Result<()> {
+        // SAFETY: `handle` is an open handle its owner keeps open for this call.
+        let ok = unsafe { SetHandleInformation(h(handle), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        if ok == 0 {
+            return Err(last_err(what));
+        }
+        Ok(())
+    }
+
     pub(super) fn remote(handle: HANDLE, target_pid: u32) -> RemoteHandle {
         RemoteHandle {
             raw: handle as usize,
@@ -422,45 +461,11 @@ mod imp {
         }
         /// 対象プロセスへ DuplicateHandle で渡す。
         pub fn duplicate_to_process(&self, target_pid: u32) -> Result<RemoteHandle> {
-            // SAFETY: OpenProcess takes only values; failure returns null, checked below.
-            let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
-            if target.is_null() {
-                return Err(last_err("OpenProcess"));
-            }
-            let mut dup: HANDLE = std::ptr::null_mut();
-            // SAFETY: `self.handle` and `target` are open handles and `dup` is a writable local.
-            let ok = unsafe {
-                DuplicateHandle(
-                    GetCurrentProcess(),
-                    h(self.handle.borrow()),
-                    target,
-                    &mut dup,
-                    0,
-                    0,
-                    DUPLICATE_SAME_ACCESS,
-                )
-            };
-            // SAFETY: `target` was opened above, is not used after this, and is closed once.
-            unsafe { CloseHandle(target) };
-            if ok == 0 {
-                return Err(last_err("DuplicateHandle"));
-            }
-            Ok(remote(dup, target_pid))
+            duplicate_to_process(self.handle.borrow(), target_pid)
         }
         /// 継承可能なハンドルにする（CreateProcess で子へ渡す E2E 用）。
         pub fn make_inheritable(&self) -> Result<()> {
-            // SAFETY: `self.handle` is an open handle owned by this mapping.
-            let ok = unsafe {
-                SetHandleInformation(
-                    h(self.handle.borrow()),
-                    HANDLE_FLAG_INHERIT,
-                    HANDLE_FLAG_INHERIT,
-                )
-            };
-            if ok == 0 {
-                return Err(last_err("SetHandleInformation"));
-            }
-            Ok(())
+            make_inheritable(self.handle.borrow(), "SetHandleInformation")
         }
         /// ビュー。複製はビューの参照を増やすだけで、Mapping を落としても
         /// 複製が生きている間はビューが残る。
@@ -513,44 +518,10 @@ mod imp {
         /// 対象プロセスへ DuplicateHandle で渡す（Host→Agent の space_available
         /// 受け渡し。A68）。返した値は対象プロセス側のハンドル値。
         pub fn duplicate_to_process(&self, target_pid: u32) -> Result<RemoteHandle> {
-            // SAFETY: OpenProcess takes only values; failure returns null, checked below.
-            let target = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, target_pid) };
-            if target.is_null() {
-                return Err(last_err("OpenProcess"));
-            }
-            let mut dup: HANDLE = std::ptr::null_mut();
-            // SAFETY: `self.handle` and `target` are open handles and `dup` is a writable local.
-            let ok = unsafe {
-                DuplicateHandle(
-                    GetCurrentProcess(),
-                    h(self.handle.borrow()),
-                    target,
-                    &mut dup,
-                    0,
-                    0,
-                    DUPLICATE_SAME_ACCESS,
-                )
-            };
-            // SAFETY: `target` was opened above, is not used after this, and is closed once.
-            unsafe { CloseHandle(target) };
-            if ok == 0 {
-                return Err(last_err("DuplicateHandle"));
-            }
-            Ok(remote(dup, target_pid))
+            duplicate_to_process(self.handle.borrow(), target_pid)
         }
         pub fn make_inheritable(&self) -> Result<()> {
-            // SAFETY: `self.handle` is an open handle owned by this event.
-            let ok = unsafe {
-                SetHandleInformation(
-                    h(self.handle.borrow()),
-                    HANDLE_FLAG_INHERIT,
-                    HANDLE_FLAG_INHERIT,
-                )
-            };
-            if ok == 0 {
-                return Err(last_err("SetHandleInformation(event)"));
-            }
-            Ok(())
+            make_inheritable(self.handle.borrow(), "SetHandleInformation(event)")
         }
         pub fn set(&self) -> Result<()> {
             // SAFETY: `self.handle` is an open event handle owned by this value.

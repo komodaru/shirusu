@@ -4,6 +4,9 @@ use super::*;
 
 type Files = &'static [(&'static str, &'static str)];
 
+/// dup の fixture: 数えられる長さの関数 (e2e::perf の p95 と同じ形)
+const DUP_FN: &str = "pub fn percentile(mut v: Vec<u64>) -> u64 {\n    if v.is_empty() {\n        return 0;\n    }\n    v.sort_unstable();\n    let idx = ((v.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);\n    v[idx.min(v.len() - 1)]\n}\n";
+
 struct Fixture {
     bad: Files,
     good: Files,
@@ -148,6 +151,18 @@ fn fixture(r: Rule) -> Fixture {
             bad: &[(review::DURABILITY, "/* #[test] fn partial_batches_report_the_exact_retry_suffix() {} */")],
             good: &[(review::DURABILITY, "#[test] fn partial_batches_report_the_exact_retry_suffix() { verify(); }")],
             mutate: (review::DURABILITY, |s| Some(s.replace("fn partial_batches_report_the_exact_retry_suffix", "#[ignore] fn partial_batches_report_the_exact_retry_suffix"))),
+        },
+        Rule::Dup => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/lib.rs", DUP_FN),
+                ("crates/shirusu-y/tests/it.rs", "/// 別名の写し\nfn p95(mut v: Vec<u64>) -> u64 {\n    if v.is_empty() {\n        return 0;\n    }\n    v.sort_unstable();\n    let idx = ((v.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);\n    v[idx.min(v.len() - 1)]\n}\n"),
+            ],
+            good: &[
+                ("crates/shirusu-x/src/lib.rs", DUP_FN),
+                ("crates/shirusu-y/tests/it.rs", "fn p95(mut v: Vec<u64>) -> u64 {\n    if v.is_empty() {\n        return 0;\n    }\n    v.sort_unstable();\n    let idx = ((v.len() as f64 * 0.99).ceil() as usize).saturating_sub(1);\n    v[idx.min(v.len() - 1)]\n}\n"),
+            ],
+            // (bench が e2e::perf の p95 を写して持ち直す)
+            mutate: ("e2e/src/bin/shirusu-tuning-bench.rs", |t| Some(t + "\nfn p95_again(mut v: Vec<u64>) -> u64 {\n    if v.is_empty() {\n        return 0;\n    }\n    v.sort_unstable();\n    let idx = ((v.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);\n    v[idx.min(v.len() - 1)]\n}\n")),
         },
         Rule::MutationCases => Fixture {
             bad: &[

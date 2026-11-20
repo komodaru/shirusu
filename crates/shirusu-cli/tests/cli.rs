@@ -6,7 +6,7 @@ use shirusu_trace::blob::BlobId;
 use shirusu_trace::compact::encode_event_chunk;
 use shirusu_trace::compact::encode_values;
 use shirusu_trace::container::{
-    parse_raw_header, serialize_header, BlockHeader, BlockType, Compression,
+    serialize_header, BlockHeader, BlockType, Compression,
 };
 use shirusu_trace::model::{EventBatch, PayloadLossReason, TraceEvent};
 use shirusu_trace::proto::{CaptureEnvironment, SessionMetadata};
@@ -16,6 +16,9 @@ use shirusu_trace::PayloadRef;
 use shirusu_trace::TraceWriter;
 use std::path::PathBuf;
 use std::process::Command;
+#[path = "../../shirusu-trace/tests/common/corrupt.rs"]
+mod corrupt;
+use corrupt::corrupt_blob_body;
 
 fn cv(v: TypedValue) -> CapturedValue {
     CapturedValue::captured(v)
@@ -547,41 +550,6 @@ fn trace_bytes_with_blob() -> (Vec<u8>, BlobId) {
     };
     w.write_batch(&batch).unwrap();
     (w.finish(FinalizationInfo::default()).unwrap(), id)
-}
-
-/// Blob Chunk の本体 1 バイトを壊し、Block の CRC32C を再計算して
-/// 整合させる（Blob ID と内容の BLAKE3 が一致しなくなる）。
-fn corrupt_blob_body(bytes: &[u8]) -> Vec<u8> {
-    let mut pos = 0usize;
-    while pos + 32 <= bytes.len() {
-        let raw = parse_raw_header(&bytes[pos..]).expect("valid header");
-        if raw.block_type_code == BlockType::BlobChunk.code() {
-            let header = BlockHeader {
-                block_type: BlockType::BlobChunk,
-                compression: Compression::from_code(raw.compression_code).unwrap(),
-                sequence: raw.sequence,
-                stored_len: raw.stored_len,
-                raw_len: raw.raw_len,
-            };
-            let stored = &bytes[pos + 32..pos + 32 + raw.stored_len as usize];
-            let mut payload = shirusu_trace::container::decode_payload(&header, stored).unwrap();
-            payload[36] ^= 0xFF;
-            let new_header = BlockHeader {
-                block_type: BlockType::BlobChunk,
-                compression: Compression::None,
-                sequence: raw.sequence,
-                stored_len: payload.len() as u32,
-                raw_len: payload.len() as u32,
-            };
-            let mut out = bytes[..pos].to_vec();
-            out.extend_from_slice(&serialize_header(&new_header, &payload));
-            out.extend_from_slice(&payload);
-            out.extend_from_slice(&bytes[pos + 32 + raw.stored_len as usize..]);
-            return out;
-        }
-        pos += 32 + raw.stored_len as usize;
-    }
-    panic!("no blob chunk found");
 }
 
 #[test]

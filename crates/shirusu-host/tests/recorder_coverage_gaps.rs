@@ -22,7 +22,6 @@
 //!   `self` を消費するため、入口の状態は常に Created／Recording。
 //! - `SessionError::Win` の Display／`From`：cfg(windows) のみ。
 
-use shirusu_agent::Agent;
 use shirusu_hook::api::{api_by_id, API_CREATE_FILE_W};
 use shirusu_hook::capture::{self, MapMemory};
 use shirusu_host::recorder::{
@@ -32,14 +31,14 @@ use shirusu_host::recorder::{
 use shirusu_host::IntegrityLevel;
 use shirusu_trace::proto::{CaptureEnvironment, SessionMetadata};
 use shirusu_trace::TraceError;
-use shirusu_transport::context::HostMonitor;
-use shirusu_transport::ring::{SharedRegion, WriterPolicy};
+use shirusu_transport::ring::SharedRegion;
 use shirusu_transport::shm::{UninitializedRing, Word};
-use shirusu_transport::slot::SlotPool;
 use shirusu_transport::RingConfig;
 use shirusu_transport::Shm;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+#[path = "common/agent_region.rs"]
+mod agent_region;
+use agent_region::agent_and_region;
 
 const SESSION: u64 = 99;
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -80,20 +79,6 @@ fn spec(generation: u64) -> RingSpec {
         thread_id: 1,
         expected_generation: generation,
     }
-}
-
-fn agent_and_region(tid: u64) -> (Arc<Agent>, u64, Shm) {
-    let cfg = RingConfig::new(64, 4096);
-    let pool = Arc::new(SlotPool::new(2));
-    let agent = Arc::new(
-        Agent::new(pool, cfg, Arc::new(HostMonitor::always_alive())).with_policy(WriterPolicy {
-            max_wait: std::time::Duration::ZERO,
-            ..Default::default()
-        }),
-    );
-    let handle = agent.thread_begin(tid).expect("slot");
-    let base = agent.thread_region(tid).expect("region");
-    (agent, handle.generation, base)
 }
 
 /// `SessionError` の Display：Linux で構築できる全バリアント。

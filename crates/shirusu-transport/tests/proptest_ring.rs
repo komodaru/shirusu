@@ -24,24 +24,6 @@ fn pbt_cases(default: u32) -> u32 {
         .unwrap_or(default)
 }
 
-fn setup(desc: usize, pay: usize) -> (SharedRegion, RingWriter, RingReader) {
-    let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
-    let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
-    // SAFETY: the only writer of this region (SPSC).
-    let w = unsafe {
-        region.writer(
-            WriterPolicy {
-                max_wait: Duration::ZERO,
-                ..Default::default()
-            },
-            clock,
-        )
-    };
-    // SAFETY: the only reader of this region (SPSC).
-    let r = unsafe { region.reader() };
-    (region, w, r)
-}
 fn input(payload: &[u8], call: u64) -> EventInput<'_> {
     EventInput {
         kind: EventKind::CallEnter,
@@ -219,6 +201,9 @@ proptest! {
 mod evidence;
 use evidence::DstOp;
 use proptest::test_runner::{TestCaseError, TestError, TestRunner};
+#[path = "common/pbt_setup.rs"]
+mod pbt_setup;
+use pbt_setup::setup;
 
 fn dst_strategy() -> impl Strategy<Value = Vec<DstOp>> {
     prop::collection::vec(

@@ -1,0 +1,10 @@
+# shirusu-lint dup (crates/shirusu-lint/src/dup.rs): 意図して残す写し。kind<TAB>file#name...<TAB># 理由
+# 一行が一つの組。組の誰かが消えたら cargo run -q -p shirusu-lint -- --dup-update が行を落とす。新しい行は理由と一緒に手で足す。
+exact	crates/shirusu-conformance/src/check.rs#ev	crates/shirusu-conformance/tests/check_edges.rs#ev	crates/shirusu-probe/src/trim.rs#ev	# 二つの crate の単体テスト (crate 内の名前) と結合テスト (公開 API) が同じ TraceEvent を作る: 一つのファイルは両方の名前を書けない
+exact	crates/shirusu-crc32c/src/lib.rs#bitwise	crates/shirusu-transport/tests/matrix_crc32c.rs#bitwise	# テーブルを使わない CRC32C の参照実装: crc32c の単体テストと transport の行列テストがそれぞれ独立に持つ検証の基準
+exact	crates/shirusu-host/src/lib.rs#setup	crates/shirusu-host/tests/regression_r2.rs#setup	# 単体テスト (crate 内の名前) と結合テスト (公開 API) の同じ組み立て: 一つのファイルは両方の名前を書けない
+exact	crates/shirusu-trace/src/compact.rs#write_uleb	crates/shirusu-trace/tests/test_vectors.rs#uleb	# テストベクタの期待バイト列は実装と独立に作る (実装を呼ぶと検証にならない)
+renamed	crates/shirusu-conformance/src/bin/shirusu-conformance.rs#main	crates/shirusu-test/src/bin/shirusu-test.rs#main	# 二つの CLI がそれぞれの run() を自分の終了コード (0/1/2) にする 8 行: 共有 crate を足すと CLI 同士がつながる
+renamed	crates/shirusu-transport/src/ring.rs#test_writer_reader	crates/shirusu-transport/tests/regression_reader_hardening.rs#setup	# 単体テスト (crate 内の名前) と結合テスト (公開 API) の同じ組み立て: 一つのファイルは両方の名前を書けない
+exact	crates/shirusu-transport/src/ring.rs#input	crates/shirusu-transport/tests/common/ring_setup.rs#input	# 単体テスト (crate 内の名前) と結合テスト (公開 API) の同じ入力: 一つのファイルは両方の名前を書けない
+exact	crates/shirusu-test/tests/common/mod.rs#B::create	crates/shirusu-test/tests/prereq.rs#B::create	# 字面は同じでも呼ぶ self.push が別: prereq.rs の B は call_id を毎回振り親子呼び出しを持つ (検査する前提条件が違う)

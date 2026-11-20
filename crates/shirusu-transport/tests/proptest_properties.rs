@@ -3,15 +3,15 @@
 //! ケース数は SHIRUSU_PBT_CASES で上書き可能 (既定 1024)。
 
 use proptest::prelude::*;
-use shirusu_transport::clock::ManualClock;
 use shirusu_transport::notify::{NotifySignal, PublishNotifyTracker};
 use shirusu_transport::ring::*;
 use shirusu_transport::slot::{SlotHandle, SlotPool, SlotState};
 use shirusu_transport::snapshot::{write_snapshot, FailAfterSource, SliceSource};
-use shirusu_transport::{CaptureState, Clock, EventKind, RingConfig};
+use shirusu_transport::{CaptureState, EventKind};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::time::Duration;
+#[path = "common/pbt_setup.rs"]
+mod pbt_setup;
+use pbt_setup::setup;
 
 fn pbt_cases(default: u32) -> u32 {
     std::env::var("SHIRUSU_PBT_CASES")
@@ -19,24 +19,6 @@ fn pbt_cases(default: u32) -> u32 {
         .and_then(|v| v.parse().ok())
         .filter(|&v| v > 0)
         .unwrap_or(default)
-}
-fn setup(desc: usize, pay: usize) -> (SharedRegion, RingWriter, RingReader) {
-    let cfg = RingConfig::new(desc, pay);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
-    let clock: Arc<dyn Clock> = Arc::new(ManualClock::new());
-    // SAFETY: the only writer of this region (SPSC).
-    let w = unsafe {
-        region.writer(
-            WriterPolicy {
-                max_wait: Duration::ZERO,
-                ..Default::default()
-            },
-            clock,
-        )
-    };
-    // SAFETY: the only reader of this region (SPSC).
-    let r = unsafe { region.reader() };
-    (region, w, r)
 }
 fn input(kind: EventKind, payload: &[u8], call: u64) -> EventInput<'_> {
     EventInput {

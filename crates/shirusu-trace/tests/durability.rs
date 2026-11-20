@@ -6,7 +6,6 @@
 //! の書き込み後に 1 回ずつ（＋ `finish` の最終 flush 分 1 回）sync する。
 
 use shirusu_trace::model::{EventBatch, PayloadRef, TraceEvent};
-use shirusu_trace::proto::{CaptureEnvironment, SessionMetadata};
 use shirusu_trace::reader::read_trace;
 use shirusu_trace::schema::EventCapture;
 use shirusu_trace::writer::{
@@ -15,26 +14,9 @@ use shirusu_trace::writer::{
 use std::cell::Cell;
 use std::io::{self, Write};
 use std::rc::Rc;
-
-fn env(session_id: u64) -> CaptureEnvironment {
-    CaptureEnvironment {
-        session: SessionMetadata {
-            session_id,
-            created_by: "shirusu-host test".into(),
-            qpc_frequency: 10_000_000,
-        },
-        os_version: "Windows 11".into(),
-        os_build: 26100,
-        cpu_arch: "x86_64".into(),
-        pointer_width: 64,
-        capture_config: "L2".into(),
-        feature_flags: 3,
-        target_description: "game.exe".into(),
-        modules: Vec::new(),
-        static_dependencies: Vec::new(),
-        hook_evidence: Vec::new(),
-    }
-}
+#[path = "common/env.rs"]
+mod env;
+use env::env;
 
 fn batch() -> EventBatch {
     EventBatch {

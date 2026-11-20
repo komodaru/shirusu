@@ -22,7 +22,6 @@ use shirusu_transport::ring::{SharedRegion, WriterPolicy};
 use shirusu_transport::shm::Word;
 use shirusu_transport::slot::SlotPool;
 use shirusu_transport::RingConfig;
-use shirusu_transport::Shm;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -58,20 +57,6 @@ fn config() -> CaptureSessionConfig {
         // L09: 既定は `full`（間引きなし）。
         record_mode: shirusu_host::trace_convert::RecordMode::Full,
     }
-}
-
-fn agent_and_region(tid: u64) -> (Arc<Agent>, u64, Shm) {
-    let cfg = RingConfig::new(64, 4096);
-    let pool = Arc::new(SlotPool::new(2));
-    let agent = Arc::new(
-        Agent::new(pool, cfg, Arc::new(HostMonitor::always_alive())).with_policy(WriterPolicy {
-            max_wait: std::time::Duration::ZERO,
-            ..Default::default()
-        }),
-    );
-    let handle = agent.thread_begin(tid).expect("slot");
-    let base = agent.thread_region(tid).expect("region");
-    (agent, handle.generation, base)
 }
 
 fn spec(generation: u64) -> RingSpec {
@@ -406,6 +391,9 @@ enum Op {
 }
 
 use proptest::prelude::*;
+#[path = "common/agent_region.rs"]
+mod agent_region;
+use agent_region::agent_and_region;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]

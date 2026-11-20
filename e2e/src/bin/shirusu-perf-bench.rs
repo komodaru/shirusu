@@ -37,6 +37,7 @@ use shirusu_transport::slot::SlotPool;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use shirusu_e2e::perf::median;
 
 const N_LATENCY_CALLS_SMALL: u64 = 20_000;
 const N_LATENCY_CALLS_4K: u64 = 2_000;
@@ -65,13 +66,6 @@ const BURST_DRAIN_POLL: Duration = Duration::from_millis(2);
 /// 通知駆動で数千件単位のため、ここで溜めてから渡す。
 const RECORDER_BATCH_EVENTS: usize = 5_000;
 
-fn median(mut v: Vec<u64>) -> u64 {
-    if v.is_empty() {
-        return 0;
-    }
-    v.sort_unstable();
-    v[v.len() / 2]
-}
 
 fn env(session_id: u64) -> CaptureEnvironment {
     CaptureEnvironment {

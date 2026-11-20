@@ -14,7 +14,10 @@ use shirusu_transport::descriptor::EventDescriptor;
 use shirusu_transport::layout::RingConfig;
 use shirusu_transport::ring::{EventInput, RingReader, RingWriter, SharedRegion, WriterPolicy};
 use shirusu_transport::validate::IntegrityError;
-use shirusu_transport::{CaptureState, Clock, EventKind};
+use shirusu_transport::{CaptureState, Clock};
+#[path = "common/regression_input.rs"]
+mod regression_input;
+use regression_input::input;
 
 fn setup(desc_cap: usize, pay_cap: usize) -> (SharedRegion, RingWriter, RingReader) {
     let cfg = RingConfig::new(desc_cap, pay_cap);
@@ -25,19 +28,6 @@ fn setup(desc_cap: usize, pay_cap: usize) -> (SharedRegion, RingWriter, RingRead
     // SAFETY: the only reader of this region (SPSC).
     let r = unsafe { region.reader() };
     (region, w, r)
-}
-
-fn input(call: u64, payload: &[u8]) -> EventInput<'_> {
-    EventInput {
-        kind: EventKind::CallEnter,
-        api_id: 10,
-        schema_id: 20,
-        call_id: call,
-        parent_call_id: 0,
-        payload,
-        capture_state: CaptureState::Captured,
-        global_order: 0,
-    }
 }
 
 /// 確定済み Descriptor のバイト列を直接書き換える (破損した共有メモリの再現)。

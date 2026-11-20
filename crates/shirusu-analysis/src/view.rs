@@ -74,8 +74,17 @@ pub struct FieldView {
     /// Schema が宣言した意味種別。Schema が引けない場合は
     /// Unspecified (利用側は型からの推定にフォールバックする)。
     pub kind: ValueKind,
+    /// Schema のフィールド flags の生値 (引けなければ 0)。完全性の判定に使う。
+    pub flags: u32,
     pub capture: ValueCapture,
     pub value: TypedValue,
+}
+
+impl FieldView {
+    /// 取得すべき値を取得できたか (`ValueCapture::is_complete_for`)。
+    pub fn is_complete(&self) -> bool {
+        self.capture.is_complete_for(self.flags)
+    }
 }
 
 /// Payload の要約（実体バイト列は持たない。解決は `ReadTrace` 側）。
@@ -591,11 +600,11 @@ impl IntegrityCounts {
             self.dropped_payload_events += 1;
             self.dropped_payload_bytes = self.dropped_payload_bytes.saturating_add(*original_len);
         }
-        let types = registry.types_ref(e.schema_id);
-        let values_complete = match (types, e.args.as_deref()) {
+        let shapes = registry.shape_ref(e.schema_id);
+        let values_complete = match (shapes, e.args.as_deref()) {
             (_, None) => true, // Arguments are optional (e.g. an aborted call).
-            (Some(types), Some(bytes)) => {
-                shirusu_trace::compact::validate_values_completeness(types, bytes).unwrap_or(false)
+            (Some(shapes), Some(bytes)) => {
+                shirusu_trace::compact::validate_values_completeness(shapes, bytes).unwrap_or(false)
             }
             (None, Some(_)) => false,
         };
@@ -846,6 +855,7 @@ fn decode_fields(
                         .get(i)
                         .map(|f| ValueKind::from_flags(f.flags))
                         .unwrap_or(ValueKind::Unspecified),
+                    flags: def.fields.get(i).map_or(0, |f| f.flags),
                     capture: cv.capture,
                     value: cv.value,
                 })
@@ -1070,6 +1080,7 @@ mod tests {
                 name: "x".into(),
                 ty: Ty::U32,
                 kind: ValueKind::Unspecified,
+                flags: 0,
                 capture,
                 value: TypedValue::U32(0),
             };

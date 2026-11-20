@@ -135,6 +135,19 @@ fn fixture(r: Rule) -> Fixture {
             good: &[(review::DURABILITY, "#[test] fn partial_batches_report_the_exact_retry_suffix() { verify(); }")],
             mutate: (review::DURABILITY, |s| Some(s.replace("fn partial_batches_report_the_exact_retry_suffix", "#[ignore] fn partial_batches_report_the_exact_retry_suffix"))),
         },
+        Rule::MutationCases => Fixture {
+            bad: &[
+                (mutations::SCRIPT, "cases = [\n    ('m', 'crates/shirusu-x/src/lib.rs', [('a == b', 'a != b')], 'shirusu-x', 'it', 'renamed'),\n]\n"),
+                ("crates/shirusu-x/src/lib.rs", "fn f(a: u8, b: u8) -> bool { a == b || a == b }"),
+                ("crates/shirusu-x/tests/it.rs", "#[test] fn equal_values() {}"),
+            ],
+            good: &[
+                (mutations::SCRIPT, "cases = [\n    ('m', 'crates/shirusu-x/src/lib.rs', [('a == b', 'a != b')], 'shirusu-x', 'it', 'equal'),\n]\n"),
+                ("crates/shirusu-x/src/lib.rs", "fn f(a: u8, b: u8) -> bool { a == b }"),
+                ("crates/shirusu-x/tests/it.rs", "#[test] fn equal_values() {}\n#[test] #[ignore] fn equal_slow() {}\nfn equal_helper() {}"),
+            ],
+            mutate: ("crates/shirusu-test/tests/rules.rs", |s| Some(s.replace("fn uncaptured_fields_control_integrity", "fn uncaptured_values_control_integrity"))),
+        },
         Rule::Required => Fixture {
             bad: &[("scripts/ci/linux.sh", "cargo build\n")],
             good: &[("scripts/ci/linux.sh", "cargo run -q -p shirusu-lint\ncargo clippy --workspace --all-targets -- -D warnings\ncargo test --workspace\ncargo run -q -p shirusu-lint -- --test-log \"$test_log\"\n")],

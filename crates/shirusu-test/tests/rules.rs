@@ -351,7 +351,10 @@ fn uncaptured_fields_control_integrity_and_cannot_satisfy_value_rules() {
         ValueCapture::Unsupported,
         ValueCapture::Truncated,
         ValueCapture::LimitExceeded,
+        // 必須の入力 (lpFileName) は結果によらず定義されているので、
+        // 「古い」「定義されない」と書いても取得できたことにはならない。
         ValueCapture::Stale,
+        ValueCapture::NotApplicable,
     ] {
         let mut trace = clean_trace();
         let event = &mut trace.batches[0].events[0];
@@ -361,10 +364,7 @@ fn uncaptured_fields_control_integrity_and_cannot_satisfy_value_rules() {
         values[0].value = TypedValue::Str16("dummy".encode_utf16().collect());
         event.args = Some(encode_values(&types, &values).unwrap());
         let integrity = spec(r#"{"rules":[{"type":"no-integrity-loss"}]}"#);
-        assert_eq!(
-            evaluate(&integrity, &trace).all_passed(),
-            capture == ValueCapture::Stale
-        );
+        assert!(!evaluate(&integrity, &trace).all_passed(), "{capture:?}");
         for condition in [r#""equals":"dummy""#, r#""contains":"dum""#] {
             let rule = spec(&format!(
                 r#"{{"rules":[{{"type":"api-called","api":"kernel32!CreateFileW","field":"lpFileName",{condition}}}]}}"#

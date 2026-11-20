@@ -353,9 +353,38 @@ pub enum ValueCapture {
 }
 
 impl ValueCapture {
-    /// A stale or undefined output carries no meaningful value for this result.
-    pub fn is_complete(self) -> bool {
-        matches!(self, Self::Captured | Self::Stale | Self::NotApplicable)
+    /// この取得状態が、`flags` を持つフィールドについて「取得すべき値を取得できた」と言えるか。
+    ///
+    /// Stale と NotApplicable は「その結果では値が定義されない」ことの表明であり、
+    /// それが許されるフィールドは Schema が宣言する (2026-11-19 レビュー #4/#5):
+    /// - Stale は LastError の意味条件を宣言したフィールドだけ (条件のない
+    ///   Unspecified と、常に意味を持つ Always では、古い値はあり得ない)。
+    /// - NotApplicable は呼び出し後に取る出力 (After / Completion / Both) だけ。
+    ///   入力は結果によらず定義されている。
+    ///
+    /// これ以外のフィールドに付いた Stale / NotApplicable は取得失敗と同じく数える
+    /// (必須の入力に Stale と書いて Complete を名乗れないように)。
+    pub fn is_complete_for(self, flags: u32) -> bool {
+        // 変種を足したら、ここで完全性に数えるかを決めるまでコンパイルが通らない
+        match self {
+            Self::Captured => true,
+            Self::Stale => match LastErrorMeaning::from_flags(flags) {
+                LastErrorMeaning::Unspecified | LastErrorMeaning::Always => false,
+                LastErrorMeaning::WhenReturnIsFalse
+                | LastErrorMeaning::WhenReturnIsInvalidHandle
+                | LastErrorMeaning::WhenReturnIsNull
+                | LastErrorMeaning::Never
+                | LastErrorMeaning::WhenReturnIsMinusOne
+                | LastErrorMeaning::WhenReturnIsNotNull
+                | LastErrorMeaning::DependsOnInputs
+                | LastErrorMeaning::WhenReturnIsNullOrInvalidHandle => true,
+            },
+            Self::NotApplicable => match CaptureTiming::from_flags(flags) {
+                CaptureTiming::Unspecified | CaptureTiming::Before => false,
+                CaptureTiming::After | CaptureTiming::Completion | CaptureTiming::Both => true,
+            },
+            Self::Unreadable | Self::Truncated | Self::Unsupported | Self::LimitExceeded => false,
+        }
     }
 
     pub fn code(self) -> u8 {
@@ -461,12 +490,30 @@ pub fn schema_types(def: &SchemaDef) -> Option<Vec<Ty>> {
     def.fields.iter().map(|f| Ty::from_tag(f.ty)).collect()
 }
 
+/// Schema の型列と flags 列の組。同じ長さであることは登録時に一度だけ作ることで保つ
+/// (フィールドは非公開: 長さの違う 2 つの列からは作れない)。
+#[derive(Debug, Clone, Copy)]
+pub struct FieldShapes<'a> {
+    types: &'a [Ty],
+    flags: &'a [u32],
+}
+
+impl<'a> FieldShapes<'a> {
+    pub fn types(self) -> &'a [Ty] {
+        self.types
+    }
+    pub fn iter(self) -> impl Iterator<Item = (Ty, u32)> + 'a {
+        self.types.iter().copied().zip(self.flags.iter().copied())
+    }
+}
+
 /// ファイル内の Schema 集合。定義の登録時に正規化ハッシュを検証する。
 #[derive(Debug, Default)]
 pub struct SchemaRegistry {
     by_id: std::collections::HashMap<u32, SchemaDef>,
     order: Vec<u32>,
     types_by_id: std::collections::HashMap<u32, Vec<Ty>>,
+    flags_by_id: std::collections::HashMap<u32, Vec<u32>>,
 }
 
 impl SchemaRegistry {
@@ -498,6 +545,8 @@ impl SchemaRegistry {
         }
         if let Some(types) = schema_types(&def) {
             self.types_by_id.insert(def.schema_id, types);
+            self.flags_by_id
+                .insert(def.schema_id, def.fields.iter().map(|f| f.flags).collect());
         }
         self.order.push(def.schema_id);
         self.by_id.insert(def.schema_id, def);
@@ -512,6 +561,13 @@ impl SchemaRegistry {
     /// Borrow types computed once when the immutable schema was registered.
     pub fn types_ref(&self, schema_id: u32) -> Option<&[Ty]> {
         self.types_by_id.get(&schema_id).map(Vec::as_slice)
+    }
+    /// 型と同じ並びの、各フィールドの flags (型が引ける Schema だけ)。
+    pub fn shape_ref(&self, schema_id: u32) -> Option<FieldShapes<'_>> {
+        Some(FieldShapes {
+            types: self.types_by_id.get(&schema_id)?,
+            flags: self.flags_by_id.get(&schema_id)?,
+        })
     }
     pub fn len(&self) -> usize {
         self.by_id.len()
@@ -703,6 +759,59 @@ mod tests {
             )],
         );
         assert_ne!(on_false.content_hash, on_handle.content_hash);
+    }
+
+    #[test]
+    fn undefined_value_claims_need_a_schema_declaration() {
+        // 2026-11-19 レビュー #4/#5: Stale は LastError の条件を宣言したフィールドだけ、
+        // NotApplicable は呼び出し後の出力だけが完全性を保てる。
+        let meanings = [
+            LastErrorMeaning::Unspecified,
+            LastErrorMeaning::Always,
+            LastErrorMeaning::WhenReturnIsFalse,
+            LastErrorMeaning::WhenReturnIsInvalidHandle,
+            LastErrorMeaning::WhenReturnIsNull,
+            LastErrorMeaning::Never,
+            LastErrorMeaning::WhenReturnIsMinusOne,
+            LastErrorMeaning::WhenReturnIsNotNull,
+            LastErrorMeaning::DependsOnInputs,
+            LastErrorMeaning::WhenReturnIsNullOrInvalidHandle,
+        ];
+        let timings = [
+            CaptureTiming::Unspecified,
+            CaptureTiming::Before,
+            CaptureTiming::After,
+            CaptureTiming::Completion,
+            CaptureTiming::Both,
+        ];
+        for code in 0..=u8::MAX {
+            let Some(capture) = ValueCapture::from_code(code) else {
+                continue;
+            };
+            for m in meanings {
+                for t in timings {
+                    let flags = m.flags() | t.flags() | ValueKind::Scalar.flags();
+                    let want = match capture {
+                        ValueCapture::Captured => true,
+                        ValueCapture::Stale => {
+                            !matches!(m, LastErrorMeaning::Unspecified | LastErrorMeaning::Always)
+                        }
+                        ValueCapture::NotApplicable => {
+                            !matches!(t, CaptureTiming::Unspecified | CaptureTiming::Before)
+                        }
+                        ValueCapture::Unreadable
+                        | ValueCapture::Truncated
+                        | ValueCapture::Unsupported
+                        | ValueCapture::LimitExceeded => false,
+                    };
+                    assert_eq!(
+                        capture.is_complete_for(flags),
+                        want,
+                        "{capture:?} {m:?} {t:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

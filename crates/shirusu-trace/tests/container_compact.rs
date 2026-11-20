@@ -543,7 +543,7 @@ fn scalar_validation_preserves_decoder_errors_for_every_capture_state() {
             bytes.extend(value);
             assert_eq!(decode_values(&[*ty], &bytes), Err(expected.clone()));
             assert_eq!(
-                validate_values_completeness(&[*ty], &bytes),
+                shirusu_trace::compact::validate_values(&[*ty], &bytes),
                 Err(expected.clone())
             );
         }

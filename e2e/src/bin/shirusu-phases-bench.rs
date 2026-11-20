@@ -197,8 +197,12 @@ fn main() {
     });
     let enter_schema = api.enter_schema();
     let leave_schema = api.leave_schema();
-    let enter_types = shirusu_trace::schema::schema_types(&enter_schema).unwrap();
-    let leave_types = shirusu_trace::schema::schema_types(&leave_schema).unwrap();
+    let (enter_id, leave_id) = (enter_schema.schema_id, leave_schema.schema_id);
+    let mut shapes = shirusu_trace::schema::SchemaRegistry::new();
+    shapes.register(enter_schema).unwrap();
+    shapes.register(leave_schema).unwrap();
+    let enter_types = shapes.shape_ref(enter_id).unwrap();
+    let leave_types = shapes.shape_ref(leave_id).unwrap();
     let enter_payload = capture::encode_generic_enter::<3>(
         shirusu_hook::api::generic_api(api.api_id).unwrap(),
         &args,
@@ -211,7 +215,7 @@ fn main() {
     measure("scalar_enter_validate", || {
         assert!(
             black_box(shirusu_trace::compact::validate_values_completeness(
-                black_box(&enter_types),
+                black_box(enter_types),
                 black_box(enter_payload.as_bytes())
             ))
             .unwrap()
@@ -220,7 +224,7 @@ fn main() {
     measure("scalar_leave_validate", || {
         assert!(
             black_box(shirusu_trace::compact::validate_values_completeness(
-                black_box(&leave_types),
+                black_box(leave_types),
                 black_box(leave_payload.as_bytes())
             ))
             .unwrap()

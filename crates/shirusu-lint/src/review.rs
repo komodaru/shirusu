@@ -72,6 +72,16 @@ const TESTS: &[(&str, &str, &str)] = &[
         "uncaptured_fields_control_integrity_and_cannot_satisfy_value_rules",
     ),
     (
+        "crates/shirusu-trace/src/schema.rs",
+        "shirusu_trace",
+        "schema::tests::undefined_value_claims_need_a_schema_declaration",
+    ),
+    (
+        "crates/shirusu-conformance/src/check.rs",
+        "shirusu_conformance",
+        "check::tests::undefined_claims_on_fields_that_cannot_be_undefined_contradict_complete",
+    ),
+    (
         "crates/shirusu-hook/src/capture.rs",
         "shirusu_hook",
         "capture::tests::completion_byte_count_is_read_only_for_dequeued_packets",

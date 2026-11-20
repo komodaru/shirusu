@@ -441,6 +441,14 @@ Schema が型と順序を定め、値ごとの型タグは持たない（overvie
 読み取った生値を保持する（再検証のため）。復号側は余分なバイト列の残りを
 不正として拒否する。
 
+完全性（Semantic Completeness）に数えるのは「取得すべき値を取得できた」値だけで、
+判定は `ValueCapture::is_complete_for(flags)` に一本化する（Host・解析・適合性検査・
+比較・テストが共有）。Captured は常に数える。Stale は、その Field の flags が
+LastError の意味条件（Unspecified と Always 以外）を宣言している場合だけ数える。
+NotApplicable は、取得時期が呼び出し後（After / Completion / Both）の出力だけ数える。
+それ以外の Field（必須の入力など）に付いた Stale / NotApplicable は、取得失敗と
+同じく Complete と矛盾する（2026-11-19 レビュー #4/#5）。
+
 ### イベント列のレイアウト（Event Chunk 内）
 
 Batch Header 長（LEB128）＋ Batch Header（Protobuf）の後に、Compact

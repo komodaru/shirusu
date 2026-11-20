@@ -224,19 +224,29 @@ pub fn decode_values(types: &[Ty], data: &[u8]) -> Result<Vec<CapturedValue>, Co
 /// Validate an encoded value sequence without retaining decoded values or
 /// allocating string/buffer storage. Acceptance matches `decode_values`.
 pub fn validate_values(types: &[Ty], data: &[u8]) -> Result<(), CompactError> {
-    validate_values_completeness(types, data).map(|_| ())
+    validate_values_in(types.iter().map(|ty| (*ty, 0)), data).map(|_| ())
 }
 
 /// Validate without allocating and report whether every field was captured.
-/// Stale last-error values are intentionally not meaningful for successful calls
-/// and do not represent missing capture data.
-pub fn validate_values_completeness(types: &[Ty], data: &[u8]) -> Result<bool, CompactError> {
+/// A field may say Stale / NotApplicable only where its schema flags allow it
+/// (`ValueCapture::is_complete_for`).
+pub fn validate_values_completeness(
+    shapes: crate::schema::FieldShapes<'_>,
+    data: &[u8],
+) -> Result<bool, CompactError> {
+    validate_values_in(shapes.iter(), data)
+}
+
+fn validate_values_in(
+    shapes: impl Iterator<Item = (Ty, u32)>,
+    data: &[u8],
+) -> Result<bool, CompactError> {
     let mut complete = true;
     let mut cur = Cursor::new(data);
-    for ty in types {
+    for (ty, flags) in shapes {
         let code = cur.read_u8()?;
         let capture = ValueCapture::from_code(code).ok_or(CompactError::InvalidCapture(code))?;
-        complete &= capture.is_complete();
+        complete &= capture.is_complete_for(flags);
         match ty {
             Ty::Str => {
                 std::str::from_utf8(cur.read_len_bytes()?)

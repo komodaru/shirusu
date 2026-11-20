@@ -905,6 +905,56 @@ mod tests {
     }
 
     #[test]
+    fn undefined_claims_on_fields_that_cannot_be_undefined_contradict_complete() {
+        use shirusu_trace::schema::{CaptureTiming, LastErrorMeaning, ValueCapture};
+        // (field flags, capture, may claim Complete)
+        let le = LastErrorMeaning::WhenReturnIsFalse.flags();
+        let after = CaptureTiming::After.flags();
+        let before = CaptureTiming::Before.flags();
+        for (flags, capture, ok) in [
+            (le, ValueCapture::Stale, true),
+            (0, ValueCapture::Stale, false),
+            (LastErrorMeaning::Always.flags(), ValueCapture::Stale, false),
+            (after, ValueCapture::NotApplicable, true),
+            (before, ValueCapture::NotApplicable, false),
+            (0, ValueCapture::NotApplicable, false),
+            (le, ValueCapture::Unreadable, false),
+        ] {
+            let mut t = valid_trace();
+            let mut registry = SchemaRegistry::new();
+            registry
+                .register(make_schema(
+                    1,
+                    "x!Y/enter",
+                    vec![("h".into(), Ty::U64, flags)],
+                ))
+                .unwrap();
+            t.schemas[0] = registry.get(1).unwrap().clone();
+            t.registry = {
+                let mut r = SchemaRegistry::new();
+                for s in &t.schemas {
+                    r.register(s.clone()).unwrap();
+                }
+                r
+            };
+            let values = [shirusu_trace::schema::CapturedValue {
+                capture,
+                value: TypedValue::U64(9),
+            }];
+            t.batches[0].events[0].args =
+                Some(shirusu_trace::compact::encode_values(&[Ty::U64], &values).unwrap());
+            t.batches[0].events[0].schema_id = 1;
+            let got = status(&check_trace(&t), "integrity-consistent");
+            let want = if ok {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Fail
+            };
+            assert_eq!(got, want, "flags {flags:#x} {capture:?}");
+        }
+    }
+
+    #[test]
     fn mismatched_leave_api_fails_pairing() {
         let mut t = valid_trace();
         t.batches[0].events[1].api_id += 1;

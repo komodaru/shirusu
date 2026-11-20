@@ -443,8 +443,8 @@ impl<W: DurableWrite> TraceRecorder<W> {
             } else if args_mode && d.schema_id != 0 {
                 match self
                     .writer
-                    .schema_types_ref(d.schema_id)
-                    .and_then(|types| validate_values_completeness(types, &event.payload).ok())
+                    .schema_shape_ref(d.schema_id)
+                    .and_then(|shapes| validate_values_completeness(shapes, &event.payload).ok())
                 {
                     Some(complete) => {
                         stats.args_incomplete += usize::from(!complete);

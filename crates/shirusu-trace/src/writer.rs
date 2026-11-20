@@ -361,6 +361,9 @@ impl<W: DurableWrite> TraceWriter<W> {
     pub fn schema_types_ref(&self, schema_id: u32) -> Option<&[crate::schema::Ty]> {
         self.registry.types_ref(schema_id)
     }
+    pub fn schema_shape_ref(&self, schema_id: u32) -> Option<crate::schema::FieldShapes<'_>> {
+        self.registry.shape_ref(schema_id)
+    }
 
     /// 登録済み Schema の複製を Schema Checkpoint Block として書く
     /// （途中から読み始める Reader がそれ以前の定義を引けるように）。

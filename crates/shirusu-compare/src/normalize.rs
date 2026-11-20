@@ -387,7 +387,7 @@ impl NormTrace {
                 sequence: ev.sequence,
                 fully_captured: ev.capture == shirusu_trace::schema::EventCapture::Captured
                     && ev.args_error.is_none()
-                    && ev.fields.iter().all(|field| field.capture.is_complete()),
+                    && ev.fields.iter().all(|field| field.is_complete()),
                 fields,
                 payload,
             }

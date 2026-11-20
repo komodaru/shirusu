@@ -329,6 +329,7 @@ fn stale_last_error_renders_as_stale_not_value() {
         name: "last_error".into(),
         ty: Ty::U32,
         kind: ValueKind::Scalar,
+        flags: 0,
         capture: ValueCapture::Stale,
         value: TypedValue::U32(5),
     };
@@ -1086,6 +1087,7 @@ fn iid_identification_requires_captured_com_context_and_is_exported() {
             name: "iid".into(),
             ty: Ty::Bytes,
             kind: ValueKind::Scalar,
+            flags: 0,
             capture: ValueCapture::Captured,
             value: TypedValue::Bytes(vec![12, 0, 0, 0, 0, 0, 0, 0, 192, 0, 0, 0, 0, 0, 0, 70]),
         }],

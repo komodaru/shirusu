@@ -380,11 +380,11 @@ impl QueuedCompletion {
     pub fn leave_values(self, last_error: u32) -> Vec<CapturedValue> {
         let result = match self.0 {
             CompletionPacket::Success { result, .. } => result,
-            _ => 0,
+            CompletionPacket::FailedIo { .. } | CompletionPacket::NoPacket => 0,
         };
         let bytes = match self.0 {
             CompletionPacket::NoPacket => cap(TypedValue::U32(0), ValueCapture::NotApplicable),
-            _ => self
+            CompletionPacket::Success { .. } | CompletionPacket::FailedIo { .. } => self
                 .transferred()
                 .map_or_else(|| cap(TypedValue::U32(0), ValueCapture::Unreadable), u32v),
         };
@@ -1110,6 +1110,28 @@ mod tests {
                 ValueCapture::Unreadable
             );
         }
+        // 実際の leave Schema で見ても、定義されない出力と古い LastError は
+        // 取得失敗に数えず (Schema が宣言している)、読めなかった出力だけが数える。
+        let api = api_by_id(shirusu_api_catalog::api::API_GET_QUEUED_COMPLETION_STATUS).unwrap();
+        let mut registry = shirusu_trace::schema::SchemaRegistry::new();
+        let schema = api.leave_schema();
+        let id = schema.schema_id;
+        registry.register(schema).unwrap();
+        let complete = |values: &[CapturedValue]| {
+            let bytes = encode_leave(api, values).unwrap();
+            shirusu_trace::compact::validate_values_completeness(
+                registry.shape_ref(id).unwrap(),
+                &bytes,
+            )
+            .unwrap()
+        };
+        assert!(complete(&empty.leave_values(258)));
+        assert!(complete(
+            &QueuedCompletion::observe(1, 1, || Some(37)).leave_values(5)
+        ));
+        assert!(!complete(
+            &QueuedCompletion::observe(0, 1, || None).leave_values(5)
+        ));
     }
 
     #[test]

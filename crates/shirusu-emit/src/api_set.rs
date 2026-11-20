@@ -144,6 +144,12 @@ impl ApiSet {
         self.specs.get((api_id - 1) as usize)
     }
 
+    /// 名前の API の ID と定義。
+    pub fn lookup(&self, name: &str) -> Option<(u32, &ApiSpec)> {
+        let i = self.specs.iter().position(|s| s.name == name)?;
+        Some((i as u32 + 1, self.specs.get(i)?))
+    }
+
     pub fn spec_by_name(&self, name: &str) -> Option<&ApiSpec> {
         self.api_id(name).and_then(|id| self.spec(id))
     }
@@ -416,16 +422,25 @@ pub fn file_io_api_set() -> ApiSet {
         .with_annotation("L1 (file_io_api_set: shirusu-hook HANDWRITTEN_API_TABLE と同一定義)")
         .with_last_error_meaning(LastErrorMeaning::WhenReturnIsFalse),
     ];
-    for def in defs {
-        set.add(def)
-            .expect("file_io_api_set definitions are unique");
-    }
+    // (固定の定義: add の検査 (名前が空でない、重複しない、値の種類を明示) を通ることは
+    // tests::file_io_definitions_pass_add が確かめる)
+    set.specs = defs.into();
     set
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_io_definitions_pass_add() {
+        let fixed = file_io_api_set();
+        let mut checked = ApiSet::new();
+        for spec in &fixed.specs {
+            checked.add(spec.clone()).unwrap();
+        }
+        assert_eq!(checked.len(), fixed.len());
+    }
 
     #[test]
     fn ids_follow_hook_table_convention() {

@@ -303,11 +303,15 @@ pub(super) unsafe fn wnd_proc_dispatch(
     le.restore_before_original();
     guard.suspend();
     // SAFETY: スロット表から引いた元のプロシージャ。
-    let (result, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (result, state) = crate::seh::invoke(
         original,
         |_| unsafe { call_original_proc(original, ansi, hwnd, msg, wparam, lparam) },
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return result;
+    };
     let _ = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -384,11 +388,15 @@ pub(super) unsafe fn detour_register_class_ex(hook_index: usize, wc: *const c_vo
     le.restore_before_original();
     guard.suspend();
     // SAFETY: コピーした構造体（または元の構造体）を渡す。
-    let (result, (_rt, _flight, mut guard, replaced)) = crate::seh::invoke(
+    let (result, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(call_with) },
         (_rt, _flight, guard, replaced),
     );
+    let Some((_rt, _flight, mut guard, replaced)) = state else {
+        le.restore_for_return();
+        return result;
+    };
     let _ = le.capture_after_original();
     guard.resume();
     drop(replaced);
@@ -458,11 +466,15 @@ pub(super) unsafe fn detour_set_window_long_ptr(
     le.restore_before_original();
     guard.suspend();
     // SAFETY: ラップ済みまたは元の値を渡す。
-    let (prev, (_rt, _flight, mut guard)) = crate::seh::invoke(
+    let (prev, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(hwnd, n_index, call_with) },
         (_rt, _flight, guard),
     );
+    let Some((_rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return resolve_window_long(n_index, prev);
+    };
     let _ = le.capture_after_original();
     guard.resume();
     // Only GWLP_WNDPROC contains a procedure. User data and other fields must
@@ -508,7 +520,8 @@ pub(super) unsafe fn detour_get_long_ptr(
         guard.suspend();
     }
     // SAFETY: forwards the caller's own arguments to the original.
-    let (value, mut state) = crate::seh::invoke(0, |_| unsafe { original(hwnd, field) }, state);
+    let (value, state) = crate::seh::invoke(0, |_| unsafe { original(hwnd, field) }, state);
+    let mut state = state.flatten();
     // LastError must be captured before table lookups or synchronization.
     let saved_error = crate::last_error::get();
     if let Some((_, _, guard, _)) = state.as_mut() {

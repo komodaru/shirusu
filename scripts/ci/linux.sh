@@ -12,6 +12,9 @@ cargo run -q -p shirusu-metadata-gen -- --winmd target/winmd/Windows.Win32.winmd
 cargo run -q -p shirusu-metadata-gen -- --winmd target/winmd/Windows.Win32.winmd --refresh-broad --check
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+# unwrap / expect はテストでないコードに書かない (shirusu-lint の no-unwrap は syn で cfg(windows) の側も
+# 見る; こちらは型で解決したマクロ展開の後を見る)。e2e/ はテストのハーネスなので外す
+cargo clippy --workspace --exclude shirusu-e2e --lib --bins -- -D clippy::unwrap_used -D clippy::expect_used
 test_log=$(mktemp)
 trap 'rm -f "$test_log"' EXIT
 cargo test --workspace --color never -- --format pretty 2>&1 | tee "$test_log"

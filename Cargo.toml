@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/shirusu-crc32c",
+    "crates/shirusu-bytes",
     "crates/shirusu-api-catalog",
     "crates/shirusu-transport",
     "crates/shirusu-transport-win",

@@ -63,6 +63,8 @@ pub enum EmitError {
     Trace(TraceError),
     /// 引数値列が Schema と一致しない。
     Compact(CompactError),
+    /// エミッタの発行者 ID (プロセスで u64 個) を使い切った。
+    IssuerExhausted,
 }
 
 impl fmt::Display for EmitError {
@@ -87,6 +89,7 @@ impl fmt::Display for EmitError {
             ),
             EmitError::Trace(e) => write!(f, "trace error: {e}"),
             EmitError::Compact(e) => write!(f, "argument encoding error: {e}"),
+            EmitError::IssuerExhausted => write!(f, "emitter issuer ids exhausted"),
         }
     }
 }
@@ -291,7 +294,7 @@ impl<W: DurableWrite> Emitter<W> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let mut issuer = NEXT.load(Ordering::Relaxed);
         loop {
-            let next = issuer.checked_add(1).expect("emitter id space exhausted");
+            let next = issuer.checked_add(1).ok_or(EmitError::IssuerExhausted)?;
             match NEXT.compare_exchange_weak(issuer, next, Ordering::Relaxed, Ordering::Relaxed) {
                 Ok(_) => break,
                 Err(current) => issuer = current,
@@ -324,11 +327,10 @@ impl<W: DurableWrite> Emitter<W> {
         timestamp_qpc: u64,
         meta: EventMeta,
     ) -> Result<CallToken> {
-        let api_id = self
+        let (api_id, spec) = self
             .set
-            .api_id(api)
+            .lookup(api)
             .ok_or_else(|| EmitError::UnknownApi(api.to_string()))?;
-        let spec = self.set.spec(api_id).expect("api_id from set");
         let types: Vec<Ty> = spec.enter_fields.iter().map(|(_, t, _, _)| *t).collect();
         let args = encode_args(&types, values)?;
         // Flush a full buffer before changing any call state: a failed
@@ -378,15 +380,16 @@ impl<W: DurableWrite> Emitter<W> {
     ) -> Result<()> {
         let token = token.borrow();
         let (pos, api_id) = self.open_call(token)?;
-        let spec = self
-            .set
-            .spec(api_id)
-            .expect("open call uses a registered API");
+        let unknown = || EmitError::UnknownCall {
+            thread_id: token.thread_id,
+            call_id: token.call_id,
+        };
+        let spec = self.set.spec(api_id).ok_or_else(unknown)?;
         let types: Vec<Ty> = spec.leave_fields.iter().map(|(_, t, _, _)| *t).collect();
         let args = encode_args(&types, values)?;
         self.flush_if_full(token.thread_id)?;
         let payload = self.resolve_payload(meta.payload)?;
-        let state = self.threads.get_mut(&token.thread_id).expect("open thread");
+        let state = self.threads.get_mut(&token.thread_id).ok_or_else(unknown)?;
         state.open_calls.remove(pos);
         let sequence = state.next_sequence;
         state.next_sequence += 1;
@@ -423,11 +426,9 @@ impl<W: DurableWrite> Emitter<W> {
     /// （勝手に Leave を捏造しないための区別）。
     pub fn abandon_call(&mut self, token: CallToken) -> Result<()> {
         let (pos, _) = self.open_call(&token)?;
-        self.threads
-            .get_mut(&token.thread_id)
-            .expect("open thread")
-            .open_calls
-            .remove(pos);
+        if let Some(thread) = self.threads.get_mut(&token.thread_id) {
+            thread.open_calls.remove(pos);
+        }
         Ok(())
     }
 

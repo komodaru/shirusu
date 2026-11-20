@@ -59,15 +59,15 @@ unsafe fn hardware_update(seed: u32, mut data: &[u8]) -> u32 {
     #[cfg(target_arch = "x86_64")]
     {
         let mut wide = u64::from(crc);
-        while data.len() >= 8 {
-            wide = _mm_crc32_u64(wide, u64::from_le_bytes(data[..8].try_into().unwrap()));
-            data = &data[8..];
+        while let Some((word, rest)) = data.split_first_chunk::<8>() {
+            wide = _mm_crc32_u64(wide, u64::from_le_bytes(*word));
+            data = rest;
         }
         crc = wide as u32;
     }
-    while data.len() >= 4 {
-        crc = _mm_crc32_u32(crc, u32::from_le_bytes(data[..4].try_into().unwrap()));
-        data = &data[4..];
+    while let Some((word, rest)) = data.split_first_chunk::<4>() {
+        crc = _mm_crc32_u32(crc, u32::from_le_bytes(*word));
+        data = rest;
     }
     for &byte in data {
         crc = _mm_crc32_u8(crc, byte);

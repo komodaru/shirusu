@@ -186,14 +186,14 @@ fn snapshot_exports(dir: &std::path::Path, pid: u32) -> std::io::Result<()> {
         if handle.is_null() {
             continue;
         }
-        for name in [
-            "CreateFileW",
-            "CreateFile2",
-            "WriteFile",
-            "CloseHandle",
-            "HeapAlloc",
+        for cname in [
+            c"CreateFileW",
+            c"CreateFile2",
+            c"WriteFile",
+            c"CloseHandle",
+            c"HeapAlloc",
         ] {
-            let cname = std::ffi::CString::new(name).unwrap();
+            let name = cname.to_string_lossy();
             // SAFETY: `handle` is a loaded module and `cname` is NUL-terminated.
             let Some(function) = (unsafe { GetProcAddress(handle, cname.as_ptr().cast()) }) else {
                 continue;

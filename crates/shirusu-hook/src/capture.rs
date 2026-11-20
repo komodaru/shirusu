@@ -541,7 +541,7 @@ pub fn read_overlapped_signature_with_width(
     let mut event = [0u8; 8];
     event[..pointer_width].copy_from_slice(&b[8..len]);
     Some(OverlappedSignature {
-        offset: u64::from_le_bytes(b[..8].try_into().unwrap()),
+        offset: shirusu_bytes::u64_at::<0, 16>(&b),
         event: u64::from_le_bytes(event),
     })
 }

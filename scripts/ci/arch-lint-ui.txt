@@ -17,3 +17,4 @@ crates/shirusu-transport/tests/ui/no_borrowed_slice.rs
 crates/shirusu-transport/tests/ui/producer_control_needs_unsafe.rs
 crates/shirusu-transport/tests/ui/reader_needs_unsafe.rs
 crates/shirusu-transport/tests/ui/ring_config_literal.rs
+crates/shirusu-bytes/tests/ui/past_end.rs

@@ -102,7 +102,8 @@ impl<'a> Parser<'a> {
                 "non-integer numbers are not supported in spec v1 (byte {start})"
             ));
         }
-        let text = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap();
+        let text = std::str::from_utf8(&self.bytes[start..self.pos])
+            .map_err(|_| format!("invalid number at byte {start}"))?;
         if text.starts_with('-') {
             text.parse::<i64>()
                 .map(JsonValue::I64)

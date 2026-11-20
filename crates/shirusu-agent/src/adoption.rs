@@ -390,7 +390,11 @@ impl<T> Fill<'_, T> {
                 // まだこのスレッドだけが持つ。
                 let back = cell.value.with_mut(|p| unsafe { (*p).take() });
                 cell.release(word);
-                Err(back.expect("the value this thread just stored"))
+                // (置いた値が戻る。置き場が空なら呼び出し側が片付けるものもない)
+                match back {
+                    Some(value) => Err(value),
+                    None => Ok(()),
+                }
             }
         }
     }

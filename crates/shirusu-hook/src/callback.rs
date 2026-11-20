@@ -36,7 +36,7 @@
 /// イベント識別子と Schema は API Catalog の共有定義を使う。
 pub use shirusu_api_catalog::callback::*;
 use shirusu_trace::compact::encode_values;
-use shirusu_trace::schema::{schema_types, CapturedValue, TypedValue};
+use shirusu_trace::schema::{CapturedValue, TypedValue};
 use shirusu_trace::CompactError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -121,21 +121,33 @@ pub fn callback_leave_values(result: i64) -> Vec<CapturedValue> {
 /// Schema の型の並びを一度だけ作って使い回す (2026-11-14 レビュー P1-7:
 /// 以前はイベントごとに Schema を組み立て、内容ハッシュ (BLAKE3) まで
 /// 計算してから型の並びだけを使っていた)。
+/// (未知の型タグを持つ Schema は、その最初のタグを `UnknownType` として毎回返す)
+pub type SchemaTypes = std::sync::OnceLock<Result<Vec<shirusu_trace::schema::Ty>, CompactError>>;
 pub fn cached_schema_types(
-    cell: &'static std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>>,
+    cell: &'static SchemaTypes,
     schema: fn() -> shirusu_trace::proto::SchemaDef,
-) -> &'static [shirusu_trace::schema::Ty] {
-    cell.get_or_init(|| schema_types(&schema()).expect("built-in schema is well-formed"))
+) -> Result<&'static [shirusu_trace::schema::Ty], CompactError> {
+    cell.get_or_init(|| {
+        schema()
+            .fields
+            .iter()
+            .map(|f| {
+                shirusu_trace::schema::Ty::from_tag(f.ty).ok_or(CompactError::UnknownType(f.ty))
+            })
+            .collect()
+    })
+    .as_deref()
+    .map_err(Clone::clone)
 }
 
 pub fn encode_callback_enter(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
-    encode_values(cached_schema_types(&TYPES, callback_enter_schema), values)
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
+    encode_values(cached_schema_types(&TYPES, callback_enter_schema)?, values)
 }
 
 pub fn encode_callback_leave(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
-    encode_values(cached_schema_types(&TYPES, callback_leave_schema), values)
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
+    encode_values(cached_schema_types(&TYPES, callback_leave_schema)?, values)
 }
 
 // ---- WndProc スロット表 ----

@@ -751,6 +751,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shirusu-bytes"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "trybuild",
+]
+
+[[package]]
 name = "shirusu-cli"
 version = "0.1.0"
 dependencies = [
@@ -817,6 +825,7 @@ dependencies = [
  "proptest",
  "shirusu-agent",
  "shirusu-api-catalog",
+ "shirusu-bytes",
  "shirusu-trace",
  "shirusu-transport",
  "shirusu-transport-win",
@@ -892,6 +901,7 @@ dependencies = [
  "blake3",
  "proptest",
  "ruzstd",
+ "shirusu-bytes",
  "shirusu-crc32c",
 ]
 
@@ -900,6 +910,7 @@ name = "shirusu-transport"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "shirusu-bytes",
  "shirusu-crc32c",
  "trybuild",
 ]

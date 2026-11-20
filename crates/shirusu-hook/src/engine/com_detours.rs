@@ -168,11 +168,15 @@ pub(super) unsafe extern "system-unwind" fn detour_co_create_instance(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (hr, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (hr, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(clsid, unk_outer, cls_context, iid, ppv) },
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return hr;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -253,11 +257,15 @@ pub(super) unsafe extern "system-unwind" fn detour_co_get_class_object(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (hr, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (hr, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(clsid, cls_context, server_info, iid, ppv) },
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return hr;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -409,11 +417,15 @@ pub(super) fn detour_winrt_activation(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (hr, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (hr, state) = crate::seh::invoke(
         original,
         |_| invoke(original),
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return hr;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();

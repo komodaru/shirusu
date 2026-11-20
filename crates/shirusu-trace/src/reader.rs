@@ -634,10 +634,11 @@ impl<'a> Scan<'a> {
                 q += 1;
                 continue;
             }
-            if Compression::from_code(raw.compression_code).is_none()
-                || raw.stored_len > MAX_STORED_LEN
-                || raw.raw_len > MAX_RAW_LEN
-            {
+            let Some(compression) = Compression::from_code(raw.compression_code) else {
+                q += 1;
+                continue;
+            };
+            if raw.stored_len > MAX_STORED_LEN || raw.raw_len > MAX_RAW_LEN {
                 q += 1;
                 continue;
             }
@@ -680,7 +681,6 @@ impl<'a> Scan<'a> {
                 from: corrupt_from,
                 to: q as u64,
             });
-            let compression = Compression::from_code(raw.compression_code).expect("checked");
             self.handle_block(q as u64, block_type, compression, raw.raw_len, payload);
             self.resync_end = payload_end as u64;
             return true;
@@ -841,10 +841,15 @@ impl<'a> Scan<'a> {
                 });
                 return;
             }
-            let id = BlobId::from_bytes(payload[pos..pos + 32].try_into().expect("32 bytes"));
-            let len = u32::from_le_bytes(payload[pos + 32..pos + 36].try_into().expect("4 bytes"))
-                as usize;
-            pos += 36;
+            let Some((id, len)) = crate::blob::entry_header(&payload[pos..]) else {
+                self.issues.push(RecoveryIssue::CorruptBlock {
+                    offset,
+                    reason: "blob entry header truncated".into(),
+                });
+                return;
+            };
+            let len = len as usize;
+            pos += crate::blob::ENTRY_HEADER_LEN;
             if payload.len() - pos < len {
                 self.issues.push(RecoveryIssue::CorruptBlock {
                     offset,

@@ -955,9 +955,13 @@ impl Agent {
                 }
             }
             // 確保に失敗したら Slot を返して記録しない (対象プロセスを止めない)。
-            None => match SharedRegion::new(self.config, handle.generation, thread_id) {
-                Ok(r) => r.shm().reserve_slot().expect("fresh local mapping").bind(),
-                Err(_) => {
+            // (作ったばかりの Mapping の登録語は 0 なので予約は通る。通らなければ確保の失敗と同じ)
+            None => match SharedRegion::new(self.config, handle.generation, thread_id)
+                .ok()
+                .and_then(|r| r.shm().reserve_slot())
+            {
+                Some(reservation) => reservation.bind(),
+                None => {
                     let _ = self.pool.cancel_claim(handle);
                     return None;
                 }

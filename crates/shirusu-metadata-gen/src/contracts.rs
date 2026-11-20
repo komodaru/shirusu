@@ -134,8 +134,9 @@ pub fn emit_file_io_contracts(source: &str) -> Result<String, String> {
             }
             out.push_str("        ],\n");
         }
-        let ret = &api.leave[0];
-        let error = api.leave.last().unwrap();
+        let (Some(ret), Some(error)) = (api.leave.first(), api.leave.last()) else {
+            return Err(format!("{}: empty leave", api.function));
+        };
         if ret.name != "return"
             || ret.ty != if i == 0 { "U64" } else { "I32" }
             || error.name != "last_error"

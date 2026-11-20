@@ -23,18 +23,7 @@ pub struct ImportSite {
     pub iat_rva: u32,
 }
 
-fn rd_u16(b: &[u8], off: usize) -> Option<u16> {
-    b.get(off..off.checked_add(2)?)
-        .map(|s| u16::from_le_bytes(s.try_into().unwrap()))
-}
-fn rd_u32(b: &[u8], off: usize) -> Option<u32> {
-    b.get(off..off.checked_add(4)?)
-        .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
-}
-fn rd_u64(b: &[u8], off: usize) -> Option<u64> {
-    b.get(off..off.checked_add(8)?)
-        .map(|s| u64::from_le_bytes(s.try_into().unwrap()))
-}
+use shirusu_bytes::{read_u16 as rd_u16, read_u32 as rd_u32, read_u64 as rd_u64};
 
 fn read_c_string(b: &[u8], off: usize, max: usize) -> Option<String> {
     let end = b.len().min(off.checked_add(max)?);

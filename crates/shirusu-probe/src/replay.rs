@@ -73,10 +73,12 @@ pub fn generate_replay(trace: &ReadTrace) -> Result<TestSpec, String> {
             call: api.into(),
             args: vec![],
             store: None,
-            expect: Some(Expect {
-                ret: Some(RetExpect::NonZero),
-                outputs: vec![],
-            }),
+            expect: None,
+        };
+        // (どの段も期待を持つ: 段の最後に step.expect に入れる)
+        let mut expect = Expect {
+            ret: Some(RetExpect::NonZero),
+            outputs: vec![],
         };
         match api {
             "kernel32!CreateFileW" => {
@@ -123,7 +125,7 @@ pub fn generate_replay(trace: &ReadTrace) -> Result<TestSpec, String> {
                     ("hTemplateFile".into(), ArgValue::Null),
                 ];
                 step.store = Some(name.clone());
-                step.expect.as_mut().unwrap().ret = Some(RetExpect::ValidHandle);
+                expect.ret = Some(RetExpect::ValidHandle);
                 handles.insert(ret, (name, path, 0, access));
             }
             "kernel32!WriteFile" | "kernel32!ReadFile" => {
@@ -157,7 +159,10 @@ pub fn generate_replay(trace: &ReadTrace) -> Result<TestSpec, String> {
                     TypedValue::Bytes(bytes) => bytes,
                     _ => return Err("I/O data was not captured as bytes".into()),
                 };
-                let data = &mut files.get_mut(path).unwrap().1;
+                let data = &mut files
+                    .get_mut(path)
+                    .ok_or("I/O handle refers to a file the replay does not model")?
+                    .1;
                 let end = cursor
                     .checked_add(count as usize)
                     .ok_or("file offset overflow")?;
@@ -197,16 +202,12 @@ pub fn generate_replay(trace: &ReadTrace) -> Result<TestSpec, String> {
                     (count_field.into(), ArgValue::OutU32),
                     ("lpOverlapped".into(), ArgValue::Null),
                 ];
-                step.expect
-                    .as_mut()
-                    .unwrap()
+                expect
                     .outputs
                     .push((count_field.into(), ExpectedOutput::U64(count)));
                 if !write {
                     let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-                    step.expect
-                        .as_mut()
-                        .unwrap()
+                    expect
                         .outputs
                         .push(("lpBuffer".into(), ExpectedOutput::HexPrefix(hex)));
                 }
@@ -223,6 +224,7 @@ pub fn generate_replay(trace: &ReadTrace) -> Result<TestSpec, String> {
             }
             _ => return Err(format!("unsupported replay API: {api}")),
         }
+        step.expect = Some(expect);
         steps.push(step);
     }
     if files.is_empty() || !handles.is_empty() {

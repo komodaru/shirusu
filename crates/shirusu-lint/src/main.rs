@@ -47,10 +47,11 @@ enum Rule {
     ShellSpecialVar,
     EscapeComment,
     MutationCases,
+    NoUnwrap,
 }
 
 impl Rule {
-    const ALL: [Rule; 15] = [
+    const ALL: [Rule; 16] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -66,6 +67,7 @@ impl Rule {
         Rule::ShellSpecialVar,
         Rule::EscapeComment,
         Rule::MutationCases,
+        Rule::NoUnwrap,
     ];
 
     fn id(self) -> &'static str {
@@ -85,6 +87,7 @@ impl Rule {
             Rule::ShellSpecialVar => "shell-special-var",
             Rule::EscapeComment => "escape-comment",
             Rule::MutationCases => "mutation-cases",
+            Rule::NoUnwrap => "no-unwrap",
         }
     }
 
@@ -105,6 +108,7 @@ impl Rule {
             Rule::ShellSpecialVar => "bash の特殊変数 (GROUPS、RANDOM、SECONDS..) と PowerShell の自動変数 ($input、$args、$Host、$PID、$Error..) に代入しない (masu の bench.yml が入力を GROUPS で渡していた): 自分の名前を付ける",
             Rule::EscapeComment => "正しい動作の代わりに近道をコメントに書かない (ユーザーの決まり 2026-11-20): to-do の印、for now、簡略化、not implemented、スタブ、近似、best effort を書かずに実装する。not supported / 近似 / 無視は同じコメントに Windows の根拠 (実測、golden、仕様) があるときだけ。既にある箇所は scripts/ci/escape-known.txt (減る一方)",
             Rule::MutationCases => "夜間の review-mutations.py の表が木と合う: 置換元は対象ファイルに 1 回、テスト名の絞り込みは有効な #[test] 1 個に当たる (2026-11-20 の夜間 CI 失敗)",
+            Rule::NoUnwrap => "crates/ のテストでないコード (build.rs も。e2e/ と examples/ はテストと同じく外す) に .unwrap() / .expect(..) を書かない (2026-11-20「unwrapを根絶する」): 失敗しうるものは ? と型付きのエラー、起きない前提は型 (配列の長さ、shirusu_bytes の固定位置の読み出し、enum の状態) で表す。expect への言い換えも同じく禁止",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -126,6 +130,7 @@ impl Rule {
             Rule::ShellSpecialVar => regress::shell_special_var(tree),
             Rule::EscapeComment => escape::escape_comment(tree),
             Rule::MutationCases => mutations::mutation_cases(tree),
+            Rule::NoUnwrap => regress::no_unwrap(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {

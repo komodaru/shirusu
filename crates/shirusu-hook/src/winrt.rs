@@ -612,17 +612,17 @@ pub fn winrt_activation_leave_values(hresult: i32, returned_object: u64) -> Vec<
 }
 
 pub fn encode_winrt_activation_enter(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
     encode_values(
-        crate::callback::cached_schema_types(&TYPES, winrt_activation_enter_schema),
+        crate::callback::cached_schema_types(&TYPES, winrt_activation_enter_schema)?,
         values,
     )
 }
 
 pub fn encode_winrt_activation_leave(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
     encode_values(
-        crate::callback::cached_schema_types(&TYPES, winrt_activation_leave_schema),
+        crate::callback::cached_schema_types(&TYPES, winrt_activation_leave_schema)?,
         values,
     )
 }

@@ -112,6 +112,88 @@ pub(super) fn hook_lock_poison(tree: &Tree) -> Hits {
     out
 }
 
+// --- no-unwrap ----------------------------------------------------------------------------------
+
+/// テストでない式の `.unwrap()` と `.expect(..)` (2026-11-20「unwrapを根絶する」)
+#[derive(Default)]
+struct Unwraps(Vec<(usize, String)>);
+
+/// テストか証明でだけ作られる項目: `#[cfg(test)]` の類、`#[test]`、Kani の `#[cfg(kani)]` と
+/// `#[kani::proof]`
+fn is_test_only(attrs: &[syn::Attribute]) -> bool {
+    is_cfg_test(attrs)
+        || attrs.iter().any(|a| {
+            let p = a.path();
+            p.is_ident("test")
+                || (p.segments.len() == 2 && p.segments[0].ident == "kani")
+                || (p.is_ident("cfg")
+                    && matches!(&a.meta, syn::Meta::List(l) if l.tokens.to_string().split_whitespace().collect::<String>() == "kani"))
+        })
+}
+
+impl<'a> Visit<'a> for Unwraps {
+    fn visit_item_mod(&mut self, m: &'a syn::ItemMod) {
+        if !is_test_only(&m.attrs) {
+            syn::visit::visit_item_mod(self, m);
+        }
+    }
+    fn visit_item_fn(&mut self, f: &'a syn::ItemFn) {
+        if !is_test_only(&f.attrs) {
+            syn::visit::visit_item_fn(self, f);
+        }
+    }
+    fn visit_item_impl(&mut self, i: &'a syn::ItemImpl) {
+        if !is_test_only(&i.attrs) {
+            syn::visit::visit_item_impl(self, i);
+        }
+    }
+    fn visit_impl_item_fn(&mut self, f: &'a syn::ImplItemFn) {
+        if !is_test_only(&f.attrs) {
+            syn::visit::visit_impl_item_fn(self, f);
+        }
+    }
+    fn visit_expr_method_call(&mut self, m: &'a syn::ExprMethodCall) {
+        let n = m.method.to_string();
+        if (n == "unwrap" && m.args.is_empty()) || (n == "expect" && m.args.len() == 1) {
+            self.0.push((line(m.method.span()), format!(".{n}()")));
+        }
+        syn::visit::visit_expr_method_call(self, m);
+    }
+    /// `vec![..]`、`format!(..)`、`assert!(..)` などの引数 (式をカンマで並べたもの) の中も見る
+    fn visit_macro(&mut self, m: &'a syn::Macro) {
+        use syn::punctuated::Punctuated;
+        if let Ok(args) =
+            m.parse_body_with(Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated)
+        {
+            let mut inner = Unwraps::default();
+            for e in &args {
+                inner.visit_expr(e);
+            }
+            self.0.extend(inner.0);
+        }
+        syn::visit::visit_macro(self, m);
+    }
+}
+
+/// syn で読むので cfg(windows) の側も Linux の CI で見る (clippy は自分のターゲットの側しか見ない)。
+/// 対象は crates/ の製品のコード (build.rs も)。テストと同じ扱いで外すのは、テストのファイル、
+/// e2e/ (端から端までのテストのハーネスとその計測プログラム) と examples/ (開発用の計測)。
+pub(super) fn no_unwrap(tree: &Tree) -> Hits {
+    let mut out = Hits::new();
+    for f in product_rs(tree, "crates/")
+        .into_iter()
+        .filter(|f| !f.contains("/examples/"))
+    {
+        let Ok(file) = syn::parse_file(&tree.text(&f)) else {
+            continue;
+        };
+        let mut v = Unwraps::default();
+        v.visit_file(&file);
+        out.extend(v.0.into_iter().map(|(l, w)| (f.clone(), l, w)));
+    }
+    out
+}
+
 // --- rwx-pages ----------------------------------------------------------------------------------
 
 /// 書き込みと実行が同時にできるページの保護値

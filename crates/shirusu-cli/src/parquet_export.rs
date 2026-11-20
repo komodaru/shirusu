@@ -108,7 +108,12 @@ impl<W: Write + Send> EventParquet<W> {
             let events = &events[..];
             let mut group = writer.next_row_group()?;
             for definition in COLUMNS {
-                let mut column = group.next_column()?.expect("schema matches COLUMNS");
+                let Some(mut column) = group.next_column()? else {
+                    return Err(parquet::errors::ParquetError::General(format!(
+                        "the schema has fewer columns than COLUMNS ({})",
+                        COLUMNS.len()
+                    )));
+                };
                 match definition {
                     Column::Unsigned(_, get) => {
                         // Parquet stores unsigned logical INT64 as the same bits in

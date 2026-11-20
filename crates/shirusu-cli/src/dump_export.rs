@@ -232,16 +232,21 @@ pub(crate) fn cmd_export(args: &[String]) -> Result<(), ToolError> {
     let format = parsed
         .opt("format")
         .ok_or_else(|| ToolError::Usage("export needs --format".into()))?;
-    if !matches!(format, "jsonl" | "parquet") {
-        return Err(ToolError::Usage(format!(
-            "unsupported format: {format} (expected jsonl or parquet)"
-        )));
-    }
-    if format == "parquet" && parsed.opt("output").is_none() {
-        return Err(ToolError::Usage(
-            "Parquet export requires --output <path>".into(),
-        ));
-    }
+    let output = parsed.opt("output");
+    let parquet_output = match (format, output) {
+        ("parquet", Some(output)) => Some(output),
+        ("parquet", None) => {
+            return Err(ToolError::Usage(
+                "Parquet export requires --output <path>".into(),
+            ))
+        }
+        ("jsonl", _) => None,
+        _ => {
+            return Err(ToolError::Usage(format!(
+                "unsupported format: {format} (expected jsonl or parquet)"
+            )))
+        }
+    };
     // P1-4: 1 Block ずつ読み、イベントを保持せずに書き出す
     // (以前は全イベントの TraceEvent と EventView を同時に保持していた)。
     let path = trace_path_arg(&parsed)?;
@@ -251,8 +256,7 @@ pub(crate) fn cmd_export(args: &[String]) -> Result<(), ToolError> {
     let mut tally = EventTally::default();
     let mut index = 0usize;
     let mut failed: Option<String> = None;
-    if format == "parquet" {
-        let output = parsed.opt("output").expect("validated output path");
+    if let Some(output) = parquet_output {
         let mut file = prepare_output(&path, output)?;
         let mut out = parquet_export::EventParquet::new(file.as_file_mut())
             .map_err(|e| ToolError::Runtime(format!("Parquet export failed: {e}")))?;
@@ -277,14 +281,13 @@ pub(crate) fn cmd_export(args: &[String]) -> Result<(), ToolError> {
         })?;
         return Ok(());
     }
-    let mut file = parsed
-        .opt("output")
-        .map(|output| prepare_output(&path, output))
+    let mut file = output
+        .map(|output| prepare_output(&path, output).map(|file| (output, file)))
         .transpose()?;
     {
         // P3-12: stdout もバッファを通す (1 イベントごとの書き込みをやめる)。
         let mut sink: Box<dyn std::io::Write + '_> = match file.as_mut() {
-            Some(file) => Box::new(std::io::BufWriter::new(file.as_file_mut())),
+            Some((_, file)) => Box::new(std::io::BufWriter::new(file.as_file_mut())),
             None => Box::new(std::io::BufWriter::new(std::io::stdout().lock())),
         };
         shirusu_analysis::stream_trace(input, |r, b, e| {
@@ -303,8 +306,7 @@ pub(crate) fn cmd_export(args: &[String]) -> Result<(), ToolError> {
         sink.flush()
             .map_err(|e| ToolError::Runtime(format!("flush failed: {e}")))?;
     }
-    if let Some(file) = file {
-        let output = parsed.opt("output").expect("output file was prepared");
+    if let Some((output, file)) = file {
         file.persist(output).map_err(|e| {
             ToolError::Runtime(format!("cannot publish JSONL output {output}: {e}"))
         })?;

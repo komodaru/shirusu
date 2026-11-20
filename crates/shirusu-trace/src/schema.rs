@@ -481,7 +481,7 @@ pub fn schema_content_hash(name: &str, fields: &[FieldDef]) -> u64 {
         h.update(&f.flags.to_le_bytes());
     }
     let digest = h.finalize();
-    u64::from_le_bytes(digest.as_bytes()[..8].try_into().expect("8 bytes"))
+    shirusu_bytes::u64_at::<0, 32>(digest.as_bytes())
 }
 
 /// 検証済み Schema 定義から Compact 用の型列を取り出す。

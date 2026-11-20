@@ -3,7 +3,7 @@
 use crate::oracle::{DifferenceFingerprint, TargetObservation};
 use crate::replay::{generate_candidate_replay, ReplaySlice};
 use shirusu_analysis::{EventView, TraceView};
-use shirusu_compare::{Candidate, CandidateKind, NormCall, NormTrace};
+use shirusu_compare::{Candidate, CandidateKind, NormCall, NormEvent, NormTrace};
 use shirusu_trace::reader::ReadTrace;
 use shirusu_trace::schema::{EventCapture, TypedValue, ValueCapture};
 
@@ -95,40 +95,38 @@ fn fingerprint_for_recorded_candidate(
     let ri = crate::select::locate_call(&rn, evidence).ok_or("comparison target is missing")?;
     let rtarget = rc
         .iter()
-        .position(|c| std::ptr::eq(*c, &rn.calls[ri]))
+        .position(|c| std::ptr::eq(c.call, &rn.calls[ri]))
         .ok_or("comparison target position is missing")?;
     if rtarget != target {
         return Err("recorded prerequisite sequences differ".into());
     }
     for (l, r) in lc.iter().zip(&rc).take(target) {
-        if l.api != r.api
-            || l.enter.as_ref().unwrap().fields != r.enter.as_ref().unwrap().fields
-            || l.leave.as_ref().unwrap().fields != r.leave.as_ref().unwrap().fields
+        if l.call.api != r.call.api
+            || l.enter.fields != r.enter.fields
+            || l.leave.fields != r.leave.fields
         {
             return Err("recorded prerequisites differ before the target".into());
         }
     }
     let rcall = rc[target];
-    if lcall.api != rcall.api
-        || lcall.enter.as_ref().unwrap().fields != rcall.enter.as_ref().unwrap().fields
-    {
+    if lcall.call.api != rcall.call.api || lcall.enter.fields != rcall.enter.fields {
         return Err("target inputs differ; one replay cannot represent both".into());
     }
-    let baseline = observation(&lv, lcall)?;
+    let baseline = observation(&lv, *lcall)?;
     let comparison = observation(&rv, rcall)?;
     if baseline == comparison {
         return Err("candidate has no supported semantic output difference".into());
     }
     let fingerprint = DifferenceFingerprint {
         source_step: target,
-        call: lcall.api.clone(),
+        call: lcall.call.api.clone(),
         baseline,
         candidate: comparison,
     };
     Ok((replay, fingerprint))
 }
 
-fn ordered_calls<'a>(view: &TraceView, norm: &'a NormTrace) -> Result<Vec<&'a NormCall>, String> {
+fn ordered_calls<'a>(view: &TraceView, norm: &'a NormTrace) -> Result<Vec<Paired<'a>>, String> {
     let i = &view.integrity;
     if !i.has_finalization
         || !i.finalized_cleanly
@@ -156,32 +154,42 @@ fn ordered_calls<'a>(view: &TraceView, norm: &'a NormTrace) -> Result<Vec<&'a No
     }
     let mut calls: Vec<_> = norm.calls.iter().collect();
     calls.sort_by_key(|c| c.first_sequence);
-    if calls.len().checked_mul(2) != Some(view.events.len())
-        || calls.iter().any(|c| {
-            c.enter.is_none()
-                || c.leave.is_none()
-                || c.completed.is_some()
-                || c.aborted.is_some()
-                || c.solo.is_some()
-        })
-    {
+    if calls.len().checked_mul(2) != Some(view.events.len()) {
         return Err("trace calls must have paired synchronous enter/leave events".into());
     }
+    let mut paired = Vec::with_capacity(calls.len());
     let mut previous = None;
-    for c in &calls {
-        let enter = c.enter.as_ref().unwrap();
-        let leave = c.leave.as_ref().unwrap();
+    for call in calls {
+        let (Some(enter), Some(leave), None, None, None) = (
+            call.enter.as_ref(),
+            call.leave.as_ref(),
+            call.completed.as_ref(),
+            call.aborted.as_ref(),
+            call.solo.as_ref(),
+        ) else {
+            return Err("trace calls must have paired synchronous enter/leave events".into());
+        };
         if enter.sequence >= leave.sequence || previous.is_some_and(|p| p >= enter.sequence) {
             return Err("trace calls overlap or have duplicate sequence numbers".into());
         }
         previous = Some(leave.sequence);
+        paired.push(Paired { call, enter, leave });
     }
-    Ok(calls)
+    Ok(paired)
 }
 
-fn observation(view: &TraceView, call: &NormCall) -> Result<TargetObservation, String> {
-    let enter = &view.events[call.enter.as_ref().unwrap().source_index];
-    let leave = &view.events[call.leave.as_ref().unwrap().source_index];
+/// 入口と出口が揃った同期呼び出し (ordered_calls が確かめたもの)。
+#[derive(Clone, Copy)]
+struct Paired<'a> {
+    call: &'a NormCall,
+    enter: &'a NormEvent,
+    leave: &'a NormEvent,
+}
+
+fn observation(view: &TraceView, paired: Paired<'_>) -> Result<TargetObservation, String> {
+    let call = paired.call;
+    let enter = &view.events[paired.enter.source_index];
+    let leave = &view.events[paired.leave.source_index];
     if call.api == "kernel32!CreateFileW" {
         let pointer_width = view
             .trace

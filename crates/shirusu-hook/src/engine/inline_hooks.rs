@@ -381,11 +381,8 @@ impl SuspendedThreads {
             .handles
             .iter()
             .all(|&handle| thread_instruction_pointer(handle).is_ok());
-        let result = if verified {
-            suspended
-                .snapshot
-                .as_mut()
-                .unwrap()
+        let result = match (verified, suspended.snapshot.as_mut()) {
+            (true, Some(snapshot)) => snapshot
                 .only_known_threads(current_pid, current_tid, &suspended.thread_ids)
                 .map_err(|_| "thread-snapshot-unavailable")
                 .and_then(|known| {
@@ -394,9 +391,9 @@ impl SuspendedThreads {
                     } else {
                         Err("thread-set-changed")
                     }
-                })
-        } else {
-            Err("thread-context-unavailable")
+                }),
+            (true, None) => Err("thread-snapshot-unavailable"),
+            (false, _) => Err("thread-context-unavailable"),
         };
         if let Err(reason) = result {
             suspended.resume();
@@ -493,7 +490,7 @@ pub(super) fn follow_import_thunks(mut address: usize) -> Option<usize> {
         if !ProcessMemory.read_exact(address as u64, &mut bytes) || bytes[..2] != [0xff, 0x25] {
             return Some(address);
         }
-        let displacement = u32::from_le_bytes(bytes[2..6].try_into().unwrap());
+        let displacement = shirusu_bytes::u32_at::<2, 6>(&bytes);
         #[cfg(target_pointer_width = "64")]
         let slot = (address as u64)
             .checked_add(6)?

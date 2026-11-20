@@ -88,7 +88,7 @@ fn service_spawn_and_stop() {
         .recv_timeout(Duration::from_secs(5))
         .expect("delivery must arrive");
     assert!(matches!(delivery.mapping, DeliveredMapping::InProcess(_)));
-    let service = handle.stop();
+    let service = handle.stop().unwrap();
     assert_eq!(service.created, 1);
     assert_eq!(service.mappings_held(), 1);
     let _ = stop.load(Ordering::Relaxed);

@@ -141,20 +141,24 @@ impl std::fmt::Debug for Shm {
 /// require::<shirusu_transport::shm::SlotRegistration>();
 /// ```
 pub struct SlotRegistration {
-    region: Option<Shm>,
+    region: Shm,
+    /// Set by [`bind`](Self::bind) (which consumes the reservation): the drop that follows keeps
+    /// the registration word.
+    bound: bool,
 }
 
 impl SlotRegistration {
     /// A registered slot reuses the same mapping across writer generations.
     pub fn bind(mut self) -> Shm {
-        self.region.take().expect("registration consumed once")
+        self.bound = true;
+        self.region.clone()
     }
 }
 
 impl Drop for SlotRegistration {
     fn drop(&mut self) {
-        if let Some(region) = &self.region {
-            region.control().words[SLOT_REGISTRATION_WORD].store(0, Ordering::Release);
+        if !self.bound {
+            self.region.control().words[SLOT_REGISTRATION_WORD].store(0, Ordering::Release);
         }
     }
 }
@@ -228,7 +232,8 @@ impl Shm {
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .ok()?;
         Some(SlotRegistration {
-            region: Some(self.clone()),
+            region: self.clone(),
+            bound: false,
         })
     }
 

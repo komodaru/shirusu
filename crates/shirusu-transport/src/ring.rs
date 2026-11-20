@@ -229,7 +229,7 @@ unsafe fn read_descriptor_at(base: *const u8, cfg: RingConfig, cursor: u64) -> E
     let mut buf = [0u8; 64];
     // SAFETY: the slot `off..off + 64` lies in the descriptor region.
     unsafe { std::ptr::copy_nonoverlapping(base.add(off), buf.as_mut_ptr(), 64) };
-    EventDescriptor::from_bytes(&buf).expect("64 bytes always decode")
+    EventDescriptor::from_array(&buf)
 }
 /// 終端をまたぐ場合は末尾と先頭に分割してコピーする。
 #[inline(always)]

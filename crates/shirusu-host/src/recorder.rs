@@ -808,8 +808,13 @@ impl CaptureSession {
                 };
                 ring.collector = Some(collector);
             }
-            let shared = ring.worker.as_ref().expect("worker just ensured");
-            let collector = ring.collector.as_mut().expect("collector just ensured");
+            // (どちらも上で置いてある; 無ければこの Ring は回収できない)
+            let (Some(shared), Some(collector)) = (ring.worker.as_ref(), ring.collector.as_mut())
+            else {
+                ring.stopped = true;
+                stats.stopped_rings += 1;
+                continue;
+            };
             if !collector.is_stopped() && shared.is_stopped() {
                 // The validator rejected an earlier chunk: stop releasing space.
                 collector.stop();

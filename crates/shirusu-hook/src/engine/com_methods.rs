@@ -244,8 +244,12 @@ pub(crate) fn com_method_dispatch_with(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: original はこの引数個数の COM メソッド。
-    let (ret, (mut call_guard, rt, _flight, mut guard, instance)) =
+    let (ret, state) =
         crate::seh::invoke(original, invoke, (call_guard, rt, _flight, guard, instance));
+    let Some((mut call_guard, rt, _flight, mut guard, instance)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     if !crate::runtime::native_tls_available() {

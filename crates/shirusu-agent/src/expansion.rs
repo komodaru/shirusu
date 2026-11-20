@@ -53,25 +53,24 @@ pub struct ExpansionManager {
 /// 管理スレッドを別スレッドで回すためのハンドル。`stop()` で停止して
 /// 統計を回収する。
 pub struct ExpansionManagerHandle {
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<ExpansionStats>>,
+    stop: StopOnDrop,
+    thread: std::thread::JoinHandle<ExpansionStats>,
+}
+/// 止め忘れてもスレッドが残り続けないよう、落ちるときに停止だけは要求する
+/// (join は stop() の役目)。
+struct StopOnDrop(Arc<AtomicBool>);
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 impl ExpansionManagerHandle {
     /// 管理スレッドを止め、統計を回収する。
-    pub fn stop(mut self) -> ExpansionStats {
-        self.stop.store(true, Ordering::Relaxed);
-        self.thread
-            .take()
-            .expect("expansion manager thread")
-            .join()
-            .expect("expansion manager thread panicked")
-    }
-}
-impl Drop for ExpansionManagerHandle {
-    fn drop(&mut self) {
-        // 止め忘れてもスレッドが残り続けないよう、停止だけは要求する
-        // (join は stop() の役目)。
-        self.stop.store(true, Ordering::Relaxed);
+    /// スレッドが panic していればその値 (`Err`) を返す。
+    pub fn stop(self) -> std::thread::Result<ExpansionStats> {
+        let Self { stop, thread } = self;
+        stop.0.store(true, Ordering::Relaxed);
+        thread.join()
     }
 }
 
@@ -188,8 +187,8 @@ impl Agent {
         let stop_clone = Arc::clone(&stop);
         let thread = std::thread::spawn(move || manager.run(stop_clone));
         ExpansionManagerHandle {
-            stop,
-            thread: Some(thread),
+            stop: StopOnDrop(stop),
+            thread,
         }
     }
 }

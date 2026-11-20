@@ -17,7 +17,7 @@
 //!   Mapping の無いローカル領域で記録を始める競合があった)。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::expansion::EXPANDED_SLOT_GENERATION;
 use crate::layout::RingConfig;
@@ -169,13 +169,23 @@ impl SlotPool {
         self.slot_memory_bytes = config.required_len() as u64;
         self
     }
+    /// The slot list under its read lock. A poisoned lock is taken back: the only write is one
+    /// `push` of a whole `Arc<Slot>` ([`add_slot`](Self::add_slot)), so a holder that panicked left
+    /// the list as it was or one longer, never half-written; each slot's own state is atomic.
+    fn slots_read(&self) -> RwLockReadGuard<'_, Vec<Arc<Slot>>> {
+        self.slots.read().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// The slot list under its write lock (poison taken back as in [`slots_read`](Self::slots_read)).
+    fn slots_write(&self) -> RwLockWriteGuard<'_, Vec<Arc<Slot>>> {
+        self.slots.write().unwrap_or_else(PoisonError::into_inner)
+    }
     /// Configured Ring mapping bytes; excludes Host copies and allocator costs.
     pub fn total_memory_bytes(&self) -> u64 {
-        (self.slots.read().unwrap().len() as u64).saturating_mul(self.slot_memory_bytes)
+        (self.slots_read().len() as u64).saturating_mul(self.slot_memory_bytes)
     }
     /// もう 1 Slot 追加しても総メモリ上限に収まるか。上限なしなら常に true。
     pub fn can_add_slot(&self) -> bool {
-        self.can_add_slot_with_len(self.slots.read().unwrap().len())
+        self.can_add_slot_with_len(self.slots_read().len())
     }
     fn can_add_slot_with_len(&self, len: usize) -> bool {
         match self.memory_limit_bytes {
@@ -195,7 +205,7 @@ impl SlotPool {
     /// の無い Slot で記録が始まってしまう。レビュー #4 の #10)。
     /// 総メモリ上限を超える場合は追加せず None を返す (既存 Slot は不変)。
     pub fn add_slot(&self) -> Option<usize> {
-        let mut slots = self.slots.write().unwrap();
+        let mut slots = self.slots_write();
         if !self.can_add_slot_with_len(slots.len()) {
             return None;
         }
@@ -210,7 +220,7 @@ impl SlotPool {
     /// Mapping を必ず観測する。対象が PREPARING でない (初期 Slot や
     /// 二重公開) 場合は何もせず false を返す。
     pub fn publish_slot(&self, index: usize) -> bool {
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots_read();
         let Some(s) = slots.get(index) else {
             return false;
         };
@@ -229,17 +239,15 @@ impl SlotPool {
         published
     }
     pub fn capacity(&self) -> usize {
-        self.slots.read().unwrap().len()
+        self.slots_read().len()
     }
     /// Slot 本体を共有する。返した `Arc<Slot>` は追加で Vec が伸びても同じ
     /// Slot を指し続ける (状態・generation は原子操作で読む)。
     pub fn slot(&self, index: usize) -> Arc<Slot> {
-        Arc::clone(&self.slots.read().unwrap()[index])
+        Arc::clone(&self.slots_read()[index])
     }
     pub fn free_count(&self) -> usize {
-        self.slots
-            .read()
-            .unwrap()
+        self.slots_read()
             .iter()
             .filter(|s| s.state() == SlotState::Free)
             .count()
@@ -247,7 +255,7 @@ impl SlotPool {
     /// FREE→CLAIMED→ACTIVE。CAS はこの取得時だけ。低水位では拡張要求だけ立てる。
     pub fn claim(&self, thread_id: u64) -> Option<SlotHandle> {
         // 1 つの読みロックで走査と低水位判定を済ませる (再ロックしない)。
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots_read();
         for (i, s) in slots.iter().enumerate() {
             if s.state
                 .compare_exchange(SLOT_FREE, SLOT_CLAIMED, Ordering::AcqRel, Ordering::Acquire)
@@ -286,7 +294,7 @@ impl SlotPool {
     pub fn cancel_claim(&self, handle: SlotHandle) -> bool {
         // Serialize validation with reuse: a copied handle could otherwise see the
         // previous owner, pause, and CAS a newly active slot into RECLAIMING.
-        let slots = self.slots.write().unwrap();
+        let slots = self.slots_write();
         let s = &slots[handle.index];
         if s.generation() != handle.generation
             || s.owner_thread_id.load(Ordering::Relaxed) != handle.thread_id
@@ -310,7 +318,7 @@ impl SlotPool {
     }
     /// DETACH は DRAINING への移行のみ（Loader Lock 中でも待たない）。
     pub fn begin_detach(&self, handle: &SlotHandle) -> bool {
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots_read();
         let s = &slots[handle.index];
         if s.generation() != handle.generation {
             return false;
@@ -326,7 +334,7 @@ impl SlotPool {
     }
     /// DETACH 後の呼出は記録せず欠落として数える。
     pub fn note_call_after_detach(&self, handle: &SlotHandle) -> bool {
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots_read();
         let s = &slots[handle.index];
         if s.state() == SlotState::Draining || s.state() == SlotState::Reclaimable {
             let _ = handle;
@@ -346,7 +354,7 @@ impl SlotPool {
         if !thread_ended || !drained {
             return false;
         }
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots_read();
         let s = &slots[handle.index];
         if s.generation() != handle.generation {
             return false;
@@ -370,7 +378,7 @@ impl SlotPool {
     /// 以前の実装は FREE への CAS を先に行っており、公開直後に claim した
     /// 新 Producer が旧 Generation を読む競合があった。
     pub fn host_reclaim(&self, handle: &SlotHandle) -> bool {
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots_read();
         let s = &slots[handle.index];
         if s.generation() != handle.generation {
             return false;

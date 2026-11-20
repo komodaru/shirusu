@@ -155,8 +155,11 @@ pub unsafe fn install_hooks(
         // Save the descriptor BEFORE publication, including the failing entry.
         installed.slots.push(state);
         if !canonical
-            // SAFETY: the slot is inside this loaded image and installation is serialized by the caller.
-            || unsafe { exchange_iat(slot, installed.slots.last().unwrap(), true) }.is_err()
+            || installed
+                .slots
+                .last()
+                // SAFETY: the slot is inside this loaded image and installation is serialized by the caller.
+                .is_none_or(|state| unsafe { exchange_iat(slot, state, true) }.is_err())
         {
             // SAFETY: `installed` holds only slots this function exchanged in this image.
             unsafe {

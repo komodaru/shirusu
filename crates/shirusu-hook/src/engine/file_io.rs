@@ -312,7 +312,7 @@ pub(super) unsafe extern "system-unwind" fn detour_create_file_w(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (ret, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (ret, state) = crate::seh::invoke(
         original,
         |_| unsafe {
             orig(
@@ -327,6 +327,10 @@ pub(super) unsafe extern "system-unwind" fn detour_create_file_w(
         },
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -395,11 +399,15 @@ pub(super) unsafe extern "system-unwind" fn detour_read_file(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (ret, (mut call_guard, pending_submission, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (ret, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(file, buffer, bytes_to_read, bytes_read, overlapped) },
         (call_guard, pending_submission, rt, _flight, guard),
     );
+    let Some((mut call_guard, pending_submission, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -513,11 +521,15 @@ pub(super) unsafe extern "system-unwind" fn detour_write_file(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (ret, (mut call_guard, pending_submission, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (ret, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(file, buffer, bytes_to_write, bytes_written, overlapped) },
         (call_guard, pending_submission, rt, _flight, guard),
     );
+    let Some((mut call_guard, pending_submission, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -593,11 +605,15 @@ pub(super) unsafe extern "system-unwind" fn detour_close_handle(object: Handle) 
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (ret, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (ret, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(object) },
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -656,11 +672,15 @@ pub(super) unsafe extern "system-unwind" fn detour_get_overlapped_result(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (ret, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (ret, state) = crate::seh::invoke(
         original,
         |_| unsafe { orig(file, overlapped, bytes_transferred, wait) },
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();
@@ -755,7 +775,7 @@ pub(super) unsafe extern "system-unwind" fn detour_get_queued_completion_status(
     le.restore_before_original(); // P1-5: 元の API が入口時点の値を観測する
     guard.suspend();
     // SAFETY: 元の呼び出しは引数をそのまま渡す。
-    let (ret, (mut call_guard, rt, _flight, mut guard)) = crate::seh::invoke(
+    let (ret, state) = crate::seh::invoke(
         original,
         |_| unsafe {
             orig(
@@ -768,6 +788,10 @@ pub(super) unsafe extern "system-unwind" fn detour_get_queued_completion_status(
         },
         (call_guard, rt, _flight, guard),
     );
+    let Some((mut call_guard, rt, _flight, mut guard)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     guard.resume();

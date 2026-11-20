@@ -44,26 +44,25 @@ pub struct ExpansionService {
 /// サービスを別スレッドで回すためのハンドル。`stop()` で停止して統計付きの
 /// サービス本体を回収する。
 pub struct ExpansionServiceHandle {
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<ExpansionService>>,
+    stop: StopOnDrop,
+    thread: std::thread::JoinHandle<ExpansionService>,
+}
+/// 止め忘れてもスレッドが残り続けないよう、落ちるときに停止だけは要求する
+/// (join は stop() の役目)。
+struct StopOnDrop(Arc<AtomicBool>);
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 impl ExpansionServiceHandle {
     /// サービススレッドを止め、本体を回収する。作成済み Mapping は本体と
     /// ともに破棄される (Agent が借りている `base` は以後使えない)。
-    pub fn stop(mut self) -> ExpansionService {
-        self.stop.store(true, Ordering::Relaxed);
-        self.thread
-            .take()
-            .expect("expansion service thread")
-            .join()
-            .expect("expansion service thread panicked")
-    }
-}
-impl Drop for ExpansionServiceHandle {
-    fn drop(&mut self) {
-        // 止め忘れてもスレッドが残り続けないよう、停止だけは要求する
-        // (join は stop() の役目)。
-        self.stop.store(true, Ordering::Relaxed);
+    /// スレッドが panic していればその値 (`Err`) を返す。
+    pub fn stop(self) -> std::thread::Result<ExpansionService> {
+        let Self { stop, thread } = self;
+        stop.0.store(true, Ordering::Relaxed);
+        thread.join()
     }
 }
 
@@ -119,8 +118,8 @@ impl ExpansionService {
         let stop_clone = Arc::clone(&stop);
         let thread = std::thread::spawn(move || self.run(stop_clone));
         ExpansionServiceHandle {
-            stop,
-            thread: Some(thread),
+            stop: StopOnDrop(stop),
+            thread,
         }
     }
     fn handle_request(&mut self, req: ExpansionRequest) {

@@ -39,13 +39,17 @@ impl<T: Send + 'static, E: Send + 'static> BackgroundDrain<T, E> {
         })
     }
 
+    /// (worker を持たないのは finish か drop の後だけ: 終わっている)
     pub(crate) fn is_finished(&self) -> bool {
-        self.worker.as_ref().expect("active worker").is_finished()
+        self.worker.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     pub(crate) fn finish(mut self) -> io::Result<(T, Result<(), E>)> {
         self.stop.store(true, Ordering::Release);
-        let worker = self.worker.take().expect("active worker");
+        let worker = self
+            .worker
+            .take()
+            .ok_or_else(|| io::Error::other("tree ring reader already finished"))?;
         worker.thread().unpark();
         worker
             .join()

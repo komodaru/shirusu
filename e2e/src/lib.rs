@@ -56,11 +56,38 @@ pub struct ScenarioReport {
     pub passed: bool,
     pub detail: String,
 }
-fn report(name: &'static str, passed: bool, detail: impl Into<String>) -> ScenarioReport {
-    ScenarioReport {
+fn report(name: &'static str, passed: bool, detail: impl Into<String>) -> Setup<ScenarioReport> {
+    Ok(ScenarioReport {
         name,
         passed,
         detail: detail.into(),
+    })
+}
+
+/// シナリオの準備 (領域の確保、スレッドの合流など) の失敗: 何が失敗したか。
+pub type Setup<T> = Result<T, String>;
+
+/// 準備に失敗したシナリオは、その理由を持つ失敗の報告になる。
+fn failed_setup(name: &'static str, run: Setup<ScenarioReport>) -> ScenarioReport {
+    run.unwrap_or_else(|detail| ScenarioReport {
+        name,
+        passed: false,
+        detail: format!("setup failed: {detail}"),
+    })
+}
+
+/// 準備の失敗を [`Setup`] の理由にする (`?` で失敗の報告へ)。
+pub trait Ctx<T> {
+    fn ctx(self, what: &str) -> Setup<T>;
+}
+impl<T, E: std::fmt::Debug> Ctx<T> for Result<T, E> {
+    fn ctx(self, what: &str) -> Setup<T> {
+        self.map_err(|e| format!("{what}: {e:?}"))
+    }
+}
+impl<T> Ctx<T> for Option<T> {
+    fn ctx(self, what: &str) -> Setup<T> {
+        self.ok_or_else(|| format!("{what}: none"))
     }
 }
 
@@ -96,8 +123,11 @@ pub fn writer_over(region: &SharedRegion, no_wait: bool) -> RingWriter {
 
 /// 基本: producer スレッドが書き、host が全件回収する。
 pub fn scenario_basic(count: u64) -> ScenarioReport {
+    failed_setup("basic", scenario_basic_steps(count))
+}
+fn scenario_basic_steps(count: u64) -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(1024, 256 * 1024);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?);
     let r2 = region.clone();
     let producer = std::thread::spawn(move || {
         let mut w = writer_over(&r2, false);
@@ -135,8 +165,11 @@ pub fn scenario_basic(count: u64) -> ScenarioReport {
 
 /// Host 一時停止: 同期ポイントで Host を止めている間、writer は劣化/欠落で前進し続ける。
 pub fn scenario_host_pause(sync: &SyncPoints) -> ScenarioReport {
+    failed_setup("host_pause_overflow", scenario_host_pause_steps(sync))
+}
+fn scenario_host_pause_steps(sync: &SyncPoints) -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(16, 1024);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    let region = SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?;
     let mut w = writer_over(&region, true);
     // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
@@ -166,8 +199,14 @@ pub fn scenario_host_pause(sync: &SyncPoints) -> ScenarioReport {
 
 /// 通知欠落: 通知を全部落としても 2ms 再確認相当の drain で回収できる。
 pub fn scenario_notification_loss(sync: &SyncPoints) -> ScenarioReport {
+    failed_setup(
+        "notification_loss_recheck",
+        scenario_notification_loss_steps(sync),
+    )
+}
+fn scenario_notification_loss_steps(sync: &SyncPoints) -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(64, 8192);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    let region = SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?;
     let mut w = writer_over(&region, true);
     // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
@@ -194,12 +233,18 @@ pub fn scenario_notification_loss(sync: &SyncPoints) -> ScenarioReport {
 /// Host が `NotifyingDrainWorker` で回収すると、`space_available` が SetEvent され、
 /// 待っていた書き手が欠落なく書き込みを再開できる（A61 のプロセス側配線）。
 pub fn scenario_space_available_notify() -> ScenarioReport {
+    failed_setup(
+        "space_available_notify",
+        scenario_space_available_notify_steps(),
+    )
+}
+fn scenario_space_available_notify_steps() -> Setup<ScenarioReport> {
     use shirusu_host::NotifyingDrainWorker;
     use shirusu_transport_win::RingNotify;
     use std::sync::mpsc;
 
     let cfg = RingConfig::new(4, 256);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?);
     let total = 16u64;
     let r2 = region.clone();
     let (tx, rx) = mpsc::channel();
@@ -228,7 +273,8 @@ pub fn scenario_space_available_notify() -> ScenarioReport {
     // Host 側の配線: NotifyingDrainWorker が回収と space_available 通知を結ぶ。
     // 回収は検証付き経路 (DrainWorker) を通る (R2)。
     // SAFETY: the only reader of this Ring (SPSC).
-    let worker = unsafe { shirusu_host::DrainWorker::new(region.shm().clone(), cfg, 1) }.unwrap();
+    let worker = unsafe { shirusu_host::DrainWorker::new(region.shm().clone(), cfg, 1) }
+        .ctx("DrainWorker::new")?;
     let notify = match RingNotify::new() {
         Ok(n) => Arc::new(n),
         Err(e) => return report("space_available_notify", false, format!("RingNotify: {e}")),
@@ -286,6 +332,12 @@ pub fn scenario_space_available_notify() -> ScenarioReport {
 /// プロセス間の実ハンドル受け渡しは Windows 実機の duplicate テストが担い、
 /// ここではプロセス内共有の同じ `Arc<RingNotify>` で結線する。
 pub fn scenario_agent_space_available_handoff() -> ScenarioReport {
+    failed_setup(
+        "agent_space_available_handoff",
+        scenario_agent_space_available_handoff_steps(),
+    )
+}
+fn scenario_agent_space_available_handoff_steps() -> Setup<ScenarioReport> {
     use shirusu_agent::{Agent, RecordResult};
     use shirusu_transport::slot::SlotPool as Pool;
     use shirusu_transport_win::RingNotify;
@@ -321,11 +373,11 @@ pub fn scenario_agent_space_available_handoff() -> ScenarioReport {
     };
     // Host 側: Agent の領域を検証付き経路 (DrainWorker) で読む。領域は Agent
     // が thread_begin で作り、thread_forget まで生きる。
-    let handle = agent.thread_begin(1).expect("thread_begin");
-    let base = agent.thread_region(1).expect("region base");
+    let handle = agent.thread_begin(1).ctx("thread_begin")?;
+    let base = agent.thread_region(1).ctx("region base")?;
     let mut host =
         // SAFETY: the only reader of this Ring (SPSC).
-        unsafe { shirusu_host::DrainWorker::new(base.clone(), cfg, handle.generation) }.unwrap();
+        unsafe { shirusu_host::DrainWorker::new(base.clone(), cfg, handle.generation) }.ctx("DrainWorker::new")?;
     let total = 16u64;
     let (tx, rx) = mpsc::channel();
     let producer_agent = Arc::clone(&agent);
@@ -386,6 +438,9 @@ pub fn scenario_agent_space_available_handoff() -> ScenarioReport {
 
 /// Host 強制終了: Agent は素通しになり、アプリ相当の処理は止まらない。
 pub fn scenario_host_killed() -> ScenarioReport {
+    failed_setup("host_killed_passthrough", scenario_host_killed_steps())
+}
+fn scenario_host_killed_steps() -> Setup<ScenarioReport> {
     use shirusu_agent::{Agent, RecordResult};
     use shirusu_transport::slot::SlotPool as Pool;
     let pool = Arc::new(Pool::new(2));
@@ -423,7 +478,7 @@ pub fn scenario_host_killed() -> ScenarioReport {
     };
     let (same_thread, same_sum) = app_work(&agent, 1);
     let (other_thread, other_sum) =
-        std::thread::scope(|scope| scope.spawn(|| app_work(&agent, 2)).join().unwrap());
+        std::thread::scope(|scope| scope.spawn(|| app_work(&agent, 2)).join()).ctx("join")?;
     let elapsed = started.elapsed();
     let expected_sum = (0..CALLS).fold(0u64, |sum, i| sum.wrapping_add(i * i));
     let app_continues = same_thread == CALLS
@@ -443,8 +498,11 @@ pub fn scenario_host_killed() -> ScenarioReport {
 
 /// 書き手が途中で終了 (クラッシュ相当): 公開済みだけが回収される。
 pub fn scenario_writer_stops_midway() -> ScenarioReport {
+    failed_setup("writer_stops_midway", scenario_writer_stops_midway_steps())
+}
+fn scenario_writer_stops_midway_steps() -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(64, 8192);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?);
     let r2 = region.clone();
     let producer = std::thread::spawn(move || {
         let mut w = writer_over(&r2, true);
@@ -453,7 +511,7 @@ pub fn scenario_writer_stops_midway() -> ScenarioReport {
         }
         // ここで突然終了する (writer を drop、未公開の作業は存在しない)
     });
-    producer.join().unwrap();
+    producer.join().ctx("join")?;
     // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let b = rd.drain_all();
@@ -466,16 +524,19 @@ pub fn scenario_writer_stops_midway() -> ScenarioReport {
 
 /// Slot 再利用と Generation: 終了確認+回収後にだけ再利用でき、世代が混ざらない。
 pub fn scenario_slot_reuse() -> ScenarioReport {
+    failed_setup("slot_reuse_generation", scenario_slot_reuse_steps())
+}
+fn scenario_slot_reuse_steps() -> Setup<ScenarioReport> {
     let pool = SlotPool::new(1);
-    let h1 = pool.claim(100).unwrap();
+    let h1 = pool.claim(100).ctx("claim")?;
     pool.begin_detach(&h1);
     let blocked = pool.claim(200).is_none();
     let released = shirusu_host::host_release_slot(&pool, &h1, true, true);
-    let h2 = pool.claim(200).unwrap();
+    let h2 = pool.claim(200).ctx("claim")?;
     let ok = blocked && released && h2.generation == h1.generation + 1 && h2.index == h1.index;
     // 世代の違う像は検証で弾かれる
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, h2.generation, 200).unwrap();
+    let region = SharedRegion::new(cfg, h2.generation, 200).ctx("SharedRegion::new")?;
     let mut vr = ValidatingReader::new(KnownConfig::new(cfg, cfg.required_len()), h1.generation);
     // SAFETY: no writer is writing to the region while it is copied.
     let gen_rejected = vr.drain_image(&unsafe { region.snapshot() }).is_err();
@@ -488,8 +549,11 @@ pub fn scenario_slot_reuse() -> ScenarioReport {
 
 /// 共有メモリ破壊: Host は崩れず Integrity 喪失として扱う。
 pub fn scenario_corruption() -> ScenarioReport {
+    failed_setup("corrupted_memory", scenario_corruption_steps())
+}
+fn scenario_corruption_steps() -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(8, 256);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    let region = SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?;
     // SAFETY: no writer is writing to the region while it is copied.
     let mut image = AlignedImage::copy_of(&unsafe { region.snapshot() });
     image.set(Word::PayloadWritePosition, u64::MAX);
@@ -508,8 +572,11 @@ pub fn scenario_corruption() -> ScenarioReport {
 /// 25 件分のギャップが報告される (Host は Reader 状態を永続化すべき、という
 /// 運用上の含意を detail に残す)。
 pub fn scenario_host_restart_resume() -> ScenarioReport {
+    failed_setup("host_restart_resume", scenario_host_restart_resume_steps())
+}
+fn scenario_host_restart_resume_steps() -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(128, 16384);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    let region = SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?;
     let mut w = writer_over(&region, true);
     let mut seqs: Vec<u64> = Vec::new();
     for i in 0..40u64 {
@@ -544,8 +611,14 @@ pub fn scenario_host_restart_resume() -> ScenarioReport {
 /// Producer が公開途中で kill: Payload と Descriptor の途中まで書いた状態で
 /// スレッドが死んでも、Host は確定済みだけを回収し、壊れたスロットに触れない。
 pub fn scenario_producer_killed_mid_publish() -> ScenarioReport {
+    failed_setup(
+        "producer_killed_mid_publish",
+        scenario_producer_killed_mid_publish_steps(),
+    )
+}
+fn scenario_producer_killed_mid_publish_steps() -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(16, 1024);
-    let region = Arc::new(SharedRegion::new(cfg, 1, 1).unwrap());
+    let region = Arc::new(SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?);
     let mut w = writer_over(&region, true);
     for i in 0..5u64 {
         w.write(ev(i, b"committed"));
@@ -565,7 +638,7 @@ pub fn scenario_producer_killed_mid_publish() -> ScenarioReport {
         }
         // ここでスレッド終了 = kill。write_cursor は進んでいない。
     });
-    killer.join().unwrap();
+    killer.join().ctx("join")?;
     // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
     let b = rd.drain_all();
@@ -589,14 +662,20 @@ pub fn scenario_producer_killed_mid_publish() -> ScenarioReport {
 /// 32 スレッド Producer ストーム: 各スレッドが自分の Ring に 2000 件書き、
 /// Slot の claim/release まで含めて会計が一致する。
 pub fn scenario_producer_storm_32_threads() -> ScenarioReport {
+    failed_setup(
+        "producer_storm_32_threads",
+        scenario_producer_storm_32_threads_steps(),
+    )
+}
+fn scenario_producer_storm_32_threads_steps() -> Setup<ScenarioReport> {
     let pool = Arc::new(SlotPool::new(32));
     let threads: Vec<_> = (0..32u64)
         .map(|t| {
             let pool = pool.clone();
-            std::thread::spawn(move || {
-                let handle = pool.claim(t).expect("32 slots for 32 threads");
+            std::thread::spawn(move || -> Setup<(u64, bool, u64)> {
+                let handle = pool.claim(t).ctx("32 slots for 32 threads")?;
                 let cfg = RingConfig::new(256, 32768);
-                let region = SharedRegion::new(cfg, 1, t).unwrap();
+                let region = SharedRegion::new(cfg, 1, t).ctx("SharedRegion::new")?;
                 let mut w = writer_over(&region, true);
                 // SAFETY: the only reader of this region (SPSC).
                 let mut rd = unsafe { region.reader() };
@@ -605,7 +684,7 @@ pub fn scenario_producer_storm_32_threads() -> ScenarioReport {
                     let p = (t * 100_000 + i).to_le_bytes();
                     match w.write(ev(i, &p)) {
                         WriteOutcome::Published { .. } => {}
-                        _ => return (t, false, got),
+                        _ => return Ok((t, false, got)),
                     }
                     if i % 251 == 250 {
                         got += rd.drain_all().events.len() as u64;
@@ -614,14 +693,14 @@ pub fn scenario_producer_storm_32_threads() -> ScenarioReport {
                 got += rd.drain_all().events.len() as u64;
                 pool.begin_detach(&handle);
                 let released = shirusu_host::host_release_slot(&pool, &handle, true, true);
-                (t, released && got == 2000, got)
+                Ok((t, released && got == 2000, got))
             })
         })
         .collect();
     let mut all_ok = true;
     let mut total = 0u64;
     for h in threads {
-        let (_t, ok, got) = h.join().unwrap();
+        let (_t, ok, got) = h.join().ctx("join")??;
         all_ok &= ok;
         total += got;
     }
@@ -639,9 +718,15 @@ pub fn scenario_producer_storm_32_threads() -> ScenarioReport {
 /// 100 万イベントのソーク: 小さい Ring に圧力をかけ続け、最後に
 /// 「書込 = 受信 + 欠落」 の保存則と Payload 内容を全件突き合わせる。
 pub fn scenario_soak_loss_accounting() -> ScenarioReport {
+    failed_setup(
+        "soak_1m_loss_accounting",
+        scenario_soak_loss_accounting_steps(),
+    )
+}
+fn scenario_soak_loss_accounting_steps() -> Setup<ScenarioReport> {
     const TOTAL: u64 = 1_000_000;
     let cfg = RingConfig::new(64, 4096);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    let region = SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?;
     let mut w = writer_over(&region, true);
     // SAFETY: the only reader of this region (SPSC).
     let mut rd = unsafe { region.reader() };
@@ -715,8 +800,14 @@ pub fn scenario_soak_loss_accounting() -> ScenarioReport {
 /// 共有メモリ破壊注入: 途中まで正常に読んだ後で Descriptor を壊すと、
 /// Host はクラッシュせず Ring 停止 + Integrity 喪失で止まる。
 pub fn scenario_corruption_injection_stops_ring() -> ScenarioReport {
+    failed_setup(
+        "corruption_injection_stops_ring",
+        scenario_corruption_injection_stops_ring_steps(),
+    )
+}
+fn scenario_corruption_injection_stops_ring_steps() -> Setup<ScenarioReport> {
     let cfg = RingConfig::new(16, 1024);
-    let region = SharedRegion::new(cfg, 1, 1).unwrap();
+    let region = SharedRegion::new(cfg, 1, 1).ctx("SharedRegion::new")?;
     let mut w = writer_over(&region, true);
     for i in 0..10u64 {
         w.write(ev(i, b"stage"));
@@ -754,6 +845,12 @@ pub fn scenario_corruption_injection_stops_ring() -> ScenarioReport {
 /// DETACH 中の公開ストーム: DETACH 後の呼出は 1 万回でも全て欠落カウントされ、
 /// 記録は増えず、Host 回収が終わるまで Slot は再利用できない。
 pub fn scenario_detach_publish_storm() -> ScenarioReport {
+    failed_setup(
+        "detach_publish_storm",
+        scenario_detach_publish_storm_steps(),
+    )
+}
+fn scenario_detach_publish_storm_steps() -> Setup<ScenarioReport> {
     use shirusu_agent::{Agent, RecordResult};
     use shirusu_transport::slot::SlotPool as Pool;
     let pool = Arc::new(Pool::new(1));
@@ -763,7 +860,7 @@ pub fn scenario_detach_publish_storm() -> ScenarioReport {
             max_wait: Duration::ZERO,
             ..Default::default()
         });
-    let handle = agent.thread_begin(1).expect("slot");
+    let handle = agent.thread_begin(1).ctx("slot")?;
     for i in 0..10u64 {
         agent.record_enter(1, 1, 1, i, 0, b"pre");
     }
@@ -776,9 +873,10 @@ pub fn scenario_detach_publish_storm() -> ScenarioReport {
         }
     }
     // Ring には DETACH 前の 10 件だけがある
-    let base = agent.thread_region(1).expect("region");
+    let base = agent.thread_region(1).ctx("region")?;
     // SAFETY: the only reader of this Ring (SPSC).
-    let mut rd = unsafe { RingReader::new(base.clone(), RingConfig::new(64, 4096)) }.unwrap();
+    let mut rd = unsafe { RingReader::new(base.clone(), RingConfig::new(64, 4096)) }
+        .ctx("RingReader::new")?;
     let drained = rd.drain_all().events.len();
     // claim の失敗自体も missing を数えるため、確認用の claim の前に値を捕捉する
     let missing_after_storm = pool.missing_calls();

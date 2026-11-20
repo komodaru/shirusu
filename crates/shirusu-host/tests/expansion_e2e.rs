@@ -114,8 +114,8 @@ fn agent_to_host_round_trip_expands_slot_and_new_thread_records() {
         assert!(!worker.integrity_lost);
     }
 
-    let manager_stats = manager.stop();
-    let service = service_handle.stop();
+    let manager_stats = manager.stop().unwrap();
+    let service = service_handle.stop().unwrap();
     assert!(manager_stats.requested >= 1, "{manager_stats:?}");
     assert!(manager_stats.registered >= 1, "{manager_stats:?}");
     assert!(service.created >= 1);
@@ -176,7 +176,7 @@ fn host_stop_during_expansion_existing_rings_continue() {
         assert_eq!(batch.events.len(), 5, "ring {tid}");
         assert!(!worker.integrity_lost);
     }
-    let stats = manager.stop();
+    let stats = manager.stop().unwrap();
     assert_eq!(stats.requested, 1, "{stats:?}");
     assert_eq!(stats.discarded_host_stopped, 1, "{stats:?}");
     assert_eq!(stats.registered, 0, "{stats:?}");

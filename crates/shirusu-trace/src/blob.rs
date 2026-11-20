@@ -13,6 +13,18 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlobId(pub [u8; 32]);
 
+/// Blob Block の各項目の頭: ID 32 バイトと長さ (u32 LE)。
+pub(crate) const ENTRY_HEADER_LEN: usize = 36;
+
+/// 項目の頭を読む (足りなければ None)。
+pub(crate) fn entry_header(rest: &[u8]) -> Option<(BlobId, u32)> {
+    let head = rest.first_chunk::<ENTRY_HEADER_LEN>()?;
+    Some((
+        BlobId(shirusu_bytes::array_at::<0, 32, ENTRY_HEADER_LEN>(head)),
+        shirusu_bytes::u32_at::<32, ENTRY_HEADER_LEN>(head),
+    ))
+}
+
 impl BlobId {
     pub fn of_content(data: &[u8]) -> Self {
         Self(*blake3::hash(data).as_bytes())

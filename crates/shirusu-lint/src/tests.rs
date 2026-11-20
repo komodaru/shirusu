@@ -117,6 +117,20 @@ fn fixture(r: Rule) -> Fixture {
             ],
             mutate: ("crates/shirusu-transport/src/shm.rs", |t| Some(t + "\n// for now: 0\nfn _later() {}\n")),
         },
+        Rule::NoUnwrap => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/lib.rs", "fn f(o: Option<u8>) -> u8 {\n    o.unwrap()\n}\nfn g(r: Result<u8, ()>) -> u8 {\n    r.expect(\"x\")\n}\nfn h(m: &std::sync::Mutex<u8>) -> u8 {\n    *m.lock().unwrap()\n}\nfn v(o: Option<u8>) -> Vec<u8> {\n    vec![1, o.unwrap()]\n}\nfn s(o: Option<u8>) -> String {\n    format!(\"{}\", o.expect(\"x\"))\n}\n"),
+                ("crates/shirusu-y/build.rs", "fn main() { let _ = std::env::var(\"TARGET\").expect(\"cargo\"); }\n"),
+            ],
+            good: &[
+                ("crates/shirusu-x/src/lib.rs", "// .unwrap() とは書かない\nfn f(o: Option<u8>) -> u8 {\n    o.unwrap_or(0)\n}\nfn g(r: Result<u8, ()>) -> Option<u8> {\n    let _ = \".expect(1)\";\n    r.ok()\n}\nstruct S { expect: u8 }\nfn h(s: S) -> u8 { s.expect }\n#[cfg(test)]\nmod tests {\n    fn t() { Some(1).unwrap(); }\n}\n#[cfg(test)]\nfn helper() { Some(1).expect(\"t\"); }\n#[cfg(windows)]\n#[test]\nfn win() { Some(1).unwrap(); }\nimpl S {\n    #[cfg(test)]\n    fn t(&self) { Some(1).unwrap(); }\n}\n#[cfg(kani)]\nmod proofs {\n    fn p() { Some(1).unwrap(); }\n}\n#[kani::proof]\nfn q() { Some(1).unwrap(); }\n"),
+                ("crates/shirusu-x/tests/t.rs", "fn main() { Some(1).unwrap(); }\n"),
+                ("crates/shirusu-x/src/x_tests.rs", "fn t() { Some(1).unwrap(); }\n"),
+                ("e2e/src/bin/x.rs", "fn main() { std::env::var(\"A\").unwrap(); }\n"),
+                ("crates/shirusu-x/examples/bench.rs", "fn main() { Some(1).unwrap(); }\n"),
+            ],
+            mutate: ("crates/shirusu-transport/src/slot.rs", |t| Some(t.replace("self.slots.read().unwrap_or_else(PoisonError::into_inner)", "self.slots.read().unwrap()"))),
+        },
         Rule::ShellSpecialVar => Fixture {
             bad: &[
                 ("scripts/ci/x.sh", "#!/bin/bash\nGROUPS=gdi\nexport RANDOM=4\nSECONDS=0 cargo test\nPIPESTATUS+=(1)\n"),
@@ -283,6 +297,13 @@ fn each_regression_spelling_alone_is_found() {
             .check(&made_up(fixture(Rule::HookLockPoison).bad))
             .len(),
         4
+    );
+    // (unwrap、expect、lock().unwrap()、vec! の中、format! の中、build.rs の expect)
+    assert_eq!(
+        Rule::NoUnwrap
+            .check(&made_up(fixture(Rule::NoUnwrap).bad))
+            .len(),
+        6
     );
 }
 

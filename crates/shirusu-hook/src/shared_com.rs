@@ -456,7 +456,10 @@ pub unsafe fn install(rt: &Arc<HookRuntime>, object: usize) -> Result<Installati
     MODULES[index].store(module, Ordering::Release);
     MODULE_EPOCHS[index].store(epoch, Ordering::Release);
     SLOTS[index].store(pointer, Ordering::Release);
-    let saved = registry[index].as_ref().unwrap();
+    // (index の場所には上で置いた Slot がある)
+    let Some(saved) = registry.get(index).and_then(Option::as_ref) else {
+        return Err("iunknown-wrapper-slot-missing");
+    };
     // SAFETY: `saved` was validated by read_table and the caller holds a live COM reference to the object.
     let success = (0..3).all(|method| unsafe { exchange(saved, index, method, true) });
     if !success {

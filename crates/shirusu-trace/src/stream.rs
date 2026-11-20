@@ -397,9 +397,10 @@ impl<R: Read + Seek> TraceStream<R> {
                     break;
                 }
             }
-            let working = current
-                .get_mut(&resource)
-                .expect("the first update of a resource seeds its working copy");
+            // (資源の最初の更新が作業用の写しを置く。読めなかった基底は上で飛ばしている)
+            let Some(working) = current.get_mut(&resource) else {
+                continue;
+            };
             match apply_update_to(working, update.offset, &update.data) {
                 None => self.issues.push(RecoveryIssue::BlobUpdateOutOfRange {
                     resource_id: resource,
@@ -519,10 +520,11 @@ impl<R: Read + Seek> TraceStream<R> {
         };
         let mut pos = 0usize;
         while raw.len() - pos >= 36 {
-            let entry = BlobId::from_bytes(raw[pos..pos + 32].try_into().expect("32 bytes"));
-            let len =
-                u32::from_le_bytes(raw[pos + 32..pos + 36].try_into().expect("4 bytes")) as usize;
-            pos += 36;
+            let Some((entry, len)) = crate::blob::entry_header(&raw[pos..]) else {
+                break;
+            };
+            let len = len as usize;
+            pos += crate::blob::ENTRY_HEADER_LEN;
             if raw.len() - pos < len {
                 break;
             }
@@ -659,41 +661,38 @@ impl<R: Read + Seek> TraceStream<R> {
             let mut head = [0u8; HEADER_LEN];
             self.seek_to(pos)?;
             self.read_tracked(&mut head)?;
-            let reason = match container::parse_raw_header(&head) {
-                None => Some("block magic not found".to_string()),
+            let reason: String = match container::parse_raw_header(&head) {
+                None => "block magic not found".to_string(),
                 Some(raw) if raw.header_len as usize != HEADER_LEN || raw.reserved != 0 => {
-                    Some("invalid block header fields".into())
+                    "invalid block header fields".into()
                 }
-                Some(raw) if Compression::from_code(raw.compression_code).is_none() => {
-                    Some(format!("unknown compression {}", raw.compression_code))
-                }
-                Some(raw) if raw.stored_len > MAX_STORED_LEN || raw.raw_len > MAX_RAW_LEN => {
-                    Some("block length exceeds limit".into())
-                }
-                Some(raw) => {
-                    if remaining - (HEADER_LEN as u64) < raw.stored_len as u64 {
-                        self.issues
-                            .push(RecoveryIssue::TruncatedTail { offset: pos });
-                        return Ok(None);
+                Some(raw) => match Compression::from_code(raw.compression_code) {
+                    None => format!("unknown compression {}", raw.compression_code),
+                    Some(_) if raw.stored_len > MAX_STORED_LEN || raw.raw_len > MAX_RAW_LEN => {
+                        "block length exceeds limit".into()
                     }
-                    let mut payload = vec![0u8; raw.stored_len as usize];
-                    self.read_tracked(&mut payload)?;
-                    if container::raw_header_crc_matches(&raw, &head, &payload) {
-                        let block_type = BlockType::from_code(raw.block_type_code);
-                        self.blocks.push(ScannedBlock {
-                            offset: pos,
-                            block_type,
-                            sequence: raw.sequence,
-                        });
-                        self.pos = pos + HEADER_LEN as u64 + raw.stored_len as u64;
-                        let compression =
-                            Compression::from_code(raw.compression_code).expect("checked");
-                        return Ok(Some((pos, block_type, compression, raw.raw_len, payload)));
+                    Some(compression) => {
+                        if remaining - (HEADER_LEN as u64) < raw.stored_len as u64 {
+                            self.issues
+                                .push(RecoveryIssue::TruncatedTail { offset: pos });
+                            return Ok(None);
+                        }
+                        let mut payload = vec![0u8; raw.stored_len as usize];
+                        self.read_tracked(&mut payload)?;
+                        if container::raw_header_crc_matches(&raw, &head, &payload) {
+                            let block_type = BlockType::from_code(raw.block_type_code);
+                            self.blocks.push(ScannedBlock {
+                                offset: pos,
+                                block_type,
+                                sequence: raw.sequence,
+                            });
+                            self.pos = pos + HEADER_LEN as u64 + raw.stored_len as u64;
+                            return Ok(Some((pos, block_type, compression, raw.raw_len, payload)));
+                        }
+                        "crc mismatch".into()
                     }
-                    Some("crc mismatch".into())
-                }
+                },
             };
-            let reason = reason.expect("every rejected header has a reason");
             self.issues.push(RecoveryIssue::CorruptBlock {
                 offset: pos,
                 reason,
@@ -912,10 +911,12 @@ impl<R: Read + Seek> TraceStream<R> {
                 self.corrupt(offset, "blob entry header truncated".into());
                 break;
             }
-            let id = BlobId::from_bytes(raw[pos..pos + 32].try_into().expect("32 bytes"));
-            let len =
-                u32::from_le_bytes(raw[pos + 32..pos + 36].try_into().expect("4 bytes")) as usize;
-            pos += 36;
+            let Some((id, len)) = crate::blob::entry_header(&raw[pos..]) else {
+                self.corrupt(offset, "blob entry header truncated".into());
+                break;
+            };
+            let len = len as usize;
+            pos += crate::blob::ENTRY_HEADER_LEN;
             if raw.len() - pos < len {
                 self.corrupt(offset, "blob entry body truncated".into());
                 break;

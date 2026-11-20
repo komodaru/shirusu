@@ -2,7 +2,7 @@
 //! identity is runner-reported evidence, never native-Windows attestation.
 use crate::external::{run_external, RunnerCommand};
 use shirusu_analysis::JsonValue as J;
-use shirusu_test::runner_exec::{environment_to_json, plan_steps, ArgValue, RunReportData};
+use shirusu_test::runner_exec::{plan_steps, ArgValue, RunReportData};
 use shirusu_test::{
     json_parse::{get, parse_json},
     parse_runner_report_json, TestSpec,
@@ -155,17 +155,16 @@ fn observations(spec: &TestSpec, report: &RunReportData) -> Result<J, String> {
     }
     let mut values = Vec::new();
     for (i, (step, result)) in spec.steps.iter().zip(&report.steps).enumerate() {
-        if result.index != i
-            || result.call != step.call
-            || !result.executed
-            || result.returned.is_none()
-            || !result.outputs_truncated.is_empty()
-            || result.ok != result.error.is_none()
-        {
+        let (true, true, Some(raw), true, true) = (
+            result.index == i,
+            result.call == step.call && result.executed,
+            result.returned,
+            result.outputs_truncated.is_empty(),
+            result.ok == result.error.is_none(),
+        ) else {
             return Err(format!("incomplete or mismatched step {i}"));
-        }
+        };
         let value = if step.call == "kernel32!CreateFileW" {
-            let raw = result.returned.unwrap();
             let invalid = if env.pointer_width == 32 {
                 u32::MAX as u64
             } else {
@@ -226,7 +225,12 @@ fn manifest(spec: &TestSpec, raw: &str, label: &str) -> Result<J, String> {
         ("report_digest", J::Str(digest(raw))),
         (
             "environment",
-            parse_json(&environment_to_json(report.environment.as_ref().unwrap()))?,
+            shirusu_test::runner::environment_json(
+                report
+                    .environment
+                    .as_ref()
+                    .ok_or("runner report has no environment")?,
+            ),
         ),
         ("all_expectations_met", J::Bool(report.all_ok)),
         ("observations", observed),
@@ -296,8 +300,18 @@ pub fn compare(left: &Path, right: &Path) -> Result<J, String> {
         })
         .collect();
     Ok(J::obj(vec![
-        ("left_environment", get(&a, "environment").unwrap().clone()),
-        ("right_environment", get(&b, "environment").unwrap().clone()),
+        (
+            "left_environment",
+            get(&a, "environment")
+                .ok_or("left entry has no environment")?
+                .clone(),
+        ),
+        (
+            "right_environment",
+            get(&b, "environment")
+                .ok_or("right entry has no environment")?
+                .clone(),
+        ),
         ("differences", J::Array(diffs)),
     ]))
 }

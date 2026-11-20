@@ -220,17 +220,21 @@ fn paired_sample(source: &dyn TimestampSource) -> (u64, u64) {
     // A preemption between the reads widens the TSC window around the source
     // read and with it the pairing error. Keep the narrowest of a few tries
     // (an anchor is taken about once per millisecond, so this is cheap).
-    let mut best: Option<(u64, u64, u64)> = None;
-    for _ in 0..PAIRING_ATTEMPTS {
+    let sample = || {
         let before = read_tsc();
         let qpc = source.now_qpc();
         let after = read_tsc();
         let window = after.wrapping_sub(before);
-        if best.is_none_or(|(w, _, _)| window < w) {
-            best = Some((window, before + window / 2, qpc));
+        (window, before + window / 2, qpc)
+    };
+    let mut best = sample();
+    for _ in 1..PAIRING_ATTEMPTS {
+        let next = sample();
+        if next.0 < best.0 {
+            best = next;
         }
     }
-    let (_, tsc, qpc) = best.expect("at least one attempt");
+    let (_, tsc, qpc) = best;
     (tsc, qpc)
 }
 

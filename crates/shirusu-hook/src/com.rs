@@ -431,16 +431,16 @@ pub fn com_factory_enter_values(args: &ComFactoryArgs) -> Vec<CapturedValue> {
     ]
 }
 pub fn encode_com_factory_enter(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
     encode_values(
-        crate::callback::cached_schema_types(&TYPES, com_factory_enter_schema),
+        crate::callback::cached_schema_types(&TYPES, com_factory_enter_schema)?,
         values,
     )
 }
 pub fn encode_com_factory_leave(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
     encode_values(
-        crate::callback::cached_schema_types(&TYPES, com_factory_leave_schema),
+        crate::callback::cached_schema_types(&TYPES, com_factory_leave_schema)?,
         values,
     )
 }
@@ -512,17 +512,17 @@ fn method_result_values(
 }
 
 pub fn encode_com_enter(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
     encode_values(
-        crate::callback::cached_schema_types(&TYPES, com_method_enter_schema),
+        crate::callback::cached_schema_types(&TYPES, com_method_enter_schema)?,
         values,
     )
 }
 
 pub fn encode_com_leave(values: &[CapturedValue]) -> Result<Vec<u8>, CompactError> {
-    static TYPES: std::sync::OnceLock<Vec<shirusu_trace::schema::Ty>> = std::sync::OnceLock::new();
+    static TYPES: crate::callback::SchemaTypes = std::sync::OnceLock::new();
     encode_values(
-        crate::callback::cached_schema_types(&TYPES, com_method_leave_schema),
+        crate::callback::cached_schema_types(&TYPES, com_method_leave_schema)?,
         values,
     )
 }

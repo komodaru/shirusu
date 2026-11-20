@@ -222,7 +222,9 @@ impl LaunchedCapture {
     }
 
     fn start_tree_drain(&mut self, interval: Duration) -> Result<(), SessionError> {
-        let session = self.session.take().expect("ready session");
+        let session = self.session.take().ok_or(win::WinError::InvalidArgument(
+            "capture session is held by the tree drain",
+        ))?;
         self.drain = Some(crate::background_drain::BackgroundDrain::start(
             session,
             interval,
@@ -257,8 +259,11 @@ impl LaunchedCapture {
             .ok_or(win::WinError::InvalidArgument("capture already finished"))?;
         Ok(win::process_exited(process.borrow())?)
     }
-    pub fn session(&mut self) -> &mut CaptureSession {
-        self.session.as_mut().expect("session present")
+    /// 回収中の session (木の回収スレッドが持っている間は Err)。
+    pub fn session(&mut self) -> Result<&mut CaptureSession, SessionError> {
+        Ok(self.session.as_mut().ok_or(win::WinError::InvalidArgument(
+            "capture session is held by the tree drain",
+        ))?)
     }
 
     /// 対象の終了まで回収を続け、終了したら最終回収して Trace を閉じる。
@@ -286,10 +291,10 @@ impl LaunchedCapture {
             // P1-5: 利用者の停止要求 (Ctrl-C) でも抜け、Agent の終了手順と
             // Index・Finalization の書き出しまで済ませる。
             if win::stop_requested() {
-                self.session().note_stopped_by_request();
+                self.session()?.note_stopped_by_request();
                 break;
             }
-            let stats = self.session().poll_once()?;
+            let stats = self.session()?.poll_once()?;
             // Keep consuming while the producer is active. Sleeping after every
             // nonempty batch needlessly lets a high-rate Ring fill again. But a
             // tight loop of tiny collections bounces the Ring control lines
@@ -305,17 +310,17 @@ impl LaunchedCapture {
             // collection, wait for the threshold signal instead: waking on
             // every publication would collect one event per wakeup.
             if stats.events == 0 {
-                if !self.session().arm_host_waiting() {
+                if !self.session()?.arm_host_waiting() {
                     self.data_ready.data_ready.wait_timeout(poll_interval);
                 }
-                self.session().disarm_host_waiting();
-            } else if stats.events < collection_low_water(self.session().ring_config()) {
+                self.session()?.disarm_host_waiting();
+            } else if stats.events < collection_low_water(self.session()?.ring_config()) {
                 self.data_ready.data_ready.wait_timeout(poll_interval);
             }
         }
         // 終了直前に書かれた分を拾い切る
         for _ in 0..4 {
-            let stats = self.session().poll_once()?;
+            let stats = self.session()?.poll_once()?;
             if stats.events == 0 {
                 break;
             }
@@ -377,7 +382,7 @@ impl LaunchedCapture {
             .as_ref()
             .is_some_and(|scan| !scan.is_finished())
         {
-            let stats = self.session().poll_once()?;
+            let stats = self.session()?.poll_once()?;
             if stats.events == 0 {
                 self.data_ready
                     .data_ready
@@ -389,7 +394,9 @@ impl LaunchedCapture {
             .take()
             .and_then(|scan| scan.join().ok())
             .unwrap_or_default();
-        let mut session = self.session.take().expect("session present");
+        let mut session = self.session.take().ok_or(win::WinError::InvalidArgument(
+            "capture session is held by the tree drain",
+        ))?;
         session.update_modules(modules)?;
         session.set_shutdown_outcome(outcome);
         let mut summary = session.stop()?;
@@ -684,10 +691,10 @@ impl TreeCapture {
             // P1-5: 利用者の停止要求。残っている全プロセスの Trace を閉じる。
             if win::stop_requested() {
                 self.root.stop_tree_drain()?;
-                self.root.session().note_stopped_by_request();
+                self.root.session()?.note_stopped_by_request();
                 for child in &mut self.children {
                     child.stop_tree_drain()?;
-                    child.session().note_stopped_by_request();
+                    child.session()?.note_stopped_by_request();
                 }
                 break;
             }
@@ -701,7 +708,7 @@ impl TreeCapture {
     pub fn finish(mut self) -> Result<TreeSummary, SessionError> {
         self.root.stop_tree_drain()?;
         for (pid, reason) in &self.uninjectable {
-            self.root.session().note_uninjectable_child(*pid, reason);
+            self.root.session()?.note_uninjectable_child(*pid, reason);
         }
         let root = self.root.finish()?;
         let mut children = std::mem::take(&mut self.child_summaries);

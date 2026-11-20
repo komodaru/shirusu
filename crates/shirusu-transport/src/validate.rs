@@ -105,25 +105,32 @@ pub fn validate_control(
     known: &KnownConfig,
     prev: Option<&ControlSnapshot>,
 ) -> Result<ControlSnapshot, IntegrityError> {
-    if control_copy.len() < CONTROL_SIZE || known.mapping_len < known.ring_cfg().required_len() {
+    let Some(control) = control_copy.first_chunk::<CONTROL_SIZE>() else {
+        return Err(IntegrityError::ImageTooSmall);
+    };
+    if known.mapping_len < known.ring_cfg().required_len() {
         return Err(IntegrityError::ImageTooSmall);
     }
-    let g =
-        |off: usize| -> u64 { u64::from_le_bytes(control_copy[off..off + 8].try_into().unwrap()) };
-    if g(OFF_MAGIC) != MAGIC {
+    if shirusu_bytes::u64_at::<OFF_MAGIC, CONTROL_SIZE>(control) != MAGIC {
         return Err(IntegrityError::BadMagic);
     }
     // 共有メモリ上の容量は信用しない: 使うのは known の値だけ。ここでは矛盾の検出のみ行う。
     let snap = ControlSnapshot {
-        write_cursor: g(OFF_WRITE_CURSOR),
-        read_cursor: g(OFF_READ_CURSOR),
-        payload_write_position: g(OFF_PAYLOAD_WRITE_POSITION),
-        payload_read_position: g(OFF_PAYLOAD_READ_POSITION),
-        generation: g(OFF_GENERATION),
+        write_cursor: shirusu_bytes::u64_at::<OFF_WRITE_CURSOR, CONTROL_SIZE>(control),
+        read_cursor: shirusu_bytes::u64_at::<OFF_READ_CURSOR, CONTROL_SIZE>(control),
+        payload_write_position: shirusu_bytes::u64_at::<OFF_PAYLOAD_WRITE_POSITION, CONTROL_SIZE>(
+            control,
+        ),
+        payload_read_position: shirusu_bytes::u64_at::<OFF_PAYLOAD_READ_POSITION, CONTROL_SIZE>(
+            control,
+        ),
+        generation: shirusu_bytes::u64_at::<OFF_GENERATION, CONTROL_SIZE>(control),
         loss: LossCounters {
-            dropped_events: g(OFF_DROPPED_EVENTS),
-            dropped_payload_bytes: g(OFF_DROPPED_PAYLOAD_BYTES),
-            degraded_events: g(OFF_DEGRADED_EVENTS),
+            dropped_events: shirusu_bytes::u64_at::<OFF_DROPPED_EVENTS, CONTROL_SIZE>(control),
+            dropped_payload_bytes: shirusu_bytes::u64_at::<OFF_DROPPED_PAYLOAD_BYTES, CONTROL_SIZE>(
+                control,
+            ),
+            degraded_events: shirusu_bytes::u64_at::<OFF_DEGRADED_EVENTS, CONTROL_SIZE>(control),
         },
     };
     validate_cursor_pair(

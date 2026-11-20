@@ -61,6 +61,15 @@ impl<'a> Cursor<'a> {
         self.pos += n;
         Ok(out)
     }
+    /// 次の `N` バイトを配列で (長さは型で決まり、足りなければ Truncated)。
+    pub fn read_array<const N: usize>(&mut self) -> Result<[u8; N], CompactError> {
+        let rest = self.buf.get(self.pos..).ok_or(CompactError::Truncated)?;
+        let (out, _) = rest
+            .split_first_chunk::<N>()
+            .ok_or(CompactError::Truncated)?;
+        self.pos += N;
+        Ok(*out)
+    }
     pub fn read_uleb(&mut self) -> Result<u64, CompactError> {
         let mut result: u64 = 0;
         for i in 0..10 {
@@ -130,12 +139,12 @@ fn read_value(cur: &mut Cursor, ty: Ty) -> Result<TypedValue, CompactError> {
         ),
         Ty::U64 => TypedValue::U64(cur.read_uleb()?),
         Ty::F32 => {
-            let b = cur.read_exact(4)?;
-            TypedValue::F32Bits(u32::from_le_bytes(b.try_into().expect("4 bytes")))
+            let b = cur.read_array::<4>()?;
+            TypedValue::F32Bits(u32::from_le_bytes(b))
         }
         Ty::F64 => {
-            let b = cur.read_exact(8)?;
-            TypedValue::F64Bits(u64::from_le_bytes(b.try_into().expect("8 bytes")))
+            let b = cur.read_array::<8>()?;
+            TypedValue::F64Bits(u64::from_le_bytes(b))
         }
         Ty::Bool => {
             let b = cur.read_u8()?;
@@ -155,23 +164,20 @@ fn read_value(cur: &mut Cursor, ty: Ty) -> Result<TypedValue, CompactError> {
             let n = usize::try_from(n).map_err(|_| CompactError::Truncated)?;
             let mut units = Vec::with_capacity(n.min(1 << 20));
             for _ in 0..n {
-                let b = cur.read_exact(2)?;
-                units.push(u16::from_le_bytes(b.try_into().expect("2 bytes")));
+                let b = cur.read_array::<2>()?;
+                units.push(u16::from_le_bytes(b));
             }
             TypedValue::Str16(units)
         }
         Ty::Bytes => TypedValue::Bytes(cur.read_len_bytes()?.to_vec()),
-        Ty::BlobRef => {
-            let b = cur.read_exact(32)?;
-            TypedValue::BlobRef(BlobId::from_bytes(b.try_into().expect("32 bytes")))
-        }
+        Ty::BlobRef => TypedValue::BlobRef(BlobId::from_bytes(cur.read_array::<32>()?)),
         Ty::Ptr32 => {
-            let b = cur.read_exact(4)?;
-            TypedValue::Ptr32(u32::from_le_bytes(b.try_into().expect("4 bytes")))
+            let b = cur.read_array::<4>()?;
+            TypedValue::Ptr32(u32::from_le_bytes(b))
         }
         Ty::Ptr64 => {
-            let b = cur.read_exact(8)?;
-            TypedValue::Ptr64(u64::from_le_bytes(b.try_into().expect("8 bytes")))
+            let b = cur.read_array::<8>()?;
+            TypedValue::Ptr64(u64::from_le_bytes(b))
         }
     })
 }
@@ -540,9 +546,9 @@ pub fn decode_event_chunk(payload: &[u8]) -> Result<EventBatch, crate::error::Tr
             0 => PayloadRef::None,
             1 => {
                 let b = cur
-                    .read_exact(32)
+                    .read_array::<32>()
                     .map_err(|_| corrupt("blob ref truncated"))?;
-                PayloadRef::Blob(BlobId::from_bytes(b.try_into().expect("32 bytes")))
+                PayloadRef::Blob(BlobId::from_bytes(b))
             }
             2 => {
                 let b = cur

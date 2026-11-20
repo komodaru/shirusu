@@ -124,11 +124,7 @@ fn report_data_to_json(data: &RunReportData) -> JsonValue {
         ("steps", JsonValue::Array(steps)),
     ];
     if let Some(env) = &data.environment {
-        fields.push((
-            "environment",
-            crate::json_parse::parse_json(&crate::runner_exec::environment_to_json(env))
-                .expect("Runner environment serializer emits valid JSON"),
-        ));
+        fields.push(("environment", environment_json(env)));
     }
     JsonValue::obj(fields)
 }
@@ -170,11 +166,54 @@ pub fn run_spec(spec: &TestSpec, mode: RunMode) -> Result<RunReport, String> {
     }
 }
 
+/// [`environment_to_json`](crate::runner_exec::environment_to_json) と同じ内容の値
+/// (tests::environment_json_matches_its_text)。
+pub fn environment_json(env: &crate::runner_exec::RunEnvironment) -> JsonValue {
+    use JsonValue as J;
+    let text = |v: &Option<String>| v.as_ref().map_or(J::Null, |v| J::Str(v.clone()));
+    J::obj(vec![
+        ("target_os", J::Str(env.target_os.clone())),
+        ("process_arch", J::Str(env.process_arch.clone())),
+        ("pointer_width", J::U64(u64::from(env.pointer_width))),
+        ("windows_version", text(&env.windows_version)),
+        (
+            "windows_build",
+            env.windows_build.map_or(J::Null, |b| J::U64(u64::from(b))),
+        ),
+        ("version_source", text(&env.version_source)),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::json_parse::parse_json;
     use crate::runner_exec::report_to_json;
+
+    #[test]
+    fn environment_json_matches_its_text() {
+        use crate::runner_exec::{environment_to_json, RunEnvironment};
+        let full = RunEnvironment {
+            target_os: "windows".into(),
+            process_arch: "x86 \"wow\"".into(),
+            pointer_width: 32,
+            windows_version: Some("10.0".into()),
+            windows_build: Some(26100),
+            version_source: Some("RtlGetVersion".into()),
+        };
+        let empty = RunEnvironment {
+            windows_version: None,
+            windows_build: None,
+            version_source: None,
+            ..full.clone()
+        };
+        for env in [full, empty] {
+            assert_eq!(
+                environment_json(&env),
+                crate::json_parse::parse_json(&environment_to_json(&env)).unwrap()
+            );
+        }
+    }
 
     const SPEC_JSON: &str = r#"{"version":1,"name":"sample","steps":[
         {"call":"kernel32!CreateFileW","args":{"lpFileName":"probe.txt","dwDesiredAccess":3221225472,"dwShareMode":0,"lpSecurityAttributes":null,"dwCreationDisposition":2,"dwFlagsAndAttributes":128,"hTemplateFile":null},"store":"hFile","expect":{"return":"nonzero"}},

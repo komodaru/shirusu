@@ -170,25 +170,24 @@ impl EventDescriptor {
     }
     /// バイト列からの復号（長さ 64 未満は None）。検証は validate 側の責務。
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() < 64 {
-            return None;
+        b.first_chunk::<64>().map(Self::from_array)
+    }
+    /// 64 バイトちょうどからの復号 (失敗しない: 各欄の位置はコンパイル時に検査される)。
+    pub fn from_array(b: &[u8; 64]) -> Self {
+        use shirusu_bytes::{u16_at, u32_at, u64_at};
+        Self {
+            kind: u16_at::<0, 64>(b),
+            flags: u16_at::<2, 64>(b),
+            payload_len: u32_at::<4, 64>(b),
+            sequence: u64_at::<8, 64>(b),
+            timestamp_qpc: u64_at::<16, 64>(b),
+            call_id: u64_at::<24, 64>(b),
+            parent_call_id: u64_at::<32, 64>(b),
+            payload_position: u64_at::<40, 64>(b),
+            api_id: u32_at::<48, 64>(b),
+            schema_id: u32_at::<52, 64>(b),
+            global_order: u64_at::<56, 64>(b),
         }
-        let g16 = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap());
-        let g32 = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
-        let g64 = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
-        Some(Self {
-            kind: g16(0),
-            flags: g16(2),
-            payload_len: g32(4),
-            sequence: g64(8),
-            timestamp_qpc: g64(16),
-            call_id: g64(24),
-            parent_call_id: g64(32),
-            payload_position: g64(40),
-            api_id: g32(48),
-            schema_id: g32(52),
-            global_order: g64(56),
-        })
     }
 }
 

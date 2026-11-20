@@ -345,8 +345,11 @@ pub(super) fn generic_detour_with<const N: usize>(
     // before the reentrancy guard. Option::take in the native finally prevents
     // a second cleanup if Rust also runs destructors (for example, a Rust
     // panic through C-unwind).
-    let (ret, (mut call_guard, mut guard)) =
-        crate::seh::invoke(original, invoke, (call_guard, guard));
+    let (ret, state) = crate::seh::invoke(original, invoke, (call_guard, guard));
+    let Some((mut call_guard, mut guard)) = state else {
+        le.restore_for_return();
+        return ret;
+    };
     let last_error = le.capture_after_original();
     call_guard.complete();
     // Loader heap operations may have destroyed the TLS vector in the original

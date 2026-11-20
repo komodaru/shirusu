@@ -22,20 +22,17 @@ use std::path::Path;
 pub fn group_import_sites(sites: &[ImportSite]) -> Vec<StaticDependency> {
     let mut deps: Vec<StaticDependency> = Vec::new();
     for site in sites {
-        let dep = match deps.iter_mut().find(|d| d.module == site.dll_name) {
-            Some(d) => d,
-            None => {
-                deps.push(StaticDependency {
-                    module: site.dll_name.clone(),
-                    imports: Vec::new(),
-                });
-                deps.last_mut().expect("just pushed")
-            }
-        };
-        dep.imports.push(StaticImport {
+        let import = StaticImport {
             name: site.func_name.clone(),
             ordinal: site.ordinal,
-        });
+        };
+        match deps.iter_mut().find(|d| d.module == site.dll_name) {
+            Some(d) => d.imports.push(import),
+            None => deps.push(StaticDependency {
+                module: site.dll_name.clone(),
+                imports: vec![import],
+            }),
+        }
     }
     deps
 }

@@ -1372,7 +1372,10 @@ mod imp {
                 *g = false;
                 return true;
             }
-            let (mut g2, _t) = self.condvar.wait_timeout(g, timeout).unwrap();
+            let (mut g2, _t) = self
+                .condvar
+                .wait_timeout(g, timeout)
+                .unwrap_or_else(|e| e.into_inner());
             if *g2 {
                 *g2 = false;
                 true

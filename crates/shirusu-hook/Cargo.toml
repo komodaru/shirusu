@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "shirusu フックエンジン: API 定義表・型付き引数取得・IAT フック計画と Windows 実装"
 
 [dependencies]
+shirusu-bytes = { path = "../shirusu-bytes" }
 shirusu-transport = { path = "../shirusu-transport" }
 shirusu-transport-win = { path = "../shirusu-transport-win" }
 shirusu-agent = { path = "../shirusu-agent" }

@@ -176,9 +176,8 @@ pub(super) fn registered_tests(tree: &Tree) -> Hits {
         };
         let stem = std::path::Path::new(file)
             .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap();
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or(file);
         for &(_, _, name) in TESTS.iter().filter(|row| row.0 == file) {
             let local = name
                 .strip_prefix(stem)

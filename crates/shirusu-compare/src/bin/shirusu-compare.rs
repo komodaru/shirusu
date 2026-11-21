@@ -3,6 +3,8 @@
 //! 終了コード: 0 = 候補なし、1 = 候補あり、2 = 使い方/入力エラー。
 //! 「候補あり」は「違反が確定した」意味ではない（ライブラリの
 //! CANDIDATE_NOTICE を参照）。CI で落とすかどうかは利用側の判断。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use std::process::ExitCode;
 

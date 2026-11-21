@@ -97,8 +97,7 @@ impl ChildTracker {
 pub fn child_trace_path(root_trace: &Path, pid: u32) -> PathBuf {
     let stem = root_trace
         .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|s| s.to_string_lossy().into_owned());
     let name = match root_trace.extension() {
         Some(ext) => format!("{stem}.child-{pid}.{}", ext.to_string_lossy()),
         None => format!("{stem}.child-{pid}"),

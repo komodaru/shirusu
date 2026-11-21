@@ -385,13 +385,7 @@ impl SuspendedThreads {
             (true, Some(snapshot)) => snapshot
                 .only_known_threads(current_pid, current_tid, &suspended.thread_ids)
                 .map_err(|_| "thread-snapshot-unavailable")
-                .and_then(|known| {
-                    if known {
-                        Ok(())
-                    } else {
-                        Err("thread-set-changed")
-                    }
-                }),
+                .and_then(|known| known.ok_or("thread-set-changed")),
             (true, None) => Err("thread-snapshot-unavailable"),
             (false, _) => Err("thread-context-unavailable"),
         };

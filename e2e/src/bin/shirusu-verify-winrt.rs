@@ -10,6 +10,8 @@
 //! WinRT の API は現行フック表に無いが、L14 のアクティベーション関数
 //! （Inline Hook）と vtable メソッド（COM と同じ複製方式）で記録される。
 //! Windows 以外では何もせず終了する（CI の Linux ジョブでもビルドだけは通る）。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 #[cfg(windows)]
 mod win {

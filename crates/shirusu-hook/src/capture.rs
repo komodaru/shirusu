@@ -22,7 +22,7 @@
 
 use crate::api::{ApiDef, GenericApi, GenericScalar};
 use shirusu_trace::compact::encode_values_iter;
-use shirusu_trace::schema::{CapturedValue, LastErrorMeaning, TypedValue, ValueCapture};
+use shirusu_trace::schema::{CapturedValue, Generic, LastErrorMeaning, TypedValue, ValueCapture};
 use shirusu_trace::CompactError;
 
 /// 対象プロセスのメモリを読む抽象。実装は「addr から buf を満たす
@@ -120,8 +120,8 @@ pub fn read_utf16_string(mem: &dyn MemoryReader, addr: u64) -> CapturedValue {
         let len = ((to_page_end as usize).min(STRING_READ_CHUNK) & !1).max(2);
         let block = &mut buf[..len];
         if mem.read_exact(chunk_addr, block) {
-            for pair in block.chunks_exact(2) {
-                let u = u16::from_le_bytes([pair[0], pair[1]]);
+            for pair in block.as_chunks::<2>().0 {
+                let u = u16::from_le_bytes(*pair);
                 if u == 0 {
                     return cap(TypedValue::Str16(units), ValueCapture::Captured);
                 }
@@ -804,7 +804,7 @@ pub fn encode_leave(api: &ApiDef, values: &[CapturedValue]) -> Result<Vec<u8>, C
 pub fn generic_enter(api: GenericApi, args: &[u64]) -> Vec<CapturedValue> {
     api.enter()
         .zip(args.iter())
-        .map(|((_, scalar), raw)| raw_to_value(scalar, *raw))
+        .map(|((_, scalar), raw)| raw_to_value(scalar, *raw).into())
         .collect()
 }
 
@@ -816,7 +816,7 @@ pub fn generic_leave(api: GenericApi, return_value: u64, last_error: u32) -> Vec
         .records_last_error()
         .then(|| last_error_value(meaning, return_value, last_error));
     api.ret()
-        .map(|scalar| raw_to_value(scalar, return_value))
+        .map(|scalar| raw_to_value(scalar, return_value).into())
         .into_iter()
         .chain(error)
         .collect()
@@ -905,7 +905,7 @@ impl<const FIELDS: usize> GenericPayload<FIELDS> {
     }
 
     #[cfg(test)]
-    fn scalar(&mut self, value: CapturedValue) {
+    fn scalar(&mut self, value: CapturedValue<Generic>) {
         self.byte(value.capture.code());
         match value.value {
             TypedValue::U32(v) => self.uleb(v as u64),
@@ -926,7 +926,6 @@ impl<const FIELDS: usize> GenericPayload<FIELDS> {
                     self.byte(byte);
                 }
             }
-            _ => unreachable!("generated L1 capture only produces scalar values"),
         }
     }
 }
@@ -1042,16 +1041,17 @@ fn generic_last_error_meaning(
 
 /// 生の u64 値を Schema の型に沿った `CapturedValue` へ変換する。
 /// 32bit 型は下位ビット、64bit 型は全ビット、Bool は 0 以外を真とする。
-fn raw_to_value(scalar: GenericScalar, raw: u64) -> CapturedValue {
-    match scalar {
-        GenericScalar::U32 => u32v(raw as u32),
-        GenericScalar::I32 => i32v(raw as i32),
-        GenericScalar::U64 => u64v(raw),
-        GenericScalar::I64 => i64v(raw as i64),
-        GenericScalar::Bool => boolv(raw != 0),
-        GenericScalar::F32 => CapturedValue::captured(TypedValue::F32Bits(raw as u32)),
-        GenericScalar::F64 => CapturedValue::captured(TypedValue::F64Bits(raw)),
-    }
+/// 生成表の値は GenericScalar の型だけ: 型 (`Generic`) がそう言う。
+fn raw_to_value(scalar: GenericScalar, raw: u64) -> CapturedValue<Generic> {
+    CapturedValue::captured(match scalar {
+        GenericScalar::U32 => TypedValue::U32(raw as u32),
+        GenericScalar::I32 => TypedValue::I32(raw as i32),
+        GenericScalar::U64 => TypedValue::U64(raw),
+        GenericScalar::I64 => TypedValue::I64(raw as i64),
+        GenericScalar::Bool => TypedValue::Bool(raw != 0),
+        GenericScalar::F32 => TypedValue::F32Bits(raw as u32),
+        GenericScalar::F64 => TypedValue::F64Bits(raw),
+    })
 }
 
 #[cfg(test)]
@@ -1500,7 +1500,9 @@ mod tests {
         let api = api_by_name("GetCurrentProcessId").unwrap();
         assert!(encode_generic_enter::<0>(g(api), &[]).as_bytes().is_empty());
         let mut payload = GenericPayload::<1>::new();
-        payload.scalar(CapturedValue::captured(TypedValue::U64(u64::MAX)));
+        payload.scalar(CapturedValue::captured(TypedValue::<Generic>::U64(
+            u64::MAX,
+        )));
         assert_eq!(payload.as_bytes().len(), 11);
         assert_eq!(
             decode_values(&[Ty::U64], payload.as_bytes()).unwrap(),
@@ -2162,7 +2164,7 @@ mod tests {
             encode_generic_enter::<1>(api, &[1, 2]).as_bytes(),
             {
                 let mut one = GenericPayload::<1>::new();
-                one.scalar(u64v(1));
+                one.scalar(CapturedValue::captured(TypedValue::<Generic>::U64(1)));
                 one
             }
             .as_bytes()

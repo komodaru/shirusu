@@ -277,7 +277,7 @@ pub(crate) fn escape_comment(tree: &Tree) -> Hits {
             while cs.get(e).is_some_and(|l| !l.is_empty()) {
                 e = e.saturating_add(1);
             }
-            let block = cs.get(k..e).map(|b| b.join(" ")).unwrap_or_default();
+            let block = cs.get(k..e).map_or_default(|b| b.join(" "));
             for (i, l) in cs.iter().enumerate().take(e).skip(k) {
                 if is_escape(l, &block) {
                     found.push((i.saturating_add(1), l.clone()));

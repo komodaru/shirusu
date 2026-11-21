@@ -715,8 +715,7 @@ impl IntegritySummary {
             finalization_notes: trace
                 .finalization
                 .as_ref()
-                .map(|f| f.notes.clone())
-                .unwrap_or_default(),
+                .map_or_default(|f| f.notes.clone()),
             loss_records_by_kind: by_kind,
             total_loss_count,
             dropped_payload_events: dropped_events,

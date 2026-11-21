@@ -125,13 +125,6 @@ const SPINS_PER_LIVENESS_CHECK: u32 = 64;
 // (serialized by the exclusive lock and the handshake). RingWriter is Send.
 unsafe impl Sync for WriterCell {}
 
-struct ClearOnDrop<'a>(&'a AtomicBool);
-impl Drop for ClearOnDrop<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 impl WriterCell {
     pub(crate) fn new(writer: RingWriter) -> Self {
         Self {
@@ -276,7 +269,8 @@ impl WriterCell {
             }
             std::thread::yield_now();
         }
-        let _done = ClearOnDrop(&self.remote);
+        // (Rust 1.100 DropGuard: the flag goes down on every way out, a panic too)
+        let _done = std::mem::DropGuard::new(&self.remote, |r| r.store(false, Ordering::Release));
         // SAFETY: the mutex excludes other remote users and the handshake
         // excludes the owner until `remote` clears.
         Access::Done(f(unsafe { &mut *self.writer.get() }))

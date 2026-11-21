@@ -11,22 +11,26 @@
 //!                                     退行を入れた木の両方で発火し、正しい書き方では
 //!                                     発火しないこと (tests.rs: 規則を足して fixture を
 //!                                     書かないとコンパイルが通らない)
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod dup;
 mod escape;
+mod modern;
 mod mutations;
 mod regress;
-mod dup;
 mod review;
 
 use quote::ToTokens;
 use syn::visit::Visit;
 
 /// deny にしてある unsafe の lint (workspace の Cargo.toml)
-const DENY: [&str; 4] = [
+const DENY: [&str; 5] = [
     "unsafe_op_in_unsafe_fn",
+    "raw_borrows_via_references",
     "not_unsafe_ptr_arg_deref",
     "missing_safety_doc",
     "undocumented_unsafe_blocks",
@@ -52,10 +56,13 @@ enum Rule {
     MutationCases,
     NoUnwrap,
     Dup,
+    WildcardUnreachable,
+    BinDeadPub,
+    HandStd,
 }
 
 impl Rule {
-    const ALL: [Rule; 17] = [
+    const ALL: [Rule; 20] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -73,6 +80,9 @@ impl Rule {
         Rule::MutationCases,
         Rule::NoUnwrap,
         Rule::Dup,
+        Rule::WildcardUnreachable,
+        Rule::BinDeadPub,
+        Rule::HandStd,
     ];
 
     fn id(self) -> &'static str {
@@ -94,6 +104,9 @@ impl Rule {
             Rule::MutationCases => "mutation-cases",
             Rule::NoUnwrap => "no-unwrap",
             Rule::Dup => "dup",
+            Rule::WildcardUnreachable => "wildcard-unreachable",
+            Rule::BinDeadPub => "bin-dead-pub",
+            Rule::HandStd => "hand-std",
         }
     }
 
@@ -116,6 +129,9 @@ impl Rule {
             Rule::MutationCases => "夜間の review-mutations.py の表が木と合う: 置換元は対象ファイルに 1 回、テスト名の絞り込みは有効な #[test] 1 個に当たる (2026-11-20 の夜間 CI 失敗)",
             Rule::NoUnwrap => "crates/ のテストでないコード (build.rs も。e2e/ と examples/ はテストと同じく外す) に .unwrap() / .expect(..) を書かない (2026-11-20「unwrapを根絶する」): 失敗しうるものは ? と型付きのエラー、起きない前提は型 (配列の長さ、shirusu_bytes の固定位置の読み出し、enum の状態) で表す。expect への言い換えも同じく禁止",
             Rule::Dup => "同じコードを二度書かない (2026-11-20): 関数・表の写し (名前違い、局所変数の改名を含む) は一つにして呼ぶ。テスト間はテストの common/ に置いて #[path] で取り込む。意図した写し (独立した参照実装など) は scripts/ci/dup-known.tsv に理由と書く",
+            Rule::WildcardUnreachable => "`_ => unreachable!()` の腕を書かない (2026-11-21、Rust 1.100): 来ない値は型で消す。never 型 `!` を型引数に (TypedValue<Generic>)、番号の代わりに enum (shared_com::Unknown)、const 引数ごとの trait 実装 (detours::CallOriginal)",
+            Rule::BinDeadPub => "どのバイナリも crate 属性で dead_code_pub_in_binary (Rust 1.97) を有効にする: `#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]` (crate の階層でしか効かないので各 main に)",
+            Rule::HandStd => "Rust 1.98..1.100 が名前をつけた形を手で書かない (2026-11-21: toggle 1、trim_prefix 1、map_or_default 14、Vec::from_fn 1、DropGuard 1 か所を置き換え): x.toggle()、s.trim_prefix(p)、o.map_or_default(f)、c.ok_or(e)、Vec::from_fn(v.len(), f)、旗を下ろすだけの Drop 型は std::mem::DropGuard",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -139,6 +155,9 @@ impl Rule {
             Rule::MutationCases => mutations::mutation_cases(tree),
             Rule::NoUnwrap => regress::no_unwrap(tree),
             Rule::Dup => dup_copies(tree),
+            Rule::WildcardUnreachable => modern::wildcard_unreachable(tree),
+            Rule::BinDeadPub => modern::bin_dead_pub(tree),
+            Rule::HandStd => modern::hand_std(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {
@@ -184,14 +203,13 @@ impl Tree {
                 .args(["ls-files", "-z"])
                 .current_dir(&self.root)
                 .output()
-                .map(|o| {
+                .map_or_default(|o| {
                     String::from_utf8_lossy(&o.stdout)
                         .split('\0')
                         .filter(|s| !s.is_empty())
                         .map(str::to_owned)
                         .collect()
-                })
-                .unwrap_or_default(),
+                }),
         };
         for (p, t) in &self.overlay {
             if t.is_some() {
@@ -210,8 +228,7 @@ impl Tree {
         match &self.base {
             Some(b) => b.get(p).cloned().unwrap_or_default(),
             None => std::fs::read(self.root.join(p))
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                .unwrap_or_default(),
+                .map_or_default(|b| String::from_utf8_lossy(&b).into_owned()),
         }
     }
 
@@ -446,8 +463,7 @@ fn build_output(tree: &Tree) -> Hits {
         .filter(|p| {
             let ext = p
                 .rsplit_once('.')
-                .map(|(_, e)| e.to_ascii_lowercase())
-                .unwrap_or_default();
+                .map_or_default(|(_, e)| e.to_ascii_lowercase());
             let packed = (BUILD_EXT.contains(&ext.as_str()) || ext == "zip")
                 && !p.contains("/testdata/")
                 && !p.starts_with("corpus/");
@@ -457,7 +473,12 @@ fn build_output(tree: &Tree) -> Hits {
         .collect()
 }
 
-const REQUIRED: [(&str, &str, &str); 6] = [
+const REQUIRED: [(&str, &str, &str); 7] = [
+    (
+        ".cargo/config.toml",
+        "global-min-publish-age",
+        "公開から日の浅い crate の版を選ばない (Rust 1.100 の dependency cooldown: 乗っ取られた版は数日で見つかり消される)",
+    ),
     (
         "scripts/ci/linux.sh",
         "cargo run -q -p shirusu-lint",
@@ -533,9 +554,13 @@ fn dup_copies(tree: &Tree) -> Hits {
     dup::fresh(&found, &known)
         .into_iter()
         .map(|g| {
-            let first = g.members.first().map(|m| m.file.clone()).unwrap_or_default();
+            let first = g.members.first().map_or_default(|m| m.file.clone());
             let line = g.lines.first().copied().unwrap_or(0);
-            (first, line, dup::report(&[g], DUP_KNOWN).trim_end().to_owned())
+            (
+                first,
+                line,
+                dup::report(&[g], DUP_KNOWN).trim_end().to_owned(),
+            )
         })
         .collect()
 }
@@ -553,7 +578,10 @@ fn main() -> ExitCode {
     match args.as_slice() {
         [] => {}
         [flag] if flag == "--dup-list" => {
-            print!("{}", dup::list(&dup::find(&rust_files(&Tree::repo(&root())))));
+            print!(
+                "{}",
+                dup::list(&dup::find(&rust_files(&Tree::repo(&root()))))
+            );
             return ExitCode::SUCCESS;
         }
         [flag] if flag == "--dup-update" => {

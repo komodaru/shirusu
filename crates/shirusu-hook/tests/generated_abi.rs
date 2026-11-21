@@ -285,11 +285,11 @@ fn broad_tier_wrappers_preserve_wide_floating_and_narrow_values() {
     let mut out: i16 = 7;
     // SAFETY: the Detour has the API's signature and the test passes arguments its stub original accepts.
     unsafe {
-        let r = detour_generated_oleaut32_var_bool_from_date(-0.0, (&mut out as *mut i16).cast());
+        let r = detour_generated_oleaut32_var_bool_from_date(-0.0, (&raw mut out).cast());
         assert_eq!((r, out), (0x0123_4567, -1));
         let r = detour_generated_oleaut32_var_bool_from_r4(
             f32::from_bits(0x7fc0_4321),
-            (&mut out as *mut i16).cast(),
+            (&raw mut out).cast(),
         );
         assert_eq!((r, out), (-1, 0));
         assert_eq!(

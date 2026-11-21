@@ -28,9 +28,12 @@
 //!
 //! 使い方: `cargo run -p shirusu-e2e --bin shirusu-trace-bench --release [-- --rounds 3]`
 //! 環境: Linux VM での測定。Windows 実機分は CI 待ち。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_agent::{Agent, RecordResult};
 use shirusu_e2e::ev;
+use shirusu_e2e::perf::median;
 use shirusu_host::trace_convert::{TraceBatchContext, TraceRecorder};
 use shirusu_host::{DrainWorker, IntegrityReport};
 use shirusu_trace::blob::BlobId;
@@ -48,7 +51,6 @@ use shirusu_transport::ring::SharedRegion;
 use shirusu_transport::slot::SlotPool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use shirusu_e2e::perf::median;
 
 const N_EVENTS: usize = 20_000;
 const BATCH_EVENTS: usize = 10_000;
@@ -67,7 +69,6 @@ impl XorShift {
         x
     }
 }
-
 
 fn env(session_id: u64) -> CaptureEnvironment {
     CaptureEnvironment {

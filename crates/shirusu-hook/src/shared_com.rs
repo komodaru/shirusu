@@ -188,12 +188,33 @@ macro_rules! wrappers {
 }
 include!("shared_com_slots.inc");
 
-fn wrapper(index: usize, method: usize) -> usize {
+/// IUnknown の 3 メソッド (vtable の 0..3 番)。番号ではなく名前で持つので、3 番以降を
+/// 渡す誤りは書けない (以前は `match method` の `_ => unreachable!()` だった)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unknown {
+    QueryInterface,
+    AddRef,
+    Release,
+}
+
+impl Unknown {
+    const ALL: [Unknown; 3] = [Unknown::QueryInterface, Unknown::AddRef, Unknown::Release];
+
+    /// vtable と Slot の配列での番号
+    fn slot(self) -> usize {
+        match self {
+            Unknown::QueryInterface => 0,
+            Unknown::AddRef => 1,
+            Unknown::Release => 2,
+        }
+    }
+}
+
+fn wrapper(index: usize, method: Unknown) -> usize {
     match method {
-        0 => WRAPPERS[index].0 as usize,
-        1 => WRAPPERS[index].1 as usize,
-        2 => WRAPPERS[index].2 as usize,
-        _ => unreachable!(),
+        Unknown::QueryInterface => WRAPPERS[index].0 as usize,
+        Unknown::AddRef => WRAPPERS[index].1 as usize,
+        Unknown::Release => WRAPPERS[index].2 as usize,
     }
 }
 
@@ -257,7 +278,8 @@ fn preflight(object: usize) -> Result<(usize, usize, [usize; 3]), &'static str> 
 // The caller holds a live COM reference (install) or a temporary module
 // reference (restore). An aligned pointer never straddles a page, so each
 // original protection applies to exactly the page this operation changes.
-unsafe fn exchange(saved: &Slot, index: usize, method: usize, installing: bool) -> bool {
+unsafe fn exchange(saved: &Slot, index: usize, which: Unknown, installing: bool) -> bool {
+    let method = which.slot();
     let address = saved.table + method * std::mem::size_of::<usize>();
     let mut old = 0;
     if !make_writable(address, &mut old) {
@@ -266,7 +288,7 @@ unsafe fn exchange(saved: &Slot, index: usize, method: usize, installing: bool) 
     let pending = saved.protection[method].load(Ordering::Acquire);
     let restore = if pending == 0 { old } else { pending };
     saved.protection[method].store(restore, Ordering::Release);
-    let detour = wrapper(index, method);
+    let detour = wrapper(index, which);
     let (expected, desired) = if installing {
         (saved.originals[method], detour)
     } else {
@@ -342,7 +364,7 @@ fn restore_page(address: usize, protection: u32) -> bool {
 }
 
 fn pending(saved: &Slot) -> bool {
-    (0..3).any(|i| {
+    Unknown::ALL.iter().map(|m| m.slot()).any(|i| {
         saved.patched[i].load(Ordering::Acquire) || saved.protection[i].load(Ordering::Acquire) != 0
     })
 }
@@ -389,9 +411,9 @@ pub unsafe fn install(rt: &Arc<HookRuntime>, object: usize) -> Result<Installati
                 && pending(saved)
                 && MODULE_EPOCHS[index].load(Ordering::Acquire) & 1 == 0
             {
-                if (0..3).all(|i| {
-                    originals[i] == wrapper(index, i)
-                        && saved.protection[i].load(Ordering::Acquire) == 0
+                if Unknown::ALL.iter().all(|&m| {
+                    originals[m.slot()] == wrapper(index, m)
+                        && saved.protection[m.slot()].load(Ordering::Acquire) == 0
                 }) {
                     return Ok(Installation {
                         newly_installed: false,
@@ -442,7 +464,7 @@ pub unsafe fn install(rt: &Arc<HookRuntime>, object: usize) -> Result<Installati
         patched: std::array::from_fn(|_| AtomicBool::new(false)),
         protection: std::array::from_fn(|_| AtomicU32::new(0)),
     });
-    let pointer = &mut *saved as *mut Slot;
+    let pointer: *mut Slot = &raw mut *saved;
     if reusable.is_some() {
         // The wrapper identity was already published once.
         saved.published.store(true, Ordering::Release);
@@ -461,15 +483,17 @@ pub unsafe fn install(rt: &Arc<HookRuntime>, object: usize) -> Result<Installati
         return Err("iunknown-wrapper-slot-missing");
     };
     // SAFETY: `saved` was validated by read_table and the caller holds a live COM reference to the object.
-    let success = (0..3).all(|method| unsafe { exchange(saved, index, method, true) });
+    let success = Unknown::ALL
+        .iter()
+        .all(|&m| unsafe { exchange(saved, index, m, true) });
     if !success {
-        for method in (0..3).rev() {
-            if saved.patched[method].load(Ordering::Acquire)
-                || saved.protection[method].load(Ordering::Acquire) != 0
+        for m in Unknown::ALL.into_iter().rev() {
+            if saved.patched[m.slot()].load(Ordering::Acquire)
+                || saved.protection[m.slot()].load(Ordering::Acquire) != 0
             {
                 // SAFETY: same Slot and reference as the install attempt above.
                 unsafe {
-                    exchange(saved, index, method, false);
+                    exchange(saved, index, m, false);
                 }
             }
         }
@@ -524,13 +548,13 @@ pub fn restore_all() -> usize {
                 saved.protection[i].store(0, Ordering::Release);
             }
         } else if held && same_image == Some(true) {
-            for method in (0..3).rev() {
-                if saved.patched[method].load(Ordering::Acquire)
-                    || saved.protection[method].load(Ordering::Acquire) != 0
+            for m in Unknown::ALL.into_iter().rev() {
+                if saved.patched[m.slot()].load(Ordering::Acquire)
+                    || saved.protection[m.slot()].load(Ordering::Acquire) != 0
                 {
                     // SAFETY: the module reference taken above keeps the vtable mapped.
                     unsafe {
-                        exchange(saved, index, method, false);
+                        exchange(saved, index, m, false);
                     }
                 }
             }
@@ -792,7 +816,7 @@ mod tests {
         };
         assert_eq!(
             // SAFETY: the object is live; install only reads it and rejects the heap vtable.
-            unsafe { install(&rt, &heap_object as *const Object as usize) },
+            unsafe { install(&rt, (&raw const heap_object).expose_provenance()) },
             Err("vtable-not-image-data")
         );
         assert_eq!(*heap_table, original);
@@ -898,7 +922,7 @@ mod tests {
         };
         // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&other, 1) }, 2);
-        assert!(rt.with_com_tracker(|t| t.lookup(&other as *const Object as u64).is_none()));
+        assert!(rt.with_com_tracker(|t| t.lookup((&raw const other).addr() as u64).is_none()));
         // SAFETY: the fixture object's vtable slots have the Ref signature and the object outlives the call.
         assert_eq!(unsafe { call_ref(&other, 2) }, 1);
 

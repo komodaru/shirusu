@@ -5,11 +5,19 @@ error[E0080]: evaluation panicked: the read lies past the record's end
   |
  ::: src/lib.rs
   |
-  |     const { assert!(AT <= N && L <= N - AT, "the read lies past the record's end") };
-  |             ---------------------------------------------------------------------- in this macro invocation
+  | /         assert!(
+  | |             AT <= N && L <= N - AT,
+  | |             "the read lies past the record's end"
+  | |         )
+  | |_________- in this macro invocation
 
 note: erroneous constant encountered
  --> src/lib.rs
   |
-  |     const { assert!(AT <= N && L <= N - AT, "the read lies past the record's end") };
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  | /     const {
+  | |         assert!(
+  | |             AT <= N && L <= N - AT,
+  | |             "the read lies past the record's end"
+  | |         )
+  | |     };
+  | |_____^

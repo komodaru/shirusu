@@ -24,6 +24,8 @@
 //! 1 = いずれか fail／不足あり／ステップの失敗・ビルドの失敗、
 //! 2 = 使い方/入力/仕様の解釈エラー。
 //! 環境の不一致は警告どまりで、終了コードには影響しない。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_test::golden::{check, derive_from_trace, fresh_check, Golden, GoldenOverrides};
 use shirusu_trace::reader::ReadTrace;

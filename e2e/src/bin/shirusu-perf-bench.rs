@@ -21,8 +21,11 @@
 //! 使い方: `cargo run -p shirusu-e2e --bin shirusu-perf-bench --release [-- --rounds 3]`
 //! 終了コードは常に 0。基準は開発中の評価目標でありゲートではないため、
 //! 判定が FAIL でも失敗にしない（数値を読むための測定器である）。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_agent::{Agent, RecordResult};
+use shirusu_e2e::perf::median;
 use shirusu_e2e::perf::{
     break_even_api_cost_ns, evaluate, execution_ratio, gui_mix_spec, high_load_spec, BufferUsage,
     CallClass, WorkloadKind, WorkloadSpec,
@@ -37,7 +40,6 @@ use shirusu_transport::slot::SlotPool;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use shirusu_e2e::perf::median;
 
 const N_LATENCY_CALLS_SMALL: u64 = 20_000;
 const N_LATENCY_CALLS_4K: u64 = 2_000;
@@ -65,7 +67,6 @@ const BURST_DRAIN_POLL: Duration = Duration::from_millis(2);
 /// バッチング依存になる（F25/F26 は 10,000 件ずつ）。実運用の drain も
 /// 通知駆動で数千件単位のため、ここで溜めてから渡す。
 const RECORDER_BATCH_EVENTS: usize = 5_000;
-
 
 fn env(session_id: u64) -> CaptureEnvironment {
     CaptureEnvironment {

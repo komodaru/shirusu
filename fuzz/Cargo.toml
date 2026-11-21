@@ -107,3 +107,8 @@ path = "fuzz_targets/drain_chunk.rs"
 test = false
 doc = false
 bench = false
+
+[lints.rust]
+# (Rust 1.99: `&x as *const T` / `&mut x as *mut T` makes a reference first, with its aliasing
+# rules: write `&raw const x` / `&raw mut x`, or Box::as_ptr)
+raw_borrows_via_references = "warn"

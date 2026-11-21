@@ -2,6 +2,8 @@
 //!
 //! 終了コード: 0 = 適合、1 = 不適合（Trace として読めない場合を
 //! 含む）、2 = 使い方/入力エラー。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_conformance::{CheckFinding, CheckStatus, ConformanceReport};
 use std::process::ExitCode;

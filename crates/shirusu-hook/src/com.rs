@@ -415,7 +415,7 @@ pub fn com_factory_enter_values(args: &ComFactoryArgs) -> Vec<CapturedValue> {
         } else {
             ValueCapture::Unreadable
         },
-        value: TypedValue::Bytes(g.map(|g| g.bytes.to_vec()).unwrap_or_default()),
+        value: TypedValue::Bytes(g.map_or_default(|g| g.bytes.to_vec())),
     };
     let cv = CapturedValue::captured;
     vec![
@@ -848,8 +848,7 @@ impl ComTracker {
             let existing = self.objects.get(&out).filter(|o| !o.destroyed);
             let mut groups: Vec<Arc<()>> = source_identity
                 .as_ref()
-                .map(|(_, _, group)| vec![Arc::clone(group)])
-                .unwrap_or_default();
+                .map_or_default(|(_, _, group)| vec![Arc::clone(group)]);
             if let Some(o) = existing {
                 groups.push(Arc::clone(&o.identity_group));
             }

@@ -11,6 +11,8 @@
 //!        単一スレッドが大量イベント (既定 100 万件) を順に記録する)
 //!   --file <path> --count <n>   (フォールバック: レコードをファイルへ。共有メモリではない)
 //!   --selftest                  (自己完結で書込/回収を検証)
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_e2e::ev;
 use shirusu_transport::ring::{SharedRegion, WriterPolicy};

@@ -372,7 +372,7 @@ fn sh_sets(code: &str) -> Option<String> {
             if let Some(r) = rest.strip_prefix('[') {
                 rest = r.split_once(']').map_or("", |(_, x)| x);
             }
-            let rest = rest.strip_prefix('+').unwrap_or(rest);
+            let rest = rest.trim_prefix('+');
             if rest.starts_with('=') {
                 return Some(name.to_owned());
             }

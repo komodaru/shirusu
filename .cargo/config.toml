@@ -1,0 +1,4 @@
+# (Rust 1.100) a crate version published less than a week ago is not picked when the lock file
+# changes: a hijacked release is usually found and yanked within days
+[registry]
+global-min-publish-age = "7 days"

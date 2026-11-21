@@ -20,8 +20,11 @@
 //!
 //! 使い方: `cargo run -p shirusu-e2e --bin shirusu-tuning-bench [-- --rounds 3]`
 //! 環境: Linux VM での測定。Windows 実機分は CI 待ち。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_e2e::ev;
+use shirusu_e2e::perf::{median, p95};
 use shirusu_host::DrainWorker;
 use shirusu_transport::clock::{system_clock, Clock, ManualClock};
 use shirusu_transport::layout::RingConfig;
@@ -32,7 +35,6 @@ use shirusu_transport_win::ProcessNotify;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use shirusu_e2e::perf::{median, p95};
 
 const PAYLOAD_256: [u8; 256] = [0xAB; 256];
 
@@ -48,7 +50,6 @@ impl XorShift {
         x
     }
 }
-
 
 // ---------------------------------------------------------------- S1: Ring 容量
 

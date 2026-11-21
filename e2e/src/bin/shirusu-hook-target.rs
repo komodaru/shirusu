@@ -5,6 +5,8 @@
 //! インポートが載るよう、あえて std::fs を使わずに書く。
 //! Windows 以外では何もせず終了する（CI の Linux ジョブでも
 //! ビルドだけは通る）。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 #[cfg(windows)]
 mod win {
@@ -134,7 +136,7 @@ mod win {
                 0,
                 std::ptr::null_mut(),
                 std::ptr::null(),
-                &si as *const StartupInfoW as *const c_void,
+                (&raw const si).cast::<c_void>(),
                 &mut pi,
             )
         };
@@ -936,7 +938,7 @@ mod win {
                 std::ptr::null_mut(),
                 0,
                 thread_proc,
-                &thread_path as *const std::path::PathBuf as *mut c_void,
+                (&raw const thread_path).cast_mut().cast::<c_void>(),
                 0,
                 std::ptr::null_mut(),
             )

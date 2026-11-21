@@ -23,6 +23,8 @@
 //! repair の失敗（入力が読めない・出力が書けない・入出力が同一）も 1。
 //! Windows 以外での capture / attach も 1（引数の検証まで済ませてから
 //! プラットフォーム制限を明言する）。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 mod capture;
 mod coverage;
@@ -386,7 +388,7 @@ mod tests {
                         arg.push('"');
                         i += 1;
                     } else {
-                        quoted = !quoted;
+                        quoted.toggle();
                     }
                     i += 1;
                 } else {

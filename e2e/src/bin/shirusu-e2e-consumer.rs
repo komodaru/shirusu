@@ -1,4 +1,6 @@
 //! E2E consumer: producer が書いたレコードファイル / 自己完結の検証を行う専用プログラム。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 use std::io::Read as _;
 fn main() {
     let args: Vec<String> = std::env::args().collect();

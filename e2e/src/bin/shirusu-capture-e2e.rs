@@ -3,6 +3,8 @@
 //! shirusu-hook-target.exe を Agent DLL 付きで起動し、生成された Trace を
 //! 読み戻して「対象が呼んだ API が、引数（L2）付きで記録されていること」を
 //! 検証する。windows-x64 CI ジョブで実行される。Windows 以外は SKIP。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 #[cfg(windows)]
 mod win {

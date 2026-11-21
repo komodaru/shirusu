@@ -16,6 +16,8 @@
 //! `--out-dir` を指定していればその値）、
 //! `--winmd` は環境変数 `SHIRUSU_WINMD` か
 //! `target/winmd/Windows.Win32.winmd`。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_metadata_gen::{
     broad_list_path, emit_api_inc, emit_api_inventory, emit_broad_api_inc, emit_com_catalog,

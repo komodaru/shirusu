@@ -9,6 +9,8 @@
 //! ファイルの往復はフック対象 API を通るため、Trace には 4 API ×
 //! enter/leave ＝ 8 イベントが残る（capture-e2e --verify-apps が確認）。
 //! Windows 以外では何もせず終了する（CI の Linux ジョブでもビルドだけは通る）。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 #[cfg(windows)]
 mod win {

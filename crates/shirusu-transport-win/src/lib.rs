@@ -228,7 +228,8 @@ mod imp {
     /// `handle` を継承可能にする（CreateProcess で子へ渡す）。`what` は失敗時の名前。
     fn make_inheritable(handle: BorrowedHandle<'_>, what: &'static str) -> Result<()> {
         // SAFETY: `handle` is an open handle its owner keeps open for this call.
-        let ok = unsafe { SetHandleInformation(h(handle), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        let ok =
+            unsafe { SetHandleInformation(h(handle), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
         if ok == 0 {
             return Err(last_err(what));
         }
@@ -2195,7 +2196,7 @@ mod tests {
         assert!(!process_exited(handle.borrow()).unwrap());
         let value = 0u8;
         assert!(
-            write_process_memory(handle.borrow(), &value as *const u8 as usize, &[value]).is_err(),
+            write_process_memory(handle.borrow(), (&raw const value).addr(), &[value]).is_err(),
             "liveness handle must not grant PROCESS_VM_WRITE"
         );
         assert!(

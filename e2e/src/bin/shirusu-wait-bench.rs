@@ -11,8 +11,11 @@
 //!   Windows ではカーネルイベント、Linux スタブでは condvar ベースの待機。
 //!
 //! 使い方: `cargo run -p shirusu-e2e --bin shirusu-wait-bench [-- --rounds 25]`
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_e2e::ev;
+use shirusu_e2e::perf::{median, p95};
 use shirusu_host::{DrainWorker, NotifyingDrainWorker};
 use shirusu_transport::clock::Clock;
 use shirusu_transport::ring::{SharedRegion, WriterPolicy};
@@ -21,7 +24,6 @@ use shirusu_transport_win::{EventClock, RingNotify};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use shirusu_e2e::perf::{median, p95};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Strategy {
@@ -186,7 +188,6 @@ fn run_round(strategy: Strategy) -> RoundResult {
         drained,
     }
 }
-
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

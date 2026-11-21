@@ -166,8 +166,7 @@ pub fn trim_trace(
     let mut notes = source
         .finalization
         .as_ref()
-        .map(|f| f.notes.clone())
-        .unwrap_or_default();
+        .map_or_default(|f| f.notes.clone());
     for issue in &source.issues {
         notes.push(format!("source recovery issue: {issue:?}"));
     }

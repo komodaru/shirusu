@@ -90,7 +90,11 @@ pub fn find(files: &[(String, String)]) -> Vec<Group> {
     let mut units = Vec::new();
     for (path, text) in files {
         if let Ok(file) = syn::parse_file(text) {
-            let mut c = Collect { file: path.clone(), ty: Vec::new(), out: &mut units };
+            let mut c = Collect {
+                file: path.clone(),
+                ty: Vec::new(),
+                out: &mut units,
+            };
             c.visit_file(&file);
         }
     }
@@ -119,7 +123,8 @@ pub fn find(files: &[(String, String)]) -> Vec<Group> {
             if *k != kind || us.len() < 2 {
                 continue;
             }
-            let mut ms: Vec<(Member, usize)> = us.iter().map(|u| (u.member.clone(), u.line)).collect();
+            let mut ms: Vec<(Member, usize)> =
+                us.iter().map(|u| (u.member.clone(), u.line)).collect();
             ms.sort();
             let members: Vec<Member> = ms.iter().map(|(m, _)| m.clone()).collect();
             // (a renamed group that is an exact group already says nothing more)
@@ -130,7 +135,12 @@ pub fn find(files: &[(String, String)]) -> Vec<Group> {
                 exact_sets.insert(members.clone());
             }
             let lines = ms.iter().map(|(_, l)| *l).collect();
-            groups.push(Group { kind, members, lines, tokens: toks.len() });
+            groups.push(Group {
+                kind,
+                members,
+                lines,
+                tokens: toks.len(),
+            });
         }
     }
     groups.sort();
@@ -156,7 +166,15 @@ impl Collect<'_> {
             Some(t) => format!("{t}::{name}"),
             None => name.to_string(),
         };
-        self.out.push(Unit { member: Member { file: self.file.clone(), name }, line: line(sig.ident.span()), exact, renamed });
+        self.out.push(Unit {
+            member: Member {
+                file: self.file.clone(),
+                name,
+            },
+            line: line(sig.ident.span()),
+            exact,
+            renamed,
+        });
     }
     fn push_table(&mut self, name: &syn::Ident, ty: &syn::Type, expr: &syn::Expr) {
         let syn::Expr::Array(a) = expr else { return };
@@ -165,7 +183,15 @@ impl Collect<'_> {
         }
         let mut ts = ty.to_token_stream();
         expr.to_tokens(&mut ts);
-        self.out.push(Unit { member: Member { file: self.file.clone(), name: name.to_string() }, line: line(name.span()), exact: flat(ts), renamed: None });
+        self.out.push(Unit {
+            member: Member {
+                file: self.file.clone(),
+                name: name.to_string(),
+            },
+            line: line(name.span()),
+            exact: flat(ts),
+            renamed: None,
+        });
     }
 }
 
@@ -187,7 +213,10 @@ impl<'a> Visit<'a> for Collect<'_> {
     fn visit_item_impl(&mut self, i: &'a syn::ItemImpl) {
         let t = i.self_ty.to_token_stream().to_string().replace(' ', "");
         let t = match &i.trait_ {
-            Some((_, p, _)) => format!("<{t}as{}>", p.to_token_stream().to_string().replace(' ', "")),
+            Some((_, p, _)) => format!(
+                "<{t}as{}>",
+                p.to_token_stream().to_string().replace(' ', "")
+            ),
             None => t,
         };
         self.ty.push(t);
@@ -229,7 +258,13 @@ fn flat_into(ts: TokenStream, out: &mut Vec<String>) {
                     _ => (false, k),
                 };
                 let doc = match all.get(at) {
-                    Some(TokenTree::Group(g)) => g.delimiter() == Delimiter::Bracket && g.stream().into_iter().next().is_some_and(|f| f.to_string() == "doc"),
+                    Some(TokenTree::Group(g)) => {
+                        g.delimiter() == Delimiter::Bracket
+                            && g.stream()
+                                .into_iter()
+                                .next()
+                                .is_some_and(|f| f.to_string() == "doc")
+                    }
                     _ => false,
                 };
                 if doc {
@@ -267,18 +302,31 @@ fn flat_into(ts: TokenStream, out: &mut Vec<String>) {
 /// `toks` with local names numbered by first use: a lower-case identifier that is not a keyword,
 /// not called (`f(`), not a macro (`m!`), not after `.` (a field or method), not beside `::`
 const KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32", "f64", "bool", "char", "str",
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
+    "where", "while", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
+    "i128", "isize", "f32", "f64", "bool", "char", "str",
 ];
 
 pub fn renamed(toks: &[String]) -> Vec<String> {
     let mut names: BTreeMap<&str, usize> = BTreeMap::new();
     let mut out = Vec::with_capacity(toks.len());
     for (k, t) in toks.iter().enumerate() {
-        let prev = k.checked_sub(1).and_then(|p| toks.get(p)).map(String::as_str);
-        let prev2 = k.checked_sub(2).and_then(|p| toks.get(p)).map(String::as_str);
+        let prev = k
+            .checked_sub(1)
+            .and_then(|p| toks.get(p))
+            .map(String::as_str);
+        let prev2 = k
+            .checked_sub(2)
+            .and_then(|p| toks.get(p))
+            .map(String::as_str);
         let next = toks.get(k.saturating_add(1)).map(String::as_str);
         let next2 = toks.get(k.saturating_add(2)).map(String::as_str);
-        let local = t.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        let local = t
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
             && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
             && !KEYWORDS.contains(&t.as_str())
             && !matches!(next, Some("(" | "!"))
@@ -308,10 +356,17 @@ pub fn load_known(text: &str) -> Vec<Known> {
             continue;
         }
         let mut parts = l.split('\t');
-        let Some(kind) = parts.next().and_then(Kind::of_id) else { continue };
+        let Some(kind) = parts.next().and_then(Kind::of_id) else {
+            continue;
+        };
         let mut members: Vec<Member> = parts
             .take_while(|p| !p.starts_with('#'))
-            .filter_map(|p| p.split_once('#').map(|(f, n)| Member { file: f.to_owned(), name: n.to_owned() }))
+            .filter_map(|p| {
+                p.split_once('#').map(|(f, n)| Member {
+                    file: f.to_owned(),
+                    name: n.to_owned(),
+                })
+            })
             .collect();
         members.sort();
         out.push((kind, members));
@@ -323,7 +378,11 @@ pub fn load_known(text: &str) -> Vec<Known> {
 pub fn fresh<'g>(found: &'g [Group], known: &[Known]) -> Vec<&'g Group> {
     found
         .iter()
-        .filter(|g| !known.iter().any(|(k, ms)| *k == g.kind && g.members.iter().all(|m| ms.contains(m))))
+        .filter(|g| {
+            !known
+                .iter()
+                .any(|(k, ms)| *k == g.kind && g.members.iter().all(|m| ms.contains(m)))
+        })
         .collect()
 }
 
@@ -339,7 +398,9 @@ pub fn updated(text: &str, found: &[Group]) -> String {
     text.lines()
         .filter(|l| match load_known(l).first() {
             None => true,
-            Some((k, ms)) => found.iter().any(|g| g.kind == *k && g.members.iter().filter(|m| ms.contains(m)).count() >= 2),
+            Some((k, ms)) => found
+                .iter()
+                .any(|g| g.kind == *k && g.members.iter().filter(|m| ms.contains(m)).count() >= 2),
         })
         .map(|l| format!("{l}\n"))
         .collect()
@@ -349,7 +410,12 @@ pub fn updated(text: &str, found: &[Group]) -> String {
 pub fn report(new: &[&Group], sites: &str) -> String {
     let mut out = String::new();
     for g in new {
-        let at: Vec<String> = g.members.iter().zip(&g.lines).map(|(m, l)| format!("{}:{l} ({})", m.file, m.name)).collect();
+        let at: Vec<String> = g
+            .members
+            .iter()
+            .zip(&g.lines)
+            .map(|(m, l)| format!("{}:{l} ({})", m.file, m.name))
+            .collect();
         out.push_str(&format!(
             "dup: {} copy, {} tokens:\n    {}\n    (keep one and call it from the others; an intended copy goes in {sites} with its why:\n    {})\n",
             g.kind.id(),
@@ -365,8 +431,18 @@ pub fn report(new: &[&Group], sites: &str) -> String {
 pub fn list(found: &[Group]) -> String {
     let mut out = String::new();
     for g in found {
-        let at: Vec<String> = g.members.iter().zip(&g.lines).map(|(m, l)| format!("{}:{l} {}", m.file, m.name)).collect();
-        out.push_str(&format!("{} {} tokens\n    {}\n", g.kind.id(), g.tokens, at.join("\n    ")));
+        let at: Vec<String> = g
+            .members
+            .iter()
+            .zip(&g.lines)
+            .map(|(m, l)| format!("{}:{l} {}", m.file, m.name))
+            .collect();
+        out.push_str(&format!(
+            "{} {} tokens\n    {}\n",
+            g.kind.id(),
+            g.tokens,
+            at.join("\n    ")
+        ));
     }
     out
 }

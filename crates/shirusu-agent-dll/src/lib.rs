@@ -1025,7 +1025,7 @@ mod tests {
             assert_eq!(
                 // SAFETY: an old Bootstrap is only its version word, and init
                 // reads nothing past it for an old version.
-                unsafe { super::win::init((&version as *const u32).cast()) },
+                unsafe { super::win::init((&raw const version).cast()) },
                 STATUS_BAD_BOOTSTRAP
             );
         }

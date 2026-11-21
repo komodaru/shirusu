@@ -65,16 +65,14 @@ pub fn excluded_evidence(selected: &BTreeSet<u32>) -> Vec<HookEvidence> {
 
 /// Agent が書き戻した Fingerprint と Host の Fingerprint を照合する。
 pub fn check_catalog(host: &CatalogFingerprint, agent: &CatalogFingerprint) -> Result<(), String> {
-    if host == agent {
-        Ok(())
-    } else {
-        Err(format!(
+    (host == agent).ok_or_else(|| {
+        format!(
             "agent API catalog {} does not match host API catalog {}; \
              rebuild the agent DLL and host from the same commit",
             fingerprint_hex(agent),
             fingerprint_hex(host)
-        ))
-    }
+        )
+    })
 }
 
 /// u32 配列のネイティブ順バイト列（同一ビットネス・同一エンディアンの対象プロセスへ書き込む形）。

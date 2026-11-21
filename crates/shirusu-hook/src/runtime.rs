@@ -846,10 +846,9 @@ impl RuntimeSlot {
                 }
             }
         }
-        #[allow(deprecated)] // fetch_update supports the Rust 1.87 MSRV.
         let Ok(revision) =
             NEXT_RUNTIME_REVISION
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
         else {
             // (u64 個の登録を使い切った: 公開せずに返す)
             return Err(rt);

@@ -293,10 +293,50 @@ impl LastErrorMeaning {
     }
 }
 
+/// [`TypedValue`] の可変長の変種 (Str / Str16 / Bytes / BlobRef) とポインタの変種
+/// (Ptr32 / Ptr64) が持つもの。[`Owned`] はトレースの値 (既定)。[`Generic`] は
+/// 「生成表の型 (GenericScalar: 整数・Bool・浮動小数点) しか来ない」ことを型で言う:
+/// ほかの変種の中身が never 型 `!` (Rust 1.100) なので値が作れず、match でその腕を
+/// 書かなくてよい (`_ => unreachable!()` が要らない)。
+pub trait Holds {
+    type Str: core::fmt::Debug + Clone + PartialEq;
+    type Str16: core::fmt::Debug + Clone + PartialEq;
+    type Bytes: core::fmt::Debug + Clone + PartialEq;
+    type Blob: core::fmt::Debug + Clone + PartialEq;
+    type Ptr32: core::fmt::Debug + Clone + PartialEq;
+    type Ptr64: core::fmt::Debug + Clone + PartialEq;
+}
+
+/// トレースの値: 可変長の変種も持てる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owned {}
+
+impl Holds for Owned {
+    type Str = String;
+    type Str16 = Vec<u16>;
+    type Bytes = Vec<u8>;
+    type Blob = BlobId;
+    type Ptr32 = u32;
+    type Ptr64 = u64;
+}
+
+/// 生成表の引数・戻り値 (GenericScalar の型だけ): 可変長とポインタの変種は作れない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Generic {}
+
+impl Holds for Generic {
+    type Str = !;
+    type Str16 = !;
+    type Bytes = !;
+    type Blob = !;
+    type Ptr32 = !;
+    type Ptr64 = !;
+}
+
 /// 型付き値。生ビット列を保持する方針（浮動小数点はビットで保持し、
 /// NaN ペイロードを失わない）に従い、F32/F64 はビット表現で持つ。
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypedValue {
+pub enum TypedValue<H: Holds = Owned> {
     I32(i32),
     I64(i64),
     U32(u32),
@@ -304,15 +344,30 @@ pub enum TypedValue {
     F32Bits(u32),
     F64Bits(u64),
     Bool(bool),
-    Str(String),
-    Str16(Vec<u16>),
-    Bytes(Vec<u8>),
-    BlobRef(BlobId),
-    Ptr32(u32),
-    Ptr64(u64),
+    Str(H::Str),
+    Str16(H::Str16),
+    Bytes(H::Bytes),
+    BlobRef(H::Blob),
+    Ptr32(H::Ptr32),
+    Ptr64(H::Ptr64),
 }
 
-impl TypedValue {
+/// 生成表の値はトレースの値でもある (ほかの変種は `!` なので腕が要らない)。
+impl From<TypedValue<Generic>> for TypedValue {
+    fn from(v: TypedValue<Generic>) -> TypedValue {
+        match v {
+            TypedValue::I32(x) => TypedValue::I32(x),
+            TypedValue::I64(x) => TypedValue::I64(x),
+            TypedValue::U32(x) => TypedValue::U32(x),
+            TypedValue::U64(x) => TypedValue::U64(x),
+            TypedValue::F32Bits(x) => TypedValue::F32Bits(x),
+            TypedValue::F64Bits(x) => TypedValue::F64Bits(x),
+            TypedValue::Bool(x) => TypedValue::Bool(x),
+        }
+    }
+}
+
+impl<H: Holds> TypedValue<H> {
     pub fn ty(&self) -> Ty {
         match self {
             Self::I32(_) => Ty::I32,
@@ -414,13 +469,22 @@ impl ValueCapture {
 
 /// 取得状態付きの値（値列の要素）。
 #[derive(Debug, Clone, PartialEq)]
-pub struct CapturedValue {
+pub struct CapturedValue<H: Holds = Owned> {
     pub capture: ValueCapture,
-    pub value: TypedValue,
+    pub value: TypedValue<H>,
 }
 
-impl CapturedValue {
-    pub fn captured(value: TypedValue) -> Self {
+impl From<CapturedValue<Generic>> for CapturedValue {
+    fn from(v: CapturedValue<Generic>) -> CapturedValue {
+        CapturedValue {
+            capture: v.capture,
+            value: v.value.into(),
+        }
+    }
+}
+
+impl<H: Holds> CapturedValue<H> {
+    pub fn captured(value: TypedValue<H>) -> Self {
         Self {
             capture: ValueCapture::Captured,
             value,

@@ -216,9 +216,7 @@ pub(crate) fn com_method_dispatch_with(
     let call_id = rt.alloc_call_id();
     // enter: QI では target_iid に要求された IID を読む。
     let target_iid: Vec<u8> = if method_index == 0 && !args.is_empty() {
-        read_guid(args[0] as u64)
-            .map(|g| g.bytes.to_vec())
-            .unwrap_or_default()
+        read_guid(args[0] as u64).map_or_default(|g| g.bytes.to_vec())
     } else {
         Vec::new()
     };

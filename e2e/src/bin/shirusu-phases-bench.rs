@@ -1,5 +1,7 @@
 //! Component measurements, not additive attribution of an injected application.
 //! Runs production functions without patching an application or notifying a Host.
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 use shirusu_agent::{Agent, RecordResult};
 use shirusu_hook::{
     api::api_by_import,

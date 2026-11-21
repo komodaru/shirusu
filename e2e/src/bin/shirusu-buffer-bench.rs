@@ -1,5 +1,7 @@
 //! Capacity experiment with the unchanged native high-load fixture.
 //! This is separate from the default-configuration performance acceptance run.
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 #[cfg(windows)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     use shirusu_host::recorder::CaptureSessionConfig;

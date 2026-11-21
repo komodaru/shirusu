@@ -513,7 +513,7 @@ impl ValidatingReader {
         // One shared copy of the chunk's payload; each event refers to its
         // range (review 2026-11-14 P3-2: one Vec per event before).
         let shared: std::sync::Arc<[u8]> = std::sync::Arc::from(&chunk.payload[..]);
-        for bytes in chunk.descriptors.chunks_exact(64) {
+        for bytes in chunk.descriptors.as_chunks::<64>().0 {
             let expectation = DescriptorExpectation {
                 sequence_at_least: self.expected_sequence,
                 payload_position: self.expected_payload_position,

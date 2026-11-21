@@ -94,11 +94,7 @@ pub(crate) fn invoke<F: FnOnce(usize) -> R + Copy, S, R: Word>(
     };
     // SAFETY: `call` and `cleanup` match the helper's ABI and receive `context`, which outlives the call.
     let word = unsafe {
-        shirusu_invoke_with_finally(
-            call::<F, S, R>,
-            (&mut context as *mut Invocation<F, S>).cast(),
-            cleanup::<F, S>,
-        )
+        shirusu_invoke_with_finally(call::<F, S, R>, (&raw mut context).cast(), cleanup::<F, S>)
     };
     (R::from_word(word), context.state.take())
 }
@@ -135,7 +131,7 @@ mod tests {
             assert_eq!(u16::from_word(v.into_word()), v);
         }
         let x = 7u8;
-        let p = &x as *const u8;
+        let p = &raw const x;
         assert_eq!(<*const u8>::from_word(p.into_word()), p);
         let q = p as *mut u8;
         assert_eq!(<*mut u8>::from_word(q.into_word()), q);
@@ -178,7 +174,7 @@ mod tests {
         }
         let mut drops = AtomicUsize::new(0);
         // SAFETY: `run` matches the helper's callback ABI and `drops` outlives the call.
-        let code = unsafe { shirusu_test_catch_seh(run, (&mut drops as *mut AtomicUsize).cast()) };
+        let code = unsafe { shirusu_test_catch_seh(run, (&raw mut drops).cast()) };
         assert_eq!(code, 0xe0424242);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
     }

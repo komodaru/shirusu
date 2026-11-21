@@ -526,8 +526,8 @@ impl<'a> Control<'a> {
     /// Control 全体を語ごとの原子読み (Acquire) で所有データへ写す。
     pub fn snapshot(self) -> [u8; CONTROL_SIZE] {
         let mut out = [0u8; CONTROL_SIZE];
-        for (chunk, w) in out.chunks_exact_mut(8).zip(self.words) {
-            chunk.copy_from_slice(&w.load(Ordering::Acquire).to_le_bytes());
+        for (chunk, w) in out.as_chunks_mut::<8>().0.iter_mut().zip(self.words) {
+            *chunk = w.load(Ordering::Acquire).to_le_bytes();
         }
         out
     }

@@ -53,8 +53,7 @@ pub fn generate_replay(trace: &ReadTrace) -> Result<TestSpec, String> {
     // raw handle -> (stored variable, original filename, cursor, access)
     let mut handles: BTreeMap<u64, (String, String, usize, u64)> = BTreeMap::new();
     let mut steps = Vec::new();
-    for pair in events.chunks_exact(2) {
-        let (enter, leave) = (pair[0], pair[1]);
+    for &[enter, leave] in events.as_chunks::<2>().0 {
         if enter.kind != 1
             || leave.kind != 2
             || enter.call_id != leave.call_id

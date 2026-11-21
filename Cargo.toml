@@ -35,8 +35,10 @@ license = "MIT"
 # edition2024 で Cargo 1.85 以降が必要、ruzstd のソース自体も #[expect] 等
 # 1.81 以降の機能を使う)。唯一のピンは Cargo.lock 側の generator ≤ 0.8.11
 # (0.8.12 が rust-version 1.95 を宣言するため)。各クレートは
-# rust-version.workspace = true で継承する。
-rust-version = "1.87"
+# rust-version.workspace = true で継承する。2026-11-21 に こた の決定 (Rust 1.100 の
+# 新機能を「全部やって」) で 1.100 へ: never 型 `!` (1.100 で安定) を型引数に使う
+# (shirusu-trace の TypedValue)。
+rust-version = "1.100"
 
 [workspace.lints.rust]
 # Kani の証明ハーネスは #[cfg(kani)] に置く (cargo kani だけが有効にする)。
@@ -45,6 +47,8 @@ rust-version = "1.87"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(shirusu_loom)"] }
 # Review: every unsafe operation is spelled out and justified.
 unsafe_op_in_unsafe_fn = "deny"
+# Rust 1.99: `&x as *const T` は参照を経由する (その別名規則がかかる)。`&raw const x` / `&raw mut x` で書く。
+raw_borrows_via_references = "deny"
 
 [workspace.lints.clippy]
 not_unsafe_ptr_arg_deref = "deny"

@@ -25,7 +25,7 @@ fn fixture(r: Rule) -> Fixture {
             bad: &[("Cargo.toml", "[workspace.lints.rust]\nunsafe_op_in_unsafe_fn = \"warn\"\n")],
             good: &[(
                 "Cargo.toml",
-                "[workspace.lints.rust]\nunsafe_op_in_unsafe_fn = \"deny\"\n[workspace.lints.clippy]\nnot_unsafe_ptr_arg_deref = \"deny\"\nmissing_safety_doc = \"deny\"\nundocumented_unsafe_blocks = \"deny\"\n",
+                "[workspace.lints.rust]\nunsafe_op_in_unsafe_fn = \"deny\"\nraw_borrows_via_references = \"deny\"\n[workspace.lints.clippy]\nnot_unsafe_ptr_arg_deref = \"deny\"\nmissing_safety_doc = \"deny\"\nundocumented_unsafe_blocks = \"deny\"\n",
             )],
             mutate: ("Cargo.toml", |t| Some(t.replace("undocumented_unsafe_blocks = \"deny\"", "undocumented_unsafe_blocks = \"warn\""))),
         },
@@ -176,6 +176,39 @@ fn fixture(r: Rule) -> Fixture {
                 ("crates/shirusu-x/tests/it.rs", "#[test] fn equal_values() {}\n#[test] #[ignore] fn equal_slow() {}\nfn equal_helper() {}"),
             ],
             mutate: ("crates/shirusu-test/tests/rules.rs", |s| Some(s.replace("fn uncaptured_fields_control_integrity", "fn uncaptured_values_control_integrity"))),
+        },
+        Rule::WildcardUnreachable => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/lib.rs", "fn f(m: usize) -> u8 {\n    match m {\n        0 => 1,\n        _ => unreachable!(),\n    }\n}\nfn g(m: u8) -> u8 {\n    match m {\n        0 => 1,\n        _ => { core::unreachable!(\"m < 1\") }\n    }\n}\n"),
+                ("e2e/src/bin/x.rs", "fn main() { match 1 { 1 => {}, _ => std::unreachable!() } }\n"),
+            ],
+            good: &[("crates/shirusu-x/src/lib.rs", "// _ => unreachable!() とは書かない\nenum M { A, B }\nfn f(m: M) -> u8 {\n    match m {\n        M::A => 1,\n        M::B => 2,\n    }\n}\nfn g(m: u8) -> u8 {\n    match m {\n        0 => 1,\n        _ => 2,\n    }\n}\nfn h(v: Result<u8, !>) -> u8 {\n    let Ok(x) = v;\n    x\n}\n")],
+            mutate: ("crates/shirusu-hook/src/shared_com.rs", |t| Some(t.replace("Unknown::Release => WRAPPERS[index].2 as usize,", "Unknown::Release => WRAPPERS[index].2 as usize,\n        #[allow(unreachable_patterns)]\n        _ => unreachable!(),"))),
+        },
+        Rule::BinDeadPub => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/main.rs", "fn main() {}\n"),
+                ("crates/shirusu-y/src/bin/y.rs", "#![cfg_attr(not(test), allow(dead_code_pub_in_binary))]\nfn main() {}\n"),
+                ("e2e/src/bin/z.rs", "//! z\n#![allow(clippy::all)]\nfn main() {}\n"),
+            ],
+            good: &[
+                ("crates/shirusu-x/src/main.rs", "//! x\n#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]\nfn main() {}\n"),
+                ("e2e/src/bin/z.rs", "#![deny(dead_code_pub_in_binary)]\nfn main() {}\n"),
+                ("crates/shirusu-x/src/lib.rs", "pub fn f() {}\n"),
+                ("crates/shirusu-x/src/bin/common/mod.rs", "pub fn f() {}\n"),
+            ],
+            mutate: ("crates/shirusu-cli/src/main.rs", |t| Some(t.replace("#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]\n", ""))),
+        },
+        Rule::HandStd => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/lib.rs", "fn a(s: &mut S) { s.on = !s.on; }\nfn b(n: &str) -> &str { n.strip_prefix(\"x\").unwrap_or(n) }\nfn c(o: Option<u8>) -> u8 { o.map(|v| v + 1).unwrap_or_default() }\nfn d(o: Option<&str>) -> String { o.map_or(String::new(), str::to_owned) }\n"),
+                ("crates/shirusu-y/src/lib.rs", "fn e(ok: bool) -> Result<(), E> { if ok { Ok(()) } else { Err(E::Bad) } }\nfn f(v: &[u8]) -> Vec<u32> { (0..v.len()).map(|i| u32::from(v[i])).collect::<Vec<u32>>() }\nstruct Clear<'a>(&'a AtomicBool);\nimpl Drop for Clear<'_> {\n    fn drop(&mut self) {\n        self.0.store(false, Ordering::Release);\n    }\n}\n"),
+            ],
+            good: &[(
+                "crates/shirusu-x/src/lib.rs",
+                "fn a(s: &mut S) { s.on.toggle(); s.a = !s.b; }\nfn b(n: &str, d: &str) -> &str { n.strip_prefix(\"x\").unwrap_or(d) }\nfn c(o: Option<u8>) -> u8 { o.map_or_default(|v| v + 1) }\nfn e(ok: bool) -> Result<u8, E> { if ok { Ok(1) } else { Err(E::Bad) } }\nfn f(n: u32) -> Vec<u32> { (0..n).map(|i| i * 2).collect::<Vec<u32>>() }\nstruct Stop(Arc<AtomicBool>);\nimpl Drop for Stop {\n    fn drop(&mut self) {\n        self.0.store(true, Ordering::Relaxed);\n        wake();\n    }\n}\n",
+            )],
+            mutate: ("crates/shirusu-agent/src/writer_cell.rs", |t| Some(t + "\nstruct ClearOnDrop<'a>(&'a AtomicBool);\nimpl Drop for ClearOnDrop<'_> {\n    fn drop(&mut self) {\n        self.0.store(false, Ordering::Release);\n    }\n}\n")),
         },
         Rule::Required => Fixture {
             bad: &[("scripts/ci/linux.sh", "cargo build\n")],

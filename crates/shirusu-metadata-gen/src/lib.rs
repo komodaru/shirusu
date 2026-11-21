@@ -149,8 +149,7 @@ pub fn emit_api_inventory(index: &TypeIndex, config: &Config) -> String {
         for method in def.methods() {
             let module = method
                 .impl_map()
-                .map(|m| m.import_scope().name().to_string())
-                .unwrap_or_default();
+                .map_or_default(|m| m.import_scope().name().to_string());
             let function = method.name().to_string();
             let selected = config.apis.iter().find(|a| {
                 a.namespace == namespace

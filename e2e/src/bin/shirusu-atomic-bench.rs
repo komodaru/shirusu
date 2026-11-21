@@ -23,6 +23,8 @@
 //!   cargo run -p shirusu-e2e --release --bin shirusu-atomic-bench [-- --ops 10000000 --rounds 3]
 //!   (i686) cargo run -p shirusu-e2e --release --target i686-pc-windows-msvc --bin shirusu-atomic-bench
 //! CI では windows.ps1 (x64) と windows-x86.ps1 (i686, WoW64) が実行する。
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use std::hint::black_box;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};

@@ -673,14 +673,10 @@ impl CaptureSession {
     }
 
     fn ensure_state(&self, want: SessionState, op: &'static str) -> Result<(), SessionError> {
-        if self.state == want {
-            Ok(())
-        } else {
-            Err(SessionError::InvalidTransition {
-                from: self.state.name(),
-                op,
-            })
-        }
+        (self.state == want).ok_or_else(|| SessionError::InvalidTransition {
+            from: self.state.name(),
+            op,
+        })
     }
 
     /// Host 所有の共有領域を Ring として登録する（同一プロセス用）。

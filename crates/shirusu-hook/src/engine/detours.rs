@@ -197,55 +197,60 @@ pub(super) type GenericFn12 = unsafe extern "system-unwind" fn(
     usize,
 ) -> usize;
 
+/// 元の関数を引数の数ごとの関数型で呼ぶもの。`[usize; N]` には N が 0 から
+/// [`crate::api::GENERIC_MAX_ARITY`] までのものだけ実装があり、それより多い引数は
+/// 呼べない (コンパイルエラー; 以前は `match N` の `_ => unreachable!()` だった)。
+pub(super) trait CallOriginal {
+    /// # Safety
+    /// `original` はこの引数個数の `extern "system-unwind" fn` であること。
+    unsafe fn call(&self, original: usize) -> usize;
+}
+
+macro_rules! call_original_impls {
+    ($($n:literal => $f:ident($($i:literal),*);)*) => {
+        $(
+            impl CallOriginal for [usize; $n] {
+                unsafe fn call(&self, original: usize) -> usize {
+                    // SAFETY: 呼び出し側が original をこの個数の関数型だと保証する
+                    // (trait の # Safety)。添字は配列の長さ未満。
+                    unsafe { std::mem::transmute::<usize, $f>(original)($(self[$i]),*) }
+                }
+            }
+        )*
+    };
+}
+
+call_original_impls! {
+    0 => GenericFn0();
+    1 => GenericFn1(0);
+    2 => GenericFn2(0, 1);
+    3 => GenericFn3(0, 1, 2);
+    4 => GenericFn4(0, 1, 2, 3);
+    5 => GenericFn5(0, 1, 2, 3, 4);
+    6 => GenericFn6(0, 1, 2, 3, 4, 5);
+    7 => GenericFn7(0, 1, 2, 3, 4, 5, 6);
+    8 => GenericFn8(0, 1, 2, 3, 4, 5, 6, 7);
+    9 => GenericFn9(0, 1, 2, 3, 4, 5, 6, 7, 8);
+    10 => GenericFn10(0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+    11 => GenericFn11(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    12 => GenericFn12(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+}
+
+// (GENERIC_MAX_ARITY を上げたら上の表も伸ばす: 伸ばさなければここで止まる)
+const _: () = assert!(crate::api::GENERIC_MAX_ARITY == 12);
+
 /// 元の関数を引数個数 `N` で呼ぶ。`original` は設置時に保存した本物の
 /// 関数ポインタであり、N は生成表の引数個数と一致する。
 ///
 /// # Safety
 /// 呼び出し側は `original` がこの `N` の `extern "system-unwind" fn` である
 /// ことを保証すること（生成表とトランポリンが保証する）。
-pub(super) unsafe fn call_original<const N: usize>(original: usize, args: &[usize; N]) -> usize {
-    const { assert!(N <= crate::api::GENERIC_MAX_ARITY) };
-    // SAFETY: 各分岐は N に対応する引数個数の関数型へ transmute し、
-    // その個数で呼ぶ。N > 12 は上の const 検査でコンパイル時に拒む。
-    unsafe {
-        match N {
-            0 => std::mem::transmute::<usize, GenericFn0>(original)(),
-            1 => std::mem::transmute::<usize, GenericFn1>(original)(args[0]),
-            2 => std::mem::transmute::<usize, GenericFn2>(original)(args[0], args[1]),
-            3 => std::mem::transmute::<usize, GenericFn3>(original)(args[0], args[1], args[2]),
-            4 => std::mem::transmute::<usize, GenericFn4>(original)(
-                args[0], args[1], args[2], args[3],
-            ),
-            5 => std::mem::transmute::<usize, GenericFn5>(original)(
-                args[0], args[1], args[2], args[3], args[4],
-            ),
-            6 => std::mem::transmute::<usize, GenericFn6>(original)(
-                args[0], args[1], args[2], args[3], args[4], args[5],
-            ),
-            7 => std::mem::transmute::<usize, GenericFn7>(original)(
-                args[0], args[1], args[2], args[3], args[4], args[5], args[6],
-            ),
-            8 => std::mem::transmute::<usize, GenericFn8>(original)(
-                args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
-            ),
-            9 => std::mem::transmute::<usize, GenericFn9>(original)(
-                args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
-            ),
-            10 => std::mem::transmute::<usize, GenericFn10>(original)(
-                args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
-                args[9],
-            ),
-            11 => std::mem::transmute::<usize, GenericFn11>(original)(
-                args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
-                args[9], args[10],
-            ),
-            12 => std::mem::transmute::<usize, GenericFn12>(original)(
-                args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
-                args[9], args[10], args[11],
-            ),
-            _ => unreachable!("arity {N} is rejected at compile time"),
-        }
-    }
+pub(super) unsafe fn call_original<const N: usize>(original: usize, args: &[usize; N]) -> usize
+where
+    [usize; N]: CallOriginal,
+{
+    // SAFETY: 呼び出し側の保証 (この関数の # Safety) をそのまま渡す。
+    unsafe { args.call(original) }
 }
 
 /// 生成 API の Detour 本体。手書き Detour と同じ手順

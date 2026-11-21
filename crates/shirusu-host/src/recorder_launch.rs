@@ -758,7 +758,7 @@ fn read_bootstrap_result(
     // SAFETY: AgentBootstrap は repr(C) の値型。バイト列として読み込む。
     let bytes = unsafe {
         std::slice::from_raw_parts_mut(
-            &mut buf as *mut AgentBootstrap as *mut u8,
+            (&raw mut buf).cast::<u8>(),
             std::mem::size_of::<AgentBootstrap>(),
         )
     };
@@ -837,7 +837,7 @@ fn read_catalog_report(
     // SAFETY: AgentBootstrap は repr(C) の値型。バイト列として読み込む。
     let bytes = unsafe {
         std::slice::from_raw_parts_mut(
-            &mut buf as *mut AgentBootstrap as *mut u8,
+            (&raw mut buf).cast::<u8>(),
             std::mem::size_of::<AgentBootstrap>(),
         )
     };
@@ -1071,8 +1071,7 @@ fn inject_and_init(
     let selected_ids = crate::capture_policy::selected_api_ids(&cfg.session.record_mode);
     let policy_bytes = selected_ids
         .as_deref()
-        .map(crate::capture_policy::encode_ids)
-        .unwrap_or_default();
+        .map_or_default(crate::capture_policy::encode_ids);
     if let Some(ids) = &selected_ids {
         bootstrap.capture_policy = shirusu_hook::bootstrap::CAPTURE_POLICY_SELECTED;
         bootstrap.capture_api_count = u32::try_from(ids.len())
@@ -1121,7 +1120,7 @@ fn inject_and_init(
         // SAFETY: AgentBootstrap は repr(C) の値型。バイト列として書き込む。
         let bytes = unsafe {
             std::slice::from_raw_parts(
-                &bootstrap as *const AgentBootstrap as *const u8,
+                (&raw const bootstrap).cast::<u8>(),
                 std::mem::size_of::<AgentBootstrap>(),
             )
         };
@@ -1225,13 +1224,9 @@ fn inject_and_init(
                         .as_ref()
                         .map(|ids| ids.len())
                         .unwrap_or_else(|| shirusu_hook::api::api_table().count());
-                    if *captured_api_count == expected {
-                        Ok(())
-                    } else {
-                        Err(format!(
+                    (*captured_api_count == expected).ok_or_else(|| format!(
                             "agent applied a capture policy of {captured_api_count} API(s), expected {expected}"
                         ))
-                    }
                 })
         }
         // 読み戻せなければ Agent の Fingerprint も記録範囲も確かめられない。
@@ -1244,10 +1239,8 @@ fn inject_and_init(
             rollback: rollback_initialized_agent(process, shutdown_addr),
         });
     }
-    session_cfg.environment.hook_evidence = outcome
-        .as_ref()
-        .map(|r| r.hook_evidence.clone())
-        .unwrap_or_default();
+    session_cfg.environment.hook_evidence =
+        outcome.as_ref().map_or_default(|r| r.hook_evidence.clone());
     if let crate::trace_convert::RecordMode::Filtered { apis } = &cfg.session.record_mode {
         session_cfg
             .environment

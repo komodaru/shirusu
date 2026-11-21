@@ -5,6 +5,8 @@
 //!   shirusu-e2e-supervisor --production-path (Windows, D77) 本番経路: 実 Agent → Event 待機 → 検証付き Host → Slot 再利用
 //!   shirusu-e2e-supervisor --memory-order-stress (Windows, A77) プロセス間メモリ順序ストレス: 実 Agent が別プロセスから 100 万件を順に書き、検証付き Host が順序・内容・欠落会計を検証する
 //!   shirusu-e2e-supervisor --list
+// Rust 1.97: バイナリの中で誰も使わない pub 項目は死んだコード (テストは多くを使うので test では見ない)
+#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]
 
 use shirusu_e2e::{run_all_in_process, ScenarioReport};
 use std::io::Read as _;

@@ -43,7 +43,7 @@ use shirusu_trace::module::{
 };
 use shirusu_trace::proto::{CaptureEnvironment, SessionMetadata};
 use shirusu_trace::reader::{ReadTrace, RecoveryIssue};
-use shirusu_trace::{EventBatch, FinalizationInfo, PayloadRef, TraceEvent, TraceWriter};
+use shirusu_trace::{EventBatch, FinalizationInfo, TraceEvent, TraceWriter};
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

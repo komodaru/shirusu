@@ -229,9 +229,80 @@ pub fn last_error_value(meaning: LastErrorMeaning, return_value: u64, raw: u32) 
     }
 }
 
+/// ReadFile / WriteFile の 1 回の結果の種類。どの出力が有効かはこれで決まる (7c5a553 レビュー
+/// P1-3: 戻り値が 0 ならエラーの種類を見ずに出力を空として記録し、メッセージモードの
+/// パイプで FALSE / ERROR_MORE_DATA と一緒に書かれた部分データを落とした)。
+/// 出力を取る関数はこの型を受け取るので、成否の真偽値だけでは呼べない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoOutcome {
+    /// TRUE: 出力はすべて有効
+    Completed,
+    /// FALSE + ERROR_MORE_DATA: 読めた部分 (バイト数とその内容) は有効で、残りは次の呼び出しで読める
+    MoreData,
+    /// FALSE + ERROR_IO_PENDING: まだ完了していない。出力は完了の観測で取る (F27)
+    Pending,
+    /// それ以外の FALSE: 有効な出力を伴わない失敗
+    Failed,
+}
+
+impl IoOutcome {
+    /// leave 時点の結果 (戻り値と、元の API の直後に読んだ LastError)
+    pub fn classify(ret: i32, last_error: u32) -> Self {
+        match (ret, last_error) {
+            (0, ERROR_MORE_DATA) => Self::MoreData,
+            (0, ERROR_IO_PENDING) => Self::Pending,
+            (0, _) => Self::Failed,
+            _ => Self::Completed,
+        }
+    }
+
+    /// 完了の観測 (GetOverlappedResult / GetQueuedCompletionStatus) での結果。完了は保留に
+    /// ならないので Pending は返さない (ERROR_IO_PENDING で終わった完了は失敗として扱う)
+    pub fn of_completion(success: bool, last_error: u32) -> Self {
+        match (success, last_error) {
+            (true, _) => Self::Completed,
+            (false, ERROR_MORE_DATA) => Self::MoreData,
+            (false, _) => Self::Failed,
+        }
+    }
+
+    /// 転送したバイト数とバッファの内容が有効か
+    pub fn has_output(self) -> bool {
+        match self {
+            Self::Completed | Self::MoreData => true,
+            Self::Pending | Self::Failed => false,
+        }
+    }
+
+    /// 戻り値の生値 (Schema の return フィールド)
+    pub fn ret(self) -> i32 {
+        match self {
+            Self::Completed => 1,
+            Self::MoreData | Self::Pending | Self::Failed => 0,
+        }
+    }
+}
+
+/// この結果では値が定義されない出力 (Schema の OutputCondition が偽になる結果)
+fn not_applicable(value: TypedValue) -> CapturedValue {
+    cap(value, ValueCapture::NotApplicable)
+}
+
 // The finite capture operations below are selected by the semantic contract.
 // Keep raw memory access behind MemoryReader and existing bounded readers.
-fn read_io_count(mem: &dyn MemoryReader, address: u64, asynchronous: bool) -> CapturedValue {
+/// 転送バイト数 (lpNumberOfBytesRead / Written)。保留中は定義されない
+/// (OutputCondition::WhenNotPending)。OVERLAPPED 指定のその他の結果は、leave の時点の
+/// 引数からは読めない (完了の観測が運ぶ)
+fn read_io_count(
+    mem: &dyn MemoryReader,
+    address: u64,
+    outcome: IoOutcome,
+    asynchronous: bool,
+) -> CapturedValue {
+    match outcome {
+        IoOutcome::Pending => return not_applicable(TypedValue::U32(0)),
+        IoOutcome::Completed | IoOutcome::MoreData | IoOutcome::Failed => {}
+    }
     if asynchronous || address == 0 {
         return unsupported_u32();
     }
@@ -240,14 +311,19 @@ fn read_io_count(mem: &dyn MemoryReader, address: u64, asynchronous: bool) -> Ca
         .unwrap_or_else(unsupported_u32)
 }
 
+/// 読んだ内容。成功と部分結果 (ERROR_MORE_DATA) ではバイト数の分だけ読み、保留と失敗では
+/// 定義されない (OutputCondition::WhenReturnIsTrueOrMoreData)
 fn read_io_output(
     mem: &dyn MemoryReader,
-    success: i32,
+    outcome: IoOutcome,
     buffer: u64,
     capacity: u32,
     count: &CapturedValue,
     asynchronous: bool,
 ) -> CapturedValue {
+    if !outcome.has_output() {
+        return not_applicable(TypedValue::Bytes(Vec::new()));
+    }
     if asynchronous {
         return unsupported_bytes();
     }
@@ -258,9 +334,6 @@ fn read_io_output(
     else {
         return unsupported_bytes();
     };
-    if success == 0 {
-        return CapturedValue::captured(TypedValue::Bytes(Vec::new()));
-    }
     read_output_buffer(mem, buffer, capacity, *count)
 }
 
@@ -339,7 +412,11 @@ pub fn get_queued_completion_status_enter(
 
 /// GetQueuedCompletionStatus distinguishes a failed I/O packet from no packet.
 #[derive(Debug, Copy, Clone)]
-pub struct QueuedCompletion(CompletionPacket);
+pub struct QueuedCompletion {
+    packet: CompletionPacket,
+    /// 取り出した OVERLAPPED (*lpOverlapped)。leave の dequeuedOverlapped に記録する
+    dequeued: u64,
+}
 
 #[derive(Debug, Copy, Clone)]
 enum CompletionPacket {
@@ -355,7 +432,7 @@ enum CompletionPacket {
 
 impl QueuedCompletion {
     pub fn observe(result: i32, overlapped: u64, read: impl FnOnce() -> Option<u32>) -> Self {
-        Self(if result != 0 {
+        let packet = if result != 0 {
             CompletionPacket::Success {
                 result,
                 transferred: read(),
@@ -366,11 +443,15 @@ impl QueuedCompletion {
             }
         } else {
             CompletionPacket::NoPacket
-        })
+        };
+        Self {
+            packet,
+            dequeued: overlapped,
+        }
     }
 
     pub fn transferred(self) -> Option<u32> {
-        match self.0 {
+        match self.packet {
             CompletionPacket::Success { transferred, .. }
             | CompletionPacket::FailedIo { transferred } => transferred,
             CompletionPacket::NoPacket => None,
@@ -378,11 +459,11 @@ impl QueuedCompletion {
     }
 
     pub fn leave_values(self, last_error: u32) -> Vec<CapturedValue> {
-        let result = match self.0 {
+        let result = match self.packet {
             CompletionPacket::Success { result, .. } => result,
             CompletionPacket::FailedIo { .. } | CompletionPacket::NoPacket => 0,
         };
-        let bytes = match self.0 {
+        let bytes = match self.packet {
             CompletionPacket::NoPacket => cap(TypedValue::U32(0), ValueCapture::NotApplicable),
             CompletionPacket::Success { .. } | CompletionPacket::FailedIo { .. } => self
                 .transferred()
@@ -391,6 +472,7 @@ impl QueuedCompletion {
         vec![
             i32v(result),
             bytes,
+            u64v(self.dequeued),
             last_error_value(
                 LastErrorMeaning::WhenReturnIsFalse,
                 result as u64,
@@ -403,7 +485,7 @@ impl QueuedCompletion {
 /// Win32 の非同期 I/O 完了関連のエラー値（F27）。
 /// `ERROR_IO_PENDING` (997): 操作は開始したがまだ完了していない。
 /// `ERROR_IO_INCOMPLETE` (996): GetOverlappedResult で未完了。
-pub const ERROR_IO_PENDING: u32 = 997;
+pub use shirusu_trace::schema::{ERROR_IO_PENDING, ERROR_MORE_DATA};
 pub const ERROR_IO_INCOMPLETE: u32 = 996;
 
 /// 対象プロセスのポインタ幅。x86 と x64 だけ (他の幅は書けない)。
@@ -724,62 +806,47 @@ fn read_output_buffer(
 
 /// 完了時の ReadFile leave 値列（F27）。leave Schema と同じフィールド順
 /// （return / lpNumberOfBytesRead / data / last_error）で、完了時点の
-/// 転送バイト数とバッファ内容を取る。失敗時は同期 leave と同じく
-/// バイト数は Unsupported、データは空として記録する。
+/// 転送バイト数とバッファ内容を取る。成功と部分結果 (ERROR_MORE_DATA) では
+/// 転送した分の内容が有効。失敗ではバイト数は Unsupported (完了の観測からは
+/// 読めない)、データは定義されない (NotApplicable)。
 pub fn complete_read_file_leave(
     mem: &dyn MemoryReader,
     buffer: u64,
     requested_len: u32,
-    transferred: u32,
-    success: bool,
+    transferred: Option<u32>,
+    outcome: IoOutcome,
     last_error: u32,
 ) -> Vec<CapturedValue> {
-    let success_i32 = if success { 1 } else { 0 };
-    if success {
-        vec![
-            i32v(success_i32),
-            u32v(transferred),
-            read_output_buffer(mem, buffer, requested_len, transferred),
-            last_error_value(
-                LastErrorMeaning::WhenReturnIsFalse,
-                success_i32 as u64,
-                last_error,
-            ),
-        ]
-    } else {
-        vec![
-            i32v(success_i32),
-            unsupported_u32(),
-            CapturedValue::captured(TypedValue::Bytes(Vec::new())),
-            last_error_value(
-                LastErrorMeaning::WhenReturnIsFalse,
-                success_i32 as u64,
-                last_error,
-            ),
-        ]
-    }
+    let ret = outcome.ret();
+    let (count, data) = match (outcome.has_output(), transferred) {
+        (true, Some(n)) => (u32v(n), read_output_buffer(mem, buffer, requested_len, n)),
+        // 転送バイト数が読めなければ、どこまでが有効な内容かも分からない
+        (true, None) => (unsupported_u32(), unsupported_bytes()),
+        (false, _) => (unsupported_u32(), not_applicable(TypedValue::Bytes(Vec::new()))),
+    };
+    vec![
+        i32v(ret),
+        count,
+        data,
+        last_error_value(LastErrorMeaning::WhenReturnIsFalse, ret as u64, last_error),
+    ]
 }
 
 /// 完了時の WriteFile leave 値列（F27）。leave Schema と同じフィールド順
 /// （return / lpNumberOfBytesWritten / last_error）。
 pub fn complete_write_file_leave(
-    transferred: u32,
-    success: bool,
+    transferred: Option<u32>,
+    outcome: IoOutcome,
     last_error: u32,
 ) -> Vec<CapturedValue> {
-    let success_i32 = if success { 1 } else { 0 };
+    let ret = outcome.ret();
     vec![
-        i32v(success_i32),
-        if success {
-            u32v(transferred)
-        } else {
-            unsupported_u32()
+        i32v(ret),
+        match (outcome.has_output(), transferred) {
+            (true, Some(n)) => u32v(n),
+            (true, None) | (false, _) => unsupported_u32(),
         },
-        last_error_value(
-            LastErrorMeaning::WhenReturnIsFalse,
-            success_i32 as u64,
-            last_error,
-        ),
+        last_error_value(LastErrorMeaning::WhenReturnIsFalse, ret as u64, last_error),
     ]
 }
 
@@ -1016,27 +1083,12 @@ fn generic_last_error_meaning(
     {
         return api.last_error_meaning;
     }
-    if api.function == "CreateFileA" {
-        return match args.get(4).copied().and_then(|v| u32::try_from(v).ok()) {
-            Some(2 | 4) => LastErrorMeaning::Always,
-            Some(_) => LastErrorMeaning::WhenReturnIsInvalidHandle,
-            None => LastErrorMeaning::DependsOnInputs,
-        };
-    }
-    let name_index = match api.function {
-        "CreateMutexW" => 2,
-        "CreateMutexExW" | "CreateEventExW" => 1,
-        "CreateEventW" | "CreateSemaphoreW" => 3,
-        _ => return LastErrorMeaning::DependsOnInputs,
+    // 規則は検査側と共有する (conformance の last-error-inputs が同じ関数で照らす)
+    let input = |name: &str| {
+        let i = api.enter_fields.iter().position(|(n, ..)| *n == name)?;
+        args.get(i).copied()
     };
-    if returned == 0 {
-        return LastErrorMeaning::Always;
-    }
-    match args.get(name_index) {
-        Some(0) => LastErrorMeaning::Never,
-        Some(_) if raw_error == 183 => LastErrorMeaning::Always,
-        _ => LastErrorMeaning::DependsOnInputs,
-    }
+    LastErrorMeaning::resolve_inputs(api.function, &input, returned, raw_error)
 }
 
 /// 生の u64 値を Schema の型に沿った `CapturedValue` へ変換する。
@@ -1603,7 +1655,7 @@ mod tests {
             let mem = CountOnly(transferred);
             let sync = read_file_leave(&mem, 1, 0x4000, requested, 0x5000, false, 0);
             let completion =
-                complete_read_file_leave(&mem, 0x4000, requested, transferred, true, 0);
+                complete_read_file_leave(&mem, 0x4000, requested, Some(transferred), IoOutcome::Completed, 0);
             for values in [sync, completion] {
                 assert_eq!(
                     values[1],
@@ -1621,7 +1673,7 @@ mod tests {
         mem.write(0x4000, b"data-neighbor");
         mem.write_u32(0x5000, 4);
         let sync = read_file_leave(&mem, 1, 0x4000, 4, 0x5000, false, 0);
-        let completion = complete_read_file_leave(&mem, 0x4000, 4, 4, true, 0);
+        let completion = complete_read_file_leave(&mem, 0x4000, 4, Some(4), IoOutcome::Completed, 0);
         assert_eq!(sync, completion);
         assert_eq!(
             sync[2],
@@ -1661,17 +1713,21 @@ mod tests {
         let bytes = encode_leave(api, &values).expect("encode");
         let types = schema_types(&api.leave_schema()).unwrap();
         assert_eq!(decode_values(&types, &bytes).unwrap(), values);
-        // 失敗時はデータ空、last_error が残る
+        // 有効な出力のない失敗ではデータは定義されない (空の取得済みデータとは書かない)
         let failed = read_file_leave(&m, 0, 0x4000, 32, 0x5000, false, 5);
-        assert_eq!(
-            failed[2],
-            CapturedValue::captured(TypedValue::Bytes(Vec::new()))
-        );
+        assert_eq!(failed[2].capture, ValueCapture::NotApplicable);
         assert_eq!(failed[3], u32v(5));
-        // OVERLAPPED は Unsupported
+        // 部分読み取り (FALSE + ERROR_MORE_DATA): 読めた分の内容は有効 (7c5a553 レビュー P1-3)
+        let more = read_file_leave(&m, 0, 0x4000, 32, 0x5000, false, ERROR_MORE_DATA);
+        assert_eq!(more[1], u32v(14));
+        assert_eq!(
+            more[2],
+            CapturedValue::captured(TypedValue::Bytes(b"save-data-1234".to_vec()))
+        );
+        // OVERLAPPED の保留は、完了まで出力が定義されない
         let ov = read_file_leave(&m, 0, 0x4000, 32, 0x5000, true, 997);
-        assert_eq!(ov[1].capture, ValueCapture::Unsupported);
-        assert_eq!(ov[2].capture, ValueCapture::Unsupported);
+        assert_eq!(ov[1].capture, ValueCapture::NotApplicable);
+        assert_eq!(ov[2].capture, ValueCapture::NotApplicable);
         assert_eq!(ov[3], u32v(997));
     }
 
@@ -1830,7 +1886,7 @@ mod tests {
         let api = api_by_id(API_READ_FILE).unwrap();
         let mut m = MapMemory::new();
         m.write(0x4000, b"async-data-99");
-        let values = complete_read_file_leave(&m, 0x4000, 32, 13, true, 0);
+        let values = complete_read_file_leave(&m, 0x4000, 32, Some(13), IoOutcome::Completed, 0);
         assert_eq!(values[0], i32v(1));
         assert_eq!(values[1], u32v(13));
         assert_eq!(
@@ -1842,22 +1898,25 @@ mod tests {
         let bytes = encode_leave(api, &values).expect("encode");
         let types = schema_types(&api.leave_schema()).unwrap();
         assert_eq!(decode_values(&types, &bytes).unwrap(), values);
-        // 失敗時はバイト数 Unsupported・データ空・last_error は意味あり
-        let failed = complete_read_file_leave(&m, 0x4000, 32, 0, false, 5);
+        // 失敗時はバイト数 Unsupported・データは定義されない・last_error は意味あり
+        let failed = complete_read_file_leave(&m, 0x4000, 32, Some(0), IoOutcome::of_completion(false, 5), 5);
         assert_eq!(failed[0], i32v(0));
         assert_eq!(failed[1].capture, ValueCapture::Unsupported);
-        assert_eq!(
-            failed[2],
-            CapturedValue::captured(TypedValue::Bytes(Vec::new()))
-        );
+        assert_eq!(failed[2].capture, ValueCapture::NotApplicable);
         assert_eq!(failed[3], u32v(5));
+        // 完了が ERROR_MORE_DATA で終わっても、転送した分の内容は有効
+        let more = complete_read_file_leave(&m, 0x4000, 32, Some(13), IoOutcome::of_completion(false, ERROR_MORE_DATA), ERROR_MORE_DATA);
+        assert_eq!(more[0], i32v(0));
+        assert_eq!(more[1], u32v(13));
+        assert_eq!(more[2].capture, ValueCapture::Captured);
+        assert_eq!(more[3], u32v(ERROR_MORE_DATA));
     }
 
     #[test]
     fn complete_write_file_leave_captures_transferred_count() {
         // F27: 完了時の WriteFile leave 値列。
         let api = api_by_id(API_WRITE_FILE).unwrap();
-        let values = complete_write_file_leave(7, true, 0);
+        let values = complete_write_file_leave(Some(7), IoOutcome::Completed, 0);
         assert_eq!(
             values,
             vec![i32v(1), u32v(7), {
@@ -1869,7 +1928,7 @@ mod tests {
         let bytes = encode_leave(api, &values).expect("encode");
         let types = schema_types(&api.leave_schema()).unwrap();
         assert_eq!(decode_values(&types, &bytes).unwrap(), values);
-        let failed = complete_write_file_leave(0, false, 5);
+        let failed = complete_write_file_leave(Some(0), IoOutcome::of_completion(false, 5), 5);
         assert_eq!(failed[1].capture, ValueCapture::Unsupported);
         assert_eq!(failed[2], u32v(5));
     }

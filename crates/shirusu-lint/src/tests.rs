@@ -185,6 +185,25 @@ fn fixture(r: Rule) -> Fixture {
             good: &[("crates/shirusu-x/src/lib.rs", "// _ => unreachable!() とは書かない\nenum M { A, B }\nfn f(m: M) -> u8 {\n    match m {\n        M::A => 1,\n        M::B => 2,\n    }\n}\nfn g(m: u8) -> u8 {\n    match m {\n        0 => 1,\n        _ => 2,\n    }\n}\nfn h(v: Result<u8, !>) -> u8 {\n    let Ok(x) = v;\n    x\n}\n")],
             mutate: ("crates/shirusu-hook/src/shared_com.rs", |t| Some(t.replace("Unknown::Release => WRAPPERS[index].2 as usize,", "Unknown::Release => WRAPPERS[index].2 as usize,\n        #[allow(unreachable_patterns)]\n        _ => unreachable!(),"))),
         },
+        Rule::BlobRefWalk => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/lib.rs", "fn present(e: &TraceEvent, has: &dyn Fn(&BlobId) -> bool) -> bool {\n    if let PayloadRef::Blob(id) = &e.payload {\n        return has(id);\n    }\n    true\n}\nfn arg(v: &TypedValue) -> Option<BlobId> {\n    let TypedValue::BlobRef(id) = v else {\n        return None;\n    };\n    Some(*id)\n}\n"),
+                ("crates/shirusu-y/src/lib.rs", "fn any(e: &TraceEvent) -> bool { matches!(e.payload, shirusu_trace::PayloadRef::Blob(_)) }\nfn pick(e: &TraceEvent) -> Option<BlobId> {\n    match &e.payload {\n        PayloadRef::Blob(id) => Some(*id),\n        _ => None,\n    }\n}\n"),
+            ],
+            good: &[
+                ("crates/shirusu-x/src/lib.rs", "// if let PayloadRef::Blob(id) = &e.payload とは書かない\nfn present(e: &TraceEvent, r: &SchemaRegistry, has: impl Fn(&BlobId) -> bool) -> Option<bool> {\n    e.blob_refs(r).all_present(has)\n}\nfn show(p: &PayloadRef) -> String {\n    match p {\n        PayloadRef::None => String::new(),\n        PayloadRef::Blob(id) => id.to_hex(),\n        PayloadRef::Inline(b) => format!(\"{b:?}\"),\n        PayloadRef::Dropped { .. } => \"dropped\".into(),\n    }\n}\n#[cfg(test)]\nmod tests {\n    fn t(e: &TraceEvent) -> bool { matches!(e.payload, PayloadRef::Blob(_)) }\n}\n"),
+                (results::BLOB_REFS_HOME, "fn walk(e: &TraceEvent) { if let PayloadRef::Blob(id) = &e.payload { use_it(id); } }\n"),
+            ],
+            mutate: ("crates/shirusu-cli/src/repair.rs", |t| Some(t + "\nfn _lint_regression(e: &TraceEvent) -> bool {\n    if let PayloadRef::Blob(_) = e.payload {\n        return true;\n    }\n    false\n}\n")),
+        },
+        Rule::CompareVerdict => Fixture {
+            bad: &[("crates/shirusu-x/src/bin/x.rs", "fn main() {\n    let report = compare_traces(&a, &b);\n    if report.candidates.is_empty() {\n        println!(\"identical\");\n    }\n}\n")],
+            good: &[
+                ("crates/shirusu-x/src/bin/x.rs", "// report.candidates.is_empty() で一致としない\nfn main() {\n    let report = compare_traces(&a, &b);\n    if report.verdict().is_identical() {\n        println!(\"identical\");\n    }\n    let n = report.candidates.len();\n    let empty = report.left_input.is_empty();\n}\n#[cfg(test)]\nmod tests {\n    fn t(r: &DiffReport) { assert!(r.candidates.is_empty()); }\n}\n"),
+                (results::VERDICT_HOME, "impl DiffReport {\n    pub fn verdict(&self) -> Verdict {\n        if !self.candidates.is_empty() { return Verdict::Differs { candidates: 1 }; }\n        Verdict::Identical\n    }\n}\n"),
+            ],
+            mutate: ("crates/shirusu-compare/src/bin/shirusu-compare.rs", |t| Some(t.replace("Ok(!report.verdict().is_identical())", "Ok(!report.candidates.is_empty())"))),
+        },
         Rule::BinDeadPub => Fixture {
             bad: &[
                 ("crates/shirusu-x/src/main.rs", "fn main() {}\n"),
@@ -260,9 +279,16 @@ fn each_rule_finds_its_regression_put_back_into_the_real_tree() {
     for r in Rule::ALL {
         let before = r.check(&real).len();
         let (file, mutate) = fixture(r).mutate;
+        let mutated = mutate(real.text(file));
+        // (変異が木に当たらなければ検出の確認にならない: 先に変わったことを確かめる)
+        assert_ne!(
+            mutated.as_deref(),
+            Some(real.text(file).as_str()),
+            "{}: {file} への変異が何も変えない",
+            r.id()
+        );
         let mut tree = Tree::repo(&root());
-        tree.overlay
-            .insert(file.to_owned(), mutate(real.text(file)));
+        tree.overlay.insert(file.to_owned(), mutated);
         assert!(
             r.check(&tree).len() > before,
             "{}: {file} に入れた退行を見逃す",
@@ -435,4 +461,25 @@ fn a_known_site_covers_as_many_as_it_is_listed() {
         ),
     ]);
     assert_eq!(escape::escape_comment(&two).len(), 1);
+}
+
+#[test]
+fn crlf_checkouts_read_like_lf() {
+    // (Windows の autocrlf: 同じ木を CRLF にしても、どの規則の変異も当たって検出される)
+    let real = Tree::repo(&root());
+    for r in Rule::ALL {
+        let (file, mutate) = fixture(r).mutate;
+        let crlf = real.text(file).replace('\n', "\r\n");
+        let mut tree = Tree::repo(&root());
+        // (変異がファイルを新しく作る規則では、元のファイルは無いまま比べる)
+        if real.paths().contains(file) {
+            tree.overlay.insert(file.to_owned(), Some(crlf));
+            assert_eq!(tree.text(file), real.text(file), "{}: {file}", r.id());
+        }
+        let before = r.check(&tree).len();
+        let mutated = mutate(tree.text(file));
+        assert_ne!(mutated.as_deref(), Some(tree.text(file).as_str()), "{}: CRLF の {file} に変異が当たらない", r.id());
+        tree.overlay.insert(file.to_owned(), mutated.map(|m| m.replace('\n', "\r\n")));
+        assert!(r.check(&tree).len() > before, "{}: CRLF の {file} で退行を見逃す", r.id());
+    }
 }

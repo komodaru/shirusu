@@ -2,7 +2,22 @@
 //! `CANDIDATE_NOTICE`（候補であって断定ではない旨）を必ず含める。
 
 use crate::diff::{Candidate, DiffReport, Severity, CANDIDATE_NOTICE};
-use shirusu_analysis::JsonValue;
+use shirusu_analysis::{Incompleteness, JsonValue};
+
+fn describe_input(v: &[Incompleteness]) -> String {
+    if v.is_empty() {
+        "complete".to_string()
+    } else {
+        format!(
+            "incomplete({})",
+            v.iter().map(Incompleteness::describe).collect::<Vec<_>>().join("; ")
+        )
+    }
+}
+
+fn input_json(v: &[Incompleteness]) -> JsonValue {
+    JsonValue::Array(v.iter().map(|i| JsonValue::Str(i.describe())).collect())
+}
 
 pub fn render_human(report: &DiffReport, left_label: &str, right_label: &str) -> String {
     let mut out = String::new();
@@ -24,6 +39,13 @@ pub fn render_human(report: &DiffReport, left_label: &str, right_label: &str) ->
         report.count_by_severity(Severity::Medium),
         report.count_by_severity(Severity::Low),
         report.count_by_severity(Severity::Info),
+    ));
+    // 一致の判定は観測の揃い方と分けて出す (候補 0 件でも片側が欠けていれば一致ではない)
+    out.push_str(&format!(
+        "inputs: left={} right={}\nverdict: {}\n",
+        describe_input(&report.left_input),
+        describe_input(&report.right_input),
+        report.verdict().name()
     ));
     for c in &report.candidates {
         out.push_str(&format!(
@@ -131,6 +153,9 @@ pub fn report_json(report: &DiffReport, left_label: &str, right_label: &str) -> 
                     JsonValue::U64(report.paired_objects as u64),
                 ),
                 ("candidates", JsonValue::U64(report.candidates.len() as u64)),
+                ("verdict", JsonValue::Str(report.verdict().name().to_string())),
+                ("left_input", input_json(&report.left_input)),
+                ("right_input", input_json(&report.right_input)),
                 ("high", counts(Severity::High)),
                 ("medium", counts(Severity::Medium)),
                 ("low", counts(Severity::Low)),

@@ -368,8 +368,8 @@ fn validating_host_keys_accumulate_across_drains() {
 #[test]
 fn host_release_with_wrong_handle_fails() {
     let pool = SlotPool::new(2);
-    let a = pool.claim(1).unwrap();
-    let b = pool.claim(2).unwrap();
+    let a = pool.claim(1).unwrap().confirm();
+    let b = pool.claim(2).unwrap().confirm();
     // b は Active のまま (DETACH していない) なので a の解放手順を流用できない
     assert!(!host_release_slot(&pool, &b, true, true));
     assert!(pool.begin_detach(&a));

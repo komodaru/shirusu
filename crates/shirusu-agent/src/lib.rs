@@ -10,6 +10,9 @@
 //!
 //! 低水位時の非同期 Mapping 追加 (A70) は [`expansion`] モジュールの
 //! 管理スレッドが担う。記録経路は登録も待機もしない。
+// Kani 0.68 の固定 nightly では Rust 1.100 で安定した std::mem::DropGuard (WriterCell) がまだ feature の後ろにある
+// (cargo kani だけが cfg(kani) を立てる; 通常のビルドは安定版のまま)
+#![cfg_attr(kani, feature(drop_guard))]
 
 mod adoption;
 pub mod expansion;
@@ -929,7 +932,7 @@ impl Agent {
                 return Some(Arc::clone(s));
             }
         }
-        let handle = self.pool.claim(thread_id)?;
+        let claim = self.pool.claim(thread_id)?;
         // 追加 Slot に Mapping が紐付いていればそれを使い、無ければローカル
         // 領域を作る。Mapping の Control 領域はここで初期化する (生成者は
         // Agent)。紐付けは Slot の index に残るため、再利用時も同じ
@@ -938,7 +941,7 @@ impl Agent {
             .expanded_regions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&handle.index)
+            .get(&claim.index())
             .cloned();
         let region = match expanded {
             Some(shm) => {
@@ -947,22 +950,22 @@ impl Agent {
                 // 終えた後だけ (poll_reclaims)。新しい Generation で公開する
                 // ので、Host は前の世代の読み手を続けない。
                 match unsafe { UninitializedRing::from_shm(shm, self.config) } {
-                    Ok(ring) => ring.publish(handle.generation, thread_id),
+                    Ok(ring) => ring.publish(claim.generation(), thread_id),
                     Err(_) => {
-                        let _ = self.pool.cancel_claim(handle);
+                        let _ = self.pool.cancel_claim(claim);
                         return None;
                     }
                 }
             }
             // 確保に失敗したら Slot を返して記録しない (対象プロセスを止めない)。
             // (作ったばかりの Mapping の登録語は 0 なので予約は通る。通らなければ確保の失敗と同じ)
-            None => match SharedRegion::new(self.config, handle.generation, thread_id)
+            None => match SharedRegion::new(self.config, claim.generation(), thread_id)
                 .ok()
                 .and_then(|r| r.shm().reserve_slot())
             {
                 Some(reservation) => reservation.bind(),
                 None => {
-                    let _ = self.pool.cancel_claim(handle);
+                    let _ = self.pool.cancel_claim(claim);
                     return None;
                 }
             },
@@ -988,9 +991,10 @@ impl Agent {
             )
         };
         let Ok(mut writer) = writer else {
-            let _ = self.pool.cancel_claim(handle);
+            let _ = self.pool.cancel_claim(claim);
             return None;
         };
+        let handle = claim.confirm();
         writer.set_loader_lock_state(self.loader_lock_state);
         writer.set_loader_lock_probe(self.loader_lock_probe);
         let state = Arc::new(ThreadSlotState {

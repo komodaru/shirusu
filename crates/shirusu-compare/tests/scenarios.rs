@@ -32,7 +32,7 @@ fn unrelated_leave_does_not_match_a_valid_call() {
         .find(|e| e.kind == 2)
         .unwrap()
         .api_id += 1;
-    assert!(!compare_traces(&left, &right).is_identical());
+    assert!(!compare_traces(&left, &right).verdict().is_identical());
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn identical_traces_have_no_candidates() {
     let left = standard(Env::default()).finish(FinalizationInfo::default(), &[]);
     let right = standard(Env::default()).finish(FinalizationInfo::default(), &[]);
     let report = compare_traces(&left, &right);
-    assert!(report.is_identical(), "candidates: {:?}", report.candidates);
+    assert!(report.verdict().is_identical(), "candidates: {:?}", report.candidates);
     assert_eq!(report.paired_objects, 1);
 }
 
@@ -57,7 +57,7 @@ fn renumbered_handles_and_ids_have_no_candidates() {
     .finish(FinalizationInfo::default(), &[]);
     let report = compare_traces(&left, &right);
     assert!(
-        report.is_identical(),
+        report.verdict().is_identical(),
         "renumbering must be normalized away: {:?}",
         report.candidates
     );
@@ -248,7 +248,7 @@ fn aborted_on_both_sides_is_identical() {
     r.abort_create_file(1, 0, "C:\\game\\save.dat");
     let right = r.finish(FinalizationInfo::default(), &[]);
     let report = compare_traces(&left, &right);
-    assert!(report.is_identical(), "candidates: {:?}", report.candidates);
+    assert!(report.verdict().is_identical(), "candidates: {:?}", report.candidates);
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn async_completed_read_equals_sync_read() {
     r.close_handle(3, 0);
     let right = r.finish(FinalizationInfo::default(), &[]);
     let report = compare_traces(&left, &right);
-    assert!(report.is_identical(), "candidates: {:?}", report.candidates);
+    assert!(report.verdict().is_identical(), "candidates: {:?}", report.candidates);
 }
 
 #[test]
@@ -329,7 +329,7 @@ fn async_read_without_completion_differs_from_sync() {
     let right = r.finish(FinalizationInfo::default(), &[]);
     let report = compare_traces(&left, &right);
     assert!(
-        !report.is_identical(),
+        !report.verdict().is_identical(),
         "must differ: {:?}",
         report.candidates
     );

@@ -81,6 +81,36 @@ mod tests {
         false
     }
 
+    /// 読み手の登録 (Shm::reserve_reader / ReaderRegistration の Drop) と同じ順序付け:
+    /// CAS 0→1 (AcqRel) で取り、Release の 0 で返す。登録を持つ回収は Ring の読み位置を
+    /// 書くので、二つの回収が同時に持てば UnsafeCell の競合として loom が見つける
+    /// (7c5a553 レビュー P2-2: 同じ Mapping の二重登録で 2 件が 4 件になった)。
+    #[test]
+    fn loom_reader_registration_admits_one_reader_at_a_time() {
+        loom::model(|| {
+            let word = Arc::new(AtomicU64::new(0));
+            let cursor = Arc::new(UnsafeCell::new(0u64));
+            let read = |word: &AtomicU64, cursor: &UnsafeCell<u64>| -> bool {
+                if word.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                    return false;
+                }
+                // SAFETY: the registration word is held, so no other reader touches the cursor.
+                cursor.with_mut(|p| unsafe { *p += 1 });
+                word.store(0, Ordering::Release);
+                true
+            };
+            let (w2, c2) = (word.clone(), cursor.clone());
+            let other = loom::thread::spawn(move || read(&w2, &c2));
+            let mine = read(&word, &cursor);
+            let theirs = other.join().unwrap();
+            assert!(mine || theirs, "a free registration is always taken by someone");
+            // SAFETY: both readers finished (joined); nothing else uses the cursor.
+            let reads = cursor.with(|p| unsafe { *p });
+            assert_eq!(reads, u64::from(mine) + u64::from(theirs));
+            assert_eq!(word.load(Ordering::Acquire), 0);
+        });
+    }
+
     #[test]
     fn loom_publish_acquire_never_reads_unpublished() {
         loom::model(|| {

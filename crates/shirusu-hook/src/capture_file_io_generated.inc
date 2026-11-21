@@ -29,8 +29,8 @@ pub fn read_file_enter(a0: u64, a1: u64, a2: u32, a3: u64) -> Vec<CapturedValue>
 #[allow(clippy::too_many_arguments)]
 pub fn read_file_leave(mem: &dyn MemoryReader, a0: i32, a1: u64, a2: u32, a3: u64, a4: bool, a5: u32) -> Vec<CapturedValue> {
     let v0 = i32v(a0);
-    let v1 = read_io_count(mem, a3, a4);
-    let v2 = read_io_output(mem, a0, a1, a2, &v1, a4);
+    let v1 = read_io_count(mem, a3, IoOutcome::classify(a0, a5), a4);
+    let v2 = read_io_output(mem, IoOutcome::classify(a0, a5), a1, a2, &v1, a4);
     let v3 = last_error_value(crate::api::HANDWRITTEN_API_TABLE[1].last_error_meaning, a0 as u64, a5);
     vec![v0, v1, v2, v3]
 }
@@ -45,7 +45,7 @@ pub fn write_file_enter(mem: &dyn MemoryReader, a0: u64, a1: u64, a2: u32, a3: u
 #[allow(clippy::too_many_arguments)]
 pub fn write_file_leave(mem: &dyn MemoryReader, a0: i32, a1: u64, a2: bool, a3: u32) -> Vec<CapturedValue> {
     let v0 = i32v(a0);
-    let v1 = read_io_count(mem, a1, a2);
+    let v1 = read_io_count(mem, a1, IoOutcome::classify(a0, a3), a2);
     let v2 = last_error_value(crate::api::HANDWRITTEN_API_TABLE[2].last_error_meaning, a0 as u64, a3);
     vec![v0, v1, v2]
 }

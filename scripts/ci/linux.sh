@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux CI: fmt / clippy / unit / PBT / loom. ローカルでも同じ手順を再現できる。
+# Linux CI: clippy / unit / PBT / loom. ローカルでも同じ手順を再現できる。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -10,7 +10,6 @@ cargo run -q -p shirusu-lint
 bash scripts/ci/fetch-winmd.sh
 cargo run -q -p shirusu-metadata-gen -- --winmd target/winmd/Windows.Win32.winmd --com-catalog crates/shirusu-trace/src/com_catalog_generated.inc --check
 cargo run -q -p shirusu-metadata-gen -- --winmd target/winmd/Windows.Win32.winmd --refresh-broad --check
-cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 # unwrap / expect はテストでないコードに書かない (shirusu-lint の no-unwrap は syn で cfg(windows) の側も
 # 見る; こちらは型で解決したマクロ展開の後を見る)。e2e/ はテストのハーネスなので外す

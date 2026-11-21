@@ -22,6 +22,7 @@ mod escape;
 mod modern;
 mod mutations;
 mod regress;
+mod results;
 mod review;
 
 use quote::ToTokens;
@@ -59,10 +60,12 @@ enum Rule {
     WildcardUnreachable,
     BinDeadPub,
     HandStd,
+    BlobRefWalk,
+    CompareVerdict,
 }
 
 impl Rule {
-    const ALL: [Rule; 20] = [
+    const ALL: [Rule; 22] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -83,6 +86,8 @@ impl Rule {
         Rule::WildcardUnreachable,
         Rule::BinDeadPub,
         Rule::HandStd,
+        Rule::BlobRefWalk,
+        Rule::CompareVerdict,
     ];
 
     fn id(self) -> &'static str {
@@ -107,6 +112,8 @@ impl Rule {
             Rule::WildcardUnreachable => "wildcard-unreachable",
             Rule::BinDeadPub => "bin-dead-pub",
             Rule::HandStd => "hand-std",
+            Rule::BlobRefWalk => "blob-ref-walk",
+            Rule::CompareVerdict => "compare-verdict",
         }
     }
 
@@ -132,6 +139,8 @@ impl Rule {
             Rule::WildcardUnreachable => "`_ => unreachable!()` の腕を書かない (2026-11-21、Rust 1.100): 来ない値は型で消す。never 型 `!` を型引数に (TypedValue<Generic>)、番号の代わりに enum (shared_com::Unknown)、const 引数ごとの trait 実装 (detours::CallOriginal)",
             Rule::BinDeadPub => "どのバイナリも crate 属性で dead_code_pub_in_binary (Rust 1.97) を有効にする: `#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]` (crate の階層でしか効かないので各 main に)",
             Rule::HandStd => "Rust 1.98..1.100 が名前をつけた形を手で書かない (2026-11-21: toggle 1、trim_prefix 1、map_or_default 14、Vec::from_fn 1、DropGuard 1 か所を置き換え): x.toggle()、s.trim_prefix(p)、o.map_or_default(f)、c.ok_or(e)、Vec::from_fn(v.len(), f)、旗を下ろすだけの Drop 型は std::mem::DropGuard",
+            Rule::BlobRefWalk => "イベントが参照する Blob は TraceEvent::blob_refs (crates/shirusu-trace/src/refs.rs) で列挙する (7c5a553 レビュー P1-1: repair が Payload だけを見て、引数の BlobRef が指す Blob を落とした): `if let PayloadRef::Blob(..)` / `let TypedValue::BlobRef(..) else` / `matches!` / `_` の腕を持つ match で一つの場所だけを拾わない。各変種を扱う match は可",
+            Rule::CompareVerdict => "一致は DiffReport::verdict() で決める (7c5a553 レビュー P1-2: 候補が空なら一致とし、読み手が検出した破損を見落とした): crates/shirusu-compare/src/diff.rs の外で `candidates.is_empty()` を判定に使わず、Verdict (Identical / ObservedPrefixAgrees / Differs) で分ける",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -158,6 +167,8 @@ impl Rule {
             Rule::WildcardUnreachable => modern::wildcard_unreachable(tree),
             Rule::BinDeadPub => modern::bin_dead_pub(tree),
             Rule::HandStd => modern::hand_std(tree),
+            Rule::BlobRefWalk => results::blob_ref_walk(tree),
+            Rule::CompareVerdict => results::compare_verdict(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {
@@ -221,20 +232,33 @@ impl Tree {
         ps
     }
 
+    /// ファイルの中身。改行は LF にそろえる: Windows のチェックアウトは CRLF になり、規則と
+    /// その自己テストの変異 (`"..\n"` の置換) が改行だけで外れた (7c5a553 の Windows CI)
     fn text(&self, p: &str) -> String {
-        if let Some(t) = self.overlay.get(p) {
-            return t.clone().unwrap_or_default();
-        }
-        match &self.base {
-            Some(b) => b.get(p).cloned().unwrap_or_default(),
-            None => std::fs::read(self.root.join(p))
-                .map_or_default(|b| String::from_utf8_lossy(&b).into_owned()),
-        }
+        let raw = if let Some(t) = self.overlay.get(p) {
+            t.clone().unwrap_or_default()
+        } else {
+            match &self.base {
+                Some(b) => b.get(p).cloned().unwrap_or_default(),
+                None => std::fs::read(self.root.join(p))
+                    .map_or_default(|b| String::from_utf8_lossy(&b).into_owned()),
+            }
+        };
+        lf(raw)
     }
 
     /// 架空の木では、持っているファイルだけを検査の対象にする
     fn has_or_real(&self, p: &str) -> bool {
         self.base.as_ref().is_none_or(|b| b.contains_key(p))
+    }
+}
+
+/// CRLF (と単独の CR) を LF に
+fn lf(t: String) -> String {
+    if t.contains('\r') {
+        t.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        t
     }
 }
 

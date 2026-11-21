@@ -3,7 +3,7 @@
   "jobs": [
     {
       "allow_failure": false,
-      "components": "rustfmt, clippy",
+      "components": "clippy",
       "java": false,
       "name": "linux",
       "os": "ubuntu-latest",

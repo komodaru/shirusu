@@ -90,7 +90,7 @@ SchemaDef {
 SchemaDef {
     schema_id: 4,
     name: "kernel32!ReadFile/leave",
-    content_hash: 2813619993672481861,
+    content_hash: 13174213883324830896,
     fields: [
         FieldDef {
             name: "return",
@@ -100,12 +100,12 @@ SchemaDef {
         FieldDef {
             name: "lpNumberOfBytesRead",
             ty: 3,
-            flags: 68,
+            flags: 16452,
         },
         FieldDef {
             name: "data",
             ty: 10,
-            flags: 68,
+            flags: 12356,
         },
         FieldDef {
             name: "last_error",
@@ -146,7 +146,7 @@ SchemaDef {
 SchemaDef {
     schema_id: 6,
     name: "kernel32!WriteFile/leave",
-    content_hash: 11966167465441560632,
+    content_hash: 15531241258402198806,
     fields: [
         FieldDef {
             name: "return",
@@ -156,7 +156,7 @@ SchemaDef {
         FieldDef {
             name: "lpNumberOfBytesWritten",
             ty: 3,
-            flags: 68,
+            flags: 16452,
         },
         FieldDef {
             name: "last_error",

@@ -527,7 +527,7 @@ fn run_slot_pool() -> SlotResult {
     let start = Instant::now();
     let mut handles = Vec::new();
     for t in 0..32u64 {
-        handles.push(pool.claim(t + 1).expect("slot must be claimable"));
+        handles.push(pool.claim(t + 1).expect("slot must be claimable").confirm());
         if t + 1 == 24 {
             // 空き 8 件（低水位ちょうど）ではまだ要求は立たないはず。
             assert_eq!(pool.free_count(), 8);
@@ -541,7 +541,7 @@ fn run_slot_pool() -> SlotResult {
     // 24 件目までの時点の値は、別プールで再現して測る。
     let pool2 = SlotPool::production();
     for t in 0..24u64 {
-        let _ = pool2.claim(t + 1).expect("slot must be claimable");
+        let _ = pool2.claim(t + 1).expect("slot must be claimable").confirm();
     }
     let expansion_after_24 = pool2.expansion_request_count.load(Ordering::Relaxed);
     SlotResult {

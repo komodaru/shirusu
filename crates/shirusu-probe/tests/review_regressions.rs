@@ -56,7 +56,7 @@ fn utf16_distinct_code_units_survive_compare() {
         let left = make(0xd800);
         let right = make(unit);
         let diff = compare_traces(&left, &right);
-        assert!(!diff.is_identical());
+        assert!(!diff.verdict().is_identical());
         let rule = shirusu_probe::generate_rules(&left, &right, &diff.candidates[0])
             .spec
             .unwrap();
@@ -121,7 +121,7 @@ fn drain_permutations_preserve_cross_thread_objects_and_completions() {
             }
             let actual = serialized(&t);
             assert!(
-                compare_traces(&expected, &actual).is_identical(),
+                compare_traces(&expected, &actual).verdict().is_identical(),
                 "global={global} shift={shift}"
             );
             let n = NormTrace::build(&actual);
@@ -169,7 +169,7 @@ fn async_difference_survives_probe_trim_on_another_thread() {
         .batches
         .iter()
         .any(|b| b.thread_id == 99 && b.events.iter().any(|e| e.kind == 8)));
-    assert!(!compare_traces(&l, &r).is_identical());
+    assert!(!compare_traces(&l, &r).verdict().is_identical());
 }
 
 #[test]

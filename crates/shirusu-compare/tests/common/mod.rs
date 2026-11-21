@@ -10,7 +10,8 @@ use shirusu_trace::model::{EventBatch, TraceEvent};
 use shirusu_trace::proto::{CaptureEnvironment, LossRecord, SessionMetadata};
 use shirusu_trace::reader::ReadTrace;
 use shirusu_trace::schema::{
-    make_schema, CapturedValue, EventCapture, LastErrorMeaning, Ty, TypedValue, ValueCapture,
+    make_schema, CaptureTiming, CapturedValue, EventCapture, LastErrorMeaning, OutputCondition, Ty,
+    TypedValue, ValueCapture,
 };
 use shirusu_trace::writer::FinalizationInfo;
 use shirusu_trace::{PayloadRef, TraceWriter};
@@ -32,16 +33,19 @@ fn last_error(ok: bool, err: u32) -> CapturedValue {
     }
 }
 
-fn unsupported_u32() -> CapturedValue {
+/// 保留中 (ERROR_IO_PENDING) の leave で、まだ定義されていない出力。
+/// フックと同じく NotApplicable と記録し、Schema の OutputCondition が
+/// それを戻り値と last_error で裏付ける。
+fn pending_u32() -> CapturedValue {
     CapturedValue {
-        capture: ValueCapture::Unsupported,
+        capture: ValueCapture::NotApplicable,
         value: TypedValue::U32(0),
     }
 }
 
-fn unsupported_bytes() -> CapturedValue {
+fn pending_bytes() -> CapturedValue {
     CapturedValue {
-        capture: ValueCapture::Unsupported,
+        capture: ValueCapture::NotApplicable,
         value: TypedValue::Bytes(Vec::new()),
     }
 }
@@ -211,8 +215,8 @@ impl Builder {
             &[Ty::I32, Ty::U32, Ty::Bytes, Ty::U32],
             vec![
                 cv(TypedValue::I32(0)),
-                unsupported_u32(),
-                unsupported_bytes(),
+                pending_u32(),
+                pending_bytes(),
                 cv(TypedValue::U32(997)),
             ],
             PayloadRef::None,
@@ -415,7 +419,7 @@ impl Builder {
 }
 
 /// last_error の flags は LastError の意味条件を宣言する: 成功時の値を Stale と書くには
-/// Schema の宣言が要る (`ValueCapture::is_complete_for`)。宣言のない Field の Stale は
+/// Schema の宣言が要る (`ValueCapture::is_complete_given`)。宣言のない Field の Stale は
 /// 取得失敗と同じく数えられ、規則が「取得できていない」ことで黙って通ってしまう。
 pub fn all_schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
     vec![
@@ -454,8 +458,17 @@ pub fn all_schemas() -> Vec<shirusu_trace::proto::SchemaDef> {
             "kernel32!ReadFile/leave",
             vec![
                 ("return".into(), Ty::I32, 0),
-                ("lpNumberOfBytesRead".into(), Ty::U32, 0),
-                ("data".into(), Ty::Bytes, 0),
+                (
+                    "lpNumberOfBytesRead".into(),
+                    Ty::U32,
+                    CaptureTiming::After.flags() | OutputCondition::WhenNotPending.flags(),
+                ),
+                (
+                    "data".into(),
+                    Ty::Bytes,
+                    CaptureTiming::After.flags()
+                        | OutputCondition::WhenReturnIsTrueOrMoreData.flags(),
+                ),
                 (
                     "last_error".into(),
                     Ty::U32,

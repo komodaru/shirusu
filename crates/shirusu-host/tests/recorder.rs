@@ -714,3 +714,37 @@ fn field_capture_quality_reaches_finalization_without_event_loss() {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[test]
+fn a_ring_registered_twice_is_rejected_and_its_events_are_saved_once() {
+    // 7c5a553 レビュー P2-2: 同じ Mapping (同じ Shm の複製、同じ実体の別ビュー) を二度登録
+    // すると、二つの読み手が同じ Cursor を読み、2 件のイベントが 4 件として保存された
+    let path = temp_trace("twice");
+    let (agent, generation, base) = agent_and_region(13);
+    let mut session = CaptureSession::create_file(&path, config()).unwrap();
+    session.add_shared_ring(base.clone(), spec(generation)).unwrap();
+    let again = session.add_shared_ring(base.clone(), spec(generation));
+    assert!(matches!(again, Err(SessionError::Config(ref m)) if m.contains("already registered")), "{again:?}");
+    // 別のセッションからも同じ Mapping は読めない (読み手は Mapping の Control 語で一つ)
+    let other_path = temp_trace("twice-other");
+    let mut other = CaptureSession::create_file(&other_path, config()).unwrap();
+    assert!(other.add_shared_ring(base.clone(), spec(generation)).is_err());
+    drop(other);
+    session.start().unwrap();
+    let ch = api_by_id(API_CLOSE_HANDLE).unwrap();
+    let payload = capture::encode_enter(ch, &capture::close_handle_enter(0x2A4)).unwrap();
+    agent.record_enter(13, ch.api_id, ch.enter_schema_id(), 1, 0, &payload);
+    let payload = capture::encode_leave(ch, &capture::close_handle_leave(1, 0)).unwrap();
+    agent.record_leave(13, ch.api_id, ch.leave_schema_id(), 1, 0, &payload);
+    session.poll_once().unwrap();
+    let summary = session.stop().unwrap();
+    assert_eq!(summary.total_events, 2);
+    let trace = shirusu_trace::read_trace(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(trace.batches.iter().map(|b| b.events.len()).sum::<usize>(), 2);
+    // セッションを閉じれば (stop が session を消費する) 登録は外れ、次のセッションが同じ Mapping を読める
+    let mut next = CaptureSession::create_file(&other_path, config()).unwrap();
+    assert!(next.add_shared_ring(base.clone(), spec(generation)).is_ok());
+    drop(next);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&other_path);
+}

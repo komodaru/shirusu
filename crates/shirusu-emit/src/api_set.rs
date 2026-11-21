@@ -34,7 +34,10 @@
 
 use crate::EmitError;
 use shirusu_trace::proto::SchemaDef;
-use shirusu_trace::schema::{make_schema, CaptureTiming, LastErrorMeaning, Ty, ValueKind};
+use shirusu_trace::schema::{
+    make_schema, CaptureTiming, LastErrorMeaning, OutputCondition, Ty, ValueKind,
+    DEQUEUED_OVERLAPPED_FIELD,
+};
 
 /// 1 API の Schema 仕様。enter / leave それぞれのフィールド列が
 /// Compact Binary の値列の順序そのものを定める。
@@ -49,6 +52,9 @@ pub struct ApiSpec {
     /// この API の GetLastError 生値が意味を持つ条件（F20）。
     /// leave Schema の `last_error` フィールドの flags へ格納する。
     pub last_error_meaning: LastErrorMeaning,
+    /// leave の出力フィールドが定義される条件（P1-3 / P2-1）。
+    /// 条件が成り立たない呼び出しでは値を NotApplicable と記録してよい。
+    pub output_conditions: Vec<(String, OutputCondition)>,
 }
 
 impl ApiSpec {
@@ -69,7 +75,22 @@ impl ApiSpec {
                 .collect(),
             annotation: String::new(),
             last_error_meaning: LastErrorMeaning::Unspecified,
+            output_conditions: Vec::new(),
         }
+    }
+
+    /// leave フィールド `field` が定義される条件を宣言する。
+    /// 存在しないフィールドや呼び出し後に取らないフィールドは `ApiSet::add` が拒否する。
+    pub fn with_output_condition(mut self, field: &str, condition: OutputCondition) -> Self {
+        self.output_conditions.push((field.to_string(), condition));
+        self
+    }
+
+    fn output_condition(&self, field: &str) -> OutputCondition {
+        self.output_conditions
+            .iter()
+            .find(|(n, _)| n == field)
+            .map_or(OutputCondition::Unspecified, |(_, c)| *c)
     }
 
     pub fn with_annotation(mut self, annotation: &str) -> Self {
@@ -117,6 +138,25 @@ impl ApiSet {
                  (CreatedObject, Handle, Pointer or Scalar)",
                 spec.name
             )));
+        }
+        for (field, _) in &spec.output_conditions {
+            let after = spec.leave_fields.iter().find(|(n, ..)| n == field).map(|(.., t)| *t);
+            match after {
+                Some(CaptureTiming::After | CaptureTiming::Completion | CaptureTiming::Both) => {}
+                Some(CaptureTiming::Unspecified | CaptureTiming::Before) | None => {
+                    return Err(EmitError::InvalidSpec(format!(
+                        "{}: output condition names {field}, which is not a leave field \
+                         captured after the call",
+                        spec.name
+                    )));
+                }
+            }
+            if spec.output_conditions.iter().filter(|(n, _)| n == field).count() > 1 {
+                return Err(EmitError::InvalidSpec(format!(
+                    "{}: output condition for {field} declared twice",
+                    spec.name
+                )));
+            }
         }
         self.specs.push(spec);
         Ok(self.specs.len() as u32)
@@ -189,6 +229,7 @@ impl ApiSet {
                         if n == "last_error" {
                             flags |= spec.last_error_meaning.flags();
                         }
+                        flags |= spec.output_condition(n).flags();
                         (n.clone(), *t, flags)
                     })
                     .collect(),
@@ -307,7 +348,9 @@ pub fn file_io_api_set() -> ApiSet {
             ],
         )
         .with_annotation("L2 (file_io_api_set: shirusu-hook HANDWRITTEN_API_TABLE と同一定義)")
-        .with_last_error_meaning(LastErrorMeaning::WhenReturnIsFalse),
+        .with_last_error_meaning(LastErrorMeaning::WhenReturnIsFalse)
+        .with_output_condition("lpNumberOfBytesRead", OutputCondition::WhenNotPending)
+        .with_output_condition("data", OutputCondition::WhenReturnIsTrueOrMoreData),
         ApiSpec::new(
             "kernel32!WriteFile",
             &[
@@ -338,7 +381,8 @@ pub fn file_io_api_set() -> ApiSet {
             ],
         )
         .with_annotation("L2 (file_io_api_set: shirusu-hook HANDWRITTEN_API_TABLE と同一定義)")
-        .with_last_error_meaning(LastErrorMeaning::WhenReturnIsFalse),
+        .with_last_error_meaning(LastErrorMeaning::WhenReturnIsFalse)
+        .with_output_condition("lpNumberOfBytesWritten", OutputCondition::WhenNotPending),
         ApiSpec::new(
             "kernel32!CloseHandle",
             &[("hObject", HANDLE, ValueKind::Handle, CaptureTiming::Before)],
@@ -416,11 +460,18 @@ pub fn file_io_api_set() -> ApiSet {
                     ValueKind::Scalar,
                     CaptureTiming::After,
                 ),
+                (
+                    DEQUEUED_OVERLAPPED_FIELD,
+                    HANDLE,
+                    ValueKind::Pointer,
+                    CaptureTiming::After,
+                ),
                 ("last_error", DWORD, ValueKind::Scalar, CaptureTiming::After),
             ],
         )
         .with_annotation("L1 (file_io_api_set: shirusu-hook HANDWRITTEN_API_TABLE と同一定義)")
-        .with_last_error_meaning(LastErrorMeaning::WhenReturnIsFalse),
+        .with_last_error_meaning(LastErrorMeaning::WhenReturnIsFalse)
+        .with_output_condition("lpNumberOfBytesTransferred", OutputCondition::WhenPacketDequeued),
     ];
     // (固定の定義: add の検査 (名前が空でない、重複しない、値の種類を明示) を通ることは
     // tests::file_io_definitions_pass_add が確かめる)
@@ -456,6 +507,42 @@ mod tests {
         assert_eq!(ids, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         assert_eq!(schemas[0].name, "kernel32!CreateFileW/enter");
         assert_eq!(schemas[1].name, "kernel32!CreateFileW/leave");
+    }
+
+    #[test]
+    fn output_conditions_must_name_a_field_captured_after_the_call() {
+        let leave = [
+            ("return", Ty::I32, ValueKind::Scalar, CaptureTiming::After),
+            ("n", Ty::U32, ValueKind::Scalar, CaptureTiming::After),
+        ];
+        let enter = [("p", Ty::U64, ValueKind::Pointer, CaptureTiming::Before)];
+        for (field, ok) in [("n", true), ("p", false), ("missing", false)] {
+            let spec = ApiSpec::new("a!B", &enter, &leave)
+                .with_output_condition(field, OutputCondition::WhenReturnIsTrue);
+            assert_eq!(ApiSet::new().add(spec).is_ok(), ok, "{field}");
+        }
+        let twice = ApiSpec::new("a!B", &enter, &leave)
+            .with_output_condition("n", OutputCondition::WhenReturnIsTrue)
+            .with_output_condition("n", OutputCondition::Always);
+        assert!(ApiSet::new().add(twice).is_err());
+        // 宣言した条件は leave Schema の flags に入り、ハッシュを変える
+        let mut set = ApiSet::new();
+        set.add(
+            ApiSpec::new("a!B", &enter, &leave)
+                .with_output_condition("n", OutputCondition::WhenReturnIsTrue),
+        )
+        .unwrap();
+        let plain = {
+            let mut s = ApiSet::new();
+            s.add(ApiSpec::new("a!B", &enter, &leave)).unwrap();
+            s.schemas()
+        };
+        let with = set.schemas();
+        assert_eq!(
+            OutputCondition::from_flags(with[1].fields[1].flags),
+            OutputCondition::WhenReturnIsTrue
+        );
+        assert_ne!(with[1].content_hash, plain[1].content_hash);
     }
 
     #[test]

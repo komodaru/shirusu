@@ -114,13 +114,13 @@ capture = { op = "scalar", arg = 0 }
 name = "lpNumberOfBytesRead"
 ty = "U32"
 kind = "Scalar"
-capture = { op = "output_count", address = 3, asynchronous = 4 }
+capture = { op = "output_count", address = 3, returns = 0, last_error = 5, asynchronous = 4 }
 
 [[api.leave]]
 name = "data"
 ty = "Bytes"
 kind = "Scalar"
-capture = { op = "output_buffer", address = 1, capacity = 2, count_field = 1, success = 0, asynchronous = 4 }
+capture = { op = "output_buffer", address = 1, capacity = 2, count_field = 1, returns = 0, last_error = 5, asynchronous = 4 }
 
 [[api.leave]]
 name = "last_error"
@@ -173,7 +173,7 @@ capture = { op = "scalar", arg = 0 }
 name = "lpNumberOfBytesWritten"
 ty = "U32"
 kind = "Scalar"
-capture = { op = "output_count", address = 1, asynchronous = 2 }
+capture = { op = "output_count", address = 1, returns = 0, last_error = 3, asynchronous = 2 }
 
 [[api.leave]]
 name = "last_error"

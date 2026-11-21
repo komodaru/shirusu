@@ -210,7 +210,7 @@ fn scalar_u64_return_difference_is_detected() {
     let mut r2 = B::new();
     r2.get_counter(1, 100);
     let report = compare_traces(&left, &r2.finish());
-    assert!(report.is_identical(), "candidates: {:?}", report.candidates);
+    assert!(report.verdict().is_identical(), "candidates: {:?}", report.candidates);
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn kinded_handle_renumbering_has_no_candidates() {
     let right = r.finish();
     let report = compare_traces(&left, &right);
     assert!(
-        report.is_identical(),
+        report.verdict().is_identical(),
         "renumbering must be normalized away: {:?}",
         report.candidates
     );
@@ -294,7 +294,7 @@ fn stale_last_error_difference_is_ignored_but_meaningful_is_detected() {
     r.use_thing_with_last_error(1, 0x1000, 7, 1, stale(7));
     let report = compare_traces(&left, &r.finish());
     assert!(
-        report.is_identical(),
+        report.verdict().is_identical(),
         "stale last_error must not diff: {:?}",
         report.candidates
     );
@@ -315,5 +315,5 @@ fn stale_last_error_difference_is_ignored_but_meaningful_is_detected() {
     let mut r2 = B::new();
     r2.use_thing_with_last_error(1, 0x1000, 7, 0, cv(TypedValue::U32(5)));
     let report = compare_traces(&left, &r2.finish());
-    assert!(report.is_identical(), "candidates: {:?}", report.candidates);
+    assert!(report.verdict().is_identical(), "candidates: {:?}", report.candidates);
 }

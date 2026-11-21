@@ -18,6 +18,7 @@ shirusu-transport = { path = "../shirusu-transport" }
 
 [dev-dependencies]
 proptest = "1"
+shirusu-conformance = { path = "../shirusu-conformance" }
 
 [[bin]]
 name = "shirusu"

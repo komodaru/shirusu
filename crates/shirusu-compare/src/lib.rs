@@ -16,6 +16,6 @@ pub mod diff;
 pub mod normalize;
 pub mod report;
 
-pub use diff::{compare_traces, Candidate, CandidateKind, DiffReport, Severity, CANDIDATE_NOTICE};
+pub use diff::{compare_traces, Candidate, CandidateKind, DiffReport, Severity, Verdict, CANDIDATE_NOTICE};
 pub use normalize::{NormCall, NormEvent, NormField, NormPayload, NormTrace, NormValue, ObjectKey};
 pub use report::{render_human, report_json};

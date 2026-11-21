@@ -38,7 +38,7 @@ use crate::container::{
     MAX_RAW_LEN, MAX_STORED_LEN,
 };
 use crate::error::{Result, TraceError};
-use crate::model::{EventBatch, PayloadRef};
+use crate::model::EventBatch;
 use crate::proto::{
     BlockIndex, CaptureEnvironment, Finalization, IndexEntry, LossRecord, ProfileSummary,
     SchemaDef, SchemaSet,
@@ -632,12 +632,16 @@ impl<W: DurableWrite> TraceWriter<W> {
                 }
             }
             prev = Some(e.sequence);
-            if let PayloadRef::Blob(id) = &e.payload {
-                if !self.blobs.contains_key(id) {
-                    return Err(TraceError::WriterInvariant(format!(
-                        "event references blob {id} not added via add_payload"
-                    )));
-                }
+            // Payload と引数の BlobRef の両方 (crate::refs)
+            if let Some(u) = e
+                .blob_refs(&self.registry)
+                .missing(|id| self.blobs.contains_key(id))
+                .next()
+            {
+                return Err(TraceError::WriterInvariant(format!(
+                    "event references blob {} ({:?}) not added via add_payload",
+                    u.id, u.site
+                )));
             }
         }
         // L11: 全体順序は Batch 内で全件 Some か全件 None のどちらかで、

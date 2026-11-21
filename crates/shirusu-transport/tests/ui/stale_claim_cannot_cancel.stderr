@@ -1,0 +1,19 @@
+error[E0599]: no method named `clone` found for struct `SlotClaim` in the current scope
+ --> tests/ui/stale_claim_cannot_cancel.rs:9:22
+  |
+9 |     let copy = first.clone();
+  |                      ^^^^^ method not found in `SlotClaim`
+
+error[E0308]: mismatched types
+  --> tests/ui/stale_claim_cannot_cancel.rs:14:23
+   |
+14 |     pool.cancel_claim(handle);
+   |          ------------ ^^^^^^ expected `SlotClaim`, found `SlotHandle`
+   |          |
+   |          arguments to this method are incorrect
+   |
+note: method defined here
+  --> src/slot.rs
+   |
+   |     pub fn cancel_claim(&self, claim: SlotClaim) -> bool {
+   |            ^^^^^^^^^^^^

@@ -48,7 +48,7 @@ fn test_mod_files(tree: &Tree, files: &[String]) -> BTreeSet<String> {
 }
 
 /// `prefix` の下の、テストでない Rust ファイル
-fn product_rs(tree: &Tree, prefix: &str) -> Vec<String> {
+pub(super) fn product_rs(tree: &Tree, prefix: &str) -> Vec<String> {
     let files: Vec<String> = tree
         .paths()
         .into_iter()
@@ -120,7 +120,7 @@ struct Unwraps(Vec<(usize, String)>);
 
 /// テストか証明でだけ作られる項目: `#[cfg(test)]` の類、`#[test]`、Kani の `#[cfg(kani)]` と
 /// `#[kani::proof]`
-fn is_test_only(attrs: &[syn::Attribute]) -> bool {
+pub(super) fn is_test_only(attrs: &[syn::Attribute]) -> bool {
     is_cfg_test(attrs)
         || attrs.iter().any(|a| {
             let p = a.path();

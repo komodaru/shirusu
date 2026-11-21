@@ -22,7 +22,7 @@
 //! として常に付ける。
 
 use crate::normalize::{NormCall, NormEvent, NormTrace, ObjectKey};
-use shirusu_analysis::IntegritySummary;
+use shirusu_analysis::{Incompleteness, IncompletenessKey, IntegrityAspect, IntegritySummary};
 use shirusu_trace::reader::ReadTrace;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -144,11 +144,61 @@ pub struct DiffReport {
     pub paired_objects: usize,
     /// API 別の呼び出し数（左, 右）。文脈情報であり候補ではない。
     pub api_counts: BTreeMap<String, (usize, usize)>,
+    /// 各側の観測が揃っていない理由 (空なら揃っている。IntegritySummary::incompleteness)
+    pub left_input: Vec<Incompleteness>,
+    pub right_input: Vec<Incompleteness>,
+}
+
+/// 比較の判定。「読めたイベント列が一致する」と「比較に必要な観測が揃っている」を分ける
+/// (7c5a553 レビュー P1-2: 中間チャンクを失った Trace との比較が候補 0 件で一致とされた)。
+/// 一致を名乗れるのは [`Verdict::Identical`] だけで、それは両側の観測が揃っているときに限る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// 候補がなく、両側とも観測が揃っている
+    Identical,
+    /// 候補はないが、少なくとも片側の観測が揃っていない (読めた範囲が一致しただけ)
+    ObservedPrefixAgrees {
+        left: Vec<Incompleteness>,
+        right: Vec<Incompleteness>,
+    },
+    /// 差分の候補がある
+    Differs { candidates: usize },
+}
+
+impl Verdict {
+    /// 一致したか (Identical だけ)
+    pub fn is_identical(&self) -> bool {
+        match self {
+            Verdict::Identical => true,
+            Verdict::ObservedPrefixAgrees { .. } | Verdict::Differs { .. } => false,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Verdict::Identical => "identical",
+            Verdict::ObservedPrefixAgrees { .. } => "observed_prefix_agrees",
+            Verdict::Differs { .. } => "differs",
+        }
+    }
 }
 
 impl DiffReport {
-    pub fn is_identical(&self) -> bool {
-        self.candidates.is_empty()
+    /// 比較の判定。候補が空でも、片側の観測が欠けていれば一致ではない
+    pub fn verdict(&self) -> Verdict {
+        if !self.candidates.is_empty() {
+            return Verdict::Differs {
+                candidates: self.candidates.len(),
+            };
+        }
+        if self.left_input.is_empty() && self.right_input.is_empty() {
+            Verdict::Identical
+        } else {
+            Verdict::ObservedPrefixAgrees {
+                left: self.left_input.clone(),
+                right: self.right_input.clone(),
+            }
+        }
     }
 
     pub fn count_by_severity(&self, severity: Severity) -> usize {
@@ -180,11 +230,10 @@ pub fn compare_traces(left: &ReadTrace, right: &ReadTrace) -> DiffReport {
         report.api_counts.entry(call.api.clone()).or_default().1 += 1;
     }
 
-    compare_integrity(
-        &IntegritySummary::of(left),
-        &IntegritySummary::of(right),
-        &mut report.candidates,
-    );
+    let (li, ri) = (IntegritySummary::of(left), IntegritySummary::of(right));
+    report.left_input = li.incompleteness();
+    report.right_input = ri.incompleteness();
+    compare_integrity(&li, &ri, &mut report.candidates);
 
     // --- オブジェクト対応と操作列の比較 ---
     let left_keys: HashSet<&ObjectKey> = nl.objects.iter().map(|o| &o.key).collect();
@@ -602,51 +651,61 @@ fn compare_integrity(l: &IntegritySummary, r: &IntegritySummary, out: &mut Vec<C
         c.right_value = Some(rv);
         out.push(c);
     };
+    // 観測の欠け方は IntegritySummary::incompleteness の全項目で、項目ごとに比べる (一部の項目
+    // だけを選ぶと、読み取り側が見つけた破損やイベント件数の不一致のような項目を見落とす:
+    // 7c5a553 レビュー P1-2)。項目の名前は Incompleteness::key が網羅的に決める
     let level = |v: Option<u32>| match v {
         Some(v) => format!("{} ({v})", shirusu_analysis::integrity_level_name(v)),
         None => "Unknown (no finalization)".to_string(),
     };
-    for (aspect, lv, rv) in [
-        ("capture_coverage", l.capture_coverage, r.capture_coverage),
-        ("event_integrity", l.event_integrity, r.event_integrity),
-        (
-            "semantic_completeness",
-            l.semantic_completeness,
-            r.semantic_completeness,
-        ),
-    ] {
-        if lv != rv {
-            let severity = if lv == Some(0) || rv == Some(0) {
-                Severity::High
-            } else {
-                Severity::Medium
-            };
-            push(aspect, level(lv), level(rv), severity);
+    let declared = |s: &IntegritySummary, a: IntegrityAspect| match a {
+        IntegrityAspect::CaptureCoverage => s.capture_coverage,
+        IntegrityAspect::EventIntegrity => s.event_integrity,
+        IntegrityAspect::SemanticCompleteness => s.semantic_completeness,
+    };
+    let (li, ri) = (l.incompleteness(), r.incompleteness());
+    for key in IncompletenessKey::ALL {
+        let of = |v: &[Incompleteness]| -> Vec<Incompleteness> {
+            v.iter().filter(|i| i.key() == key).cloned().collect()
+        };
+        let (lk, rk) = (of(&li), of(&ri));
+        if lk == rk {
+            continue;
         }
-    }
-    if l.loss_records_by_kind != r.loss_records_by_kind {
-        push(
-            "loss_records",
-            format!("{:?}", l.loss_records_by_kind),
-            format!("{:?}", r.loss_records_by_kind),
-            Severity::Medium,
-        );
-    }
-    if l.dropped_payload_events != r.dropped_payload_events {
-        push(
-            "dropped_payload_events",
-            l.dropped_payload_events.to_string(),
-            r.dropped_payload_events.to_string(),
-            Severity::Medium,
-        );
-    }
-    if l.missing_blob_refs != r.missing_blob_refs {
-        push(
-            "missing_blob_refs",
-            l.missing_blob_refs.to_string(),
-            r.missing_blob_refs.to_string(),
-            Severity::Medium,
-        );
+        let side = |s: &IntegritySummary, k: &[Incompleteness]| match key {
+            IncompletenessKey::Declared(a) => level(declared(s, a)),
+            IncompletenessKey::LossRecords => format!("{:?}", s.loss_records_by_kind),
+            IncompletenessKey::DroppedPayloads => s.dropped_payload_events.to_string(),
+            IncompletenessKey::MissingBlobRefs => s.missing_blob_refs.to_string(),
+            IncompletenessKey::Finalization
+            | IncompletenessKey::EventCountMismatch
+            | IncompletenessKey::RecoveryIssues
+            | IncompletenessKey::DegradedEvents => {
+                if k.is_empty() {
+                    "none".to_string()
+                } else {
+                    k.iter().map(Incompleteness::describe).collect::<Vec<_>>().join("; ")
+                }
+            }
+        };
+        // 片側だけ揃っているのは、比較以前に観測できていないことを示す
+        let severity = match key {
+            IncompletenessKey::Declared(a) => {
+                if declared(l, a) == Some(0) || declared(r, a) == Some(0) {
+                    Severity::High
+                } else {
+                    Severity::Medium
+                }
+            }
+            IncompletenessKey::LossRecords
+            | IncompletenessKey::DroppedPayloads
+            | IncompletenessKey::MissingBlobRefs
+            | IncompletenessKey::DegradedEvents => Severity::Medium,
+            IncompletenessKey::Finalization
+            | IncompletenessKey::EventCountMismatch
+            | IncompletenessKey::RecoveryIssues => Severity::High,
+        };
+        push(key.name(), side(l, &lk), side(r, &rk), severity);
     }
 }
 

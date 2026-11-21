@@ -1913,7 +1913,7 @@ mod tests {
     #[test]
     fn slot_release_requires_thread_end_and_drain() {
         let pool = SlotPool::new(1);
-        let h = pool.claim(42).unwrap();
+        let h = pool.claim(42).unwrap().confirm();
         pool.begin_detach(&h);
         assert!(!host_release_slot(&pool, &h, false, true));
         assert!(!host_release_slot(&pool, &h, true, false));

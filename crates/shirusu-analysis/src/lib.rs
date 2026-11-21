@@ -18,6 +18,6 @@ pub use stream::{stream_trace, StreamedTrace};
 pub use view::{
     api_name_of_schema, capture_name, format_field, integrity_level_name, loss_kind_name,
     reason_name, value_capture_name, EventFilter, EventView, FieldView, IntegrityCounts,
-    IntegritySummary, PayloadView, Phase, TraceView, KIND_ABORTED, KIND_COMPLETED, KIND_ENTER,
+    Incompleteness, IncompletenessKey, IntegrityAspect, IntegritySummary, PayloadView, Phase, TraceView, KIND_ABORTED, KIND_COMPLETED, KIND_ENTER,
     KIND_LEAVE,
 };

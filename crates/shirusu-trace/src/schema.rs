@@ -264,6 +264,44 @@ impl LastErrorMeaning {
         v << LAST_ERROR_MEANING_SHIFT
     }
 
+    /// DependsOnInputs の条件を、同じ呼び出しの enter の値で解く。取得側 (shirusu-hook) と
+    /// 検査側 (conformance の `last-error-inputs`) が同じ規則を使うための一か所。
+    /// `function` は `CreateFileW` のような関数名、`input` は enter のフィールド名で値を返す。
+    /// 規則の分からない関数と、決め手の入力が無い呼び出しは DependsOnInputs のまま返す
+    /// (取得側はそれを Unsupported と記録する)。
+    pub fn resolve_inputs(
+        function: &str,
+        input: &dyn Fn(&str) -> Option<u64>,
+        returned: u64,
+        raw_error: u32,
+    ) -> LastErrorMeaning {
+        // CREATE_ALWAYS (2) / OPEN_ALWAYS (4) は成功時も ERROR_ALREADY_EXISTS を設定する
+        if matches!(function, "CreateFileA" | "CreateFileW") {
+            // DWORD の引数: 32 ビットに収まらない値は決め手にならない
+            return match input("dwCreationDisposition").and_then(|v| u32::try_from(v).ok()) {
+                Some(2 | 4) => LastErrorMeaning::Always,
+                Some(_) => LastErrorMeaning::WhenReturnIsInvalidHandle,
+                None => LastErrorMeaning::DependsOnInputs,
+            };
+        }
+        // 名前付きオブジェクトの作成は、既存のものを開いた成功で ERROR_ALREADY_EXISTS
+        // (183) を設定する。名前の無い作成の成功では LastError は残留値
+        if matches!(
+            function,
+            "CreateMutexW" | "CreateMutexExW" | "CreateEventW" | "CreateEventExW" | "CreateSemaphoreW"
+        ) {
+            if returned == 0 {
+                return LastErrorMeaning::Always;
+            }
+            return match input("lpName") {
+                Some(0) => LastErrorMeaning::Never,
+                Some(_) if raw_error == ERROR_ALREADY_EXISTS => LastErrorMeaning::Always,
+                Some(_) | None => LastErrorMeaning::DependsOnInputs,
+            };
+        }
+        LastErrorMeaning::DependsOnInputs
+    }
+
     /// 戻り値の生値に対して、この API の LastError 生値が意味を持つか。
     /// `return_value` は leave Schema の `return` フィールドの生値
     /// （HANDLE は U64、BOOL は I32 の生値として u64 へ写したもの）。
@@ -290,6 +328,140 @@ impl LastErrorMeaning {
                     || return_value == 0x0000_0000_ffff_ffff
             }
         }
+    }
+}
+
+/// ReadFile などがメッセージの一部だけを読んだときの LastError (部分データは有効で、残りは
+/// 次の呼び出しで読める: Microsoft の ReadFile の説明)
+/// 名前付きオブジェクトが既にあった (成功時にも設定される)
+pub const ERROR_ALREADY_EXISTS: u32 = 183;
+pub const ERROR_MORE_DATA: u32 = 234;
+/// OVERLAPPED 操作が開始したがまだ完了していない
+pub const ERROR_IO_PENDING: u32 = 997;
+
+/// 呼び出し後に取る出力が「どの結果なら定義されるか」（FieldDef.flags の bit12..=14）。
+///
+/// [`CaptureTiming`] は「いつ取るか」で、これは「どの結果なら値があるか」。NotApplicable
+/// （この結果では値が定義されない）と書けるのは、この条件がそのイベントの実際の結果で
+/// 偽になるときだけ（7c5a553 レビュー P2-1: 取得時期が After であることだけを根拠に、
+/// 正常に戻った関数の戻り値まで NotApplicable として受理した）。条件は同じイベントの
+/// `return` / `last_error` / `dequeuedOverlapped` フィールドの値で評価する ([`ResultFacts`])。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OutputCondition {
+    /// 未指定。NotApplicable は認めない (条件を宣言していないので)
+    Unspecified,
+    /// どの結果でも定義される
+    Always,
+    /// 戻り値が非 0 (TRUE) のときだけ
+    WhenReturnIsTrue,
+    /// 戻り値が非 0、または LastError が ERROR_MORE_DATA (部分データ) のとき
+    WhenReturnIsTrueOrMoreData,
+    /// 保留 (FALSE + ERROR_IO_PENDING) でなければ定義される
+    WhenNotPending,
+    /// 完了ポートからパケットを取り出したとき (戻り値が非 0、または取り出した
+    /// OVERLAPPED が非 NULL: GetQueuedCompletionStatus)
+    WhenPacketDequeued,
+}
+
+pub const OUTPUT_CONDITION_SHIFT: u32 = 12;
+pub const OUTPUT_CONDITION_MASK: u32 = 0b111 << OUTPUT_CONDITION_SHIFT;
+
+impl OutputCondition {
+    pub fn from_flags(flags: u32) -> Self {
+        match (flags & OUTPUT_CONDITION_MASK) >> OUTPUT_CONDITION_SHIFT {
+            1 => Self::Always,
+            2 => Self::WhenReturnIsTrue,
+            3 => Self::WhenReturnIsTrueOrMoreData,
+            4 => Self::WhenNotPending,
+            5 => Self::WhenPacketDequeued,
+            _ => Self::Unspecified,
+        }
+    }
+    pub fn flags(self) -> u32 {
+        let v = match self {
+            Self::Unspecified => 0,
+            Self::Always => 1,
+            Self::WhenReturnIsTrue => 2,
+            Self::WhenReturnIsTrueOrMoreData => 3,
+            Self::WhenNotPending => 4,
+            Self::WhenPacketDequeued => 5,
+        };
+        v << OUTPUT_CONDITION_SHIFT
+    }
+
+    /// この結果で出力が定義されるか。判定に要る値が記録にない (取れていない) なら None
+    pub fn defined(self, facts: &ResultFacts) -> Option<bool> {
+        match self {
+            Self::Unspecified | Self::Always => Some(true),
+            Self::WhenReturnIsTrue => facts.ret.map(|r| r != 0),
+            Self::WhenReturnIsTrueOrMoreData => match facts.ret? {
+                0 => facts.last_error.map(|e| e == ERROR_MORE_DATA),
+                _ => Some(true),
+            },
+            Self::WhenNotPending => match facts.ret? {
+                0 => facts.last_error.map(|e| e != ERROR_IO_PENDING),
+                _ => Some(true),
+            },
+            Self::WhenPacketDequeued => match facts.ret? {
+                0 => facts.dequeued.map(|o| o != 0),
+                _ => Some(true),
+            },
+        }
+    }
+}
+
+/// 結果を決めるフィールドの位置 (Schema の登録時に名前から一度だけ決める)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FieldRoles {
+    ret: Option<usize>,
+    last_error: Option<usize>,
+    dequeued: Option<usize>,
+}
+
+/// GetQueuedCompletionStatus の leave で、取り出した OVERLAPPED の値を持つフィールドの名前
+pub const DEQUEUED_OVERLAPPED_FIELD: &str = "dequeuedOverlapped";
+
+impl FieldRoles {
+    pub fn of(fields: &[crate::proto::FieldDef]) -> Self {
+        let at = |name: &str| fields.iter().position(|f| f.name == name);
+        FieldRoles {
+            ret: at("return"),
+            last_error: at("last_error"),
+            dequeued: at(DEQUEUED_OVERLAPPED_FIELD),
+        }
+    }
+}
+
+/// 一つのイベントの実際の結果 (取得できた値だけ: Captured でない値は事実に使わない)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ResultFacts {
+    /// 戻り値の生値 (BOOL / I32 は符号拡張: 取得側の `a0 as u64` と同じ)
+    pub ret: Option<u64>,
+    pub last_error: Option<u32>,
+    pub dequeued: Option<u64>,
+}
+
+impl ResultFacts {
+    /// `values[i]` = (取得状態, スカラーの生値)
+    pub fn of(roles: FieldRoles, values: &[(ValueCapture, Option<u64>)]) -> Self {
+        let get = |i: Option<usize>| -> Option<u64> {
+            match values.get(i?)? {
+                (ValueCapture::Captured, v) => *v,
+                _ => None,
+            }
+        };
+        ResultFacts {
+            ret: get(roles.ret),
+            last_error: get(roles.last_error).and_then(|v| u32::try_from(v).ok()),
+            dequeued: get(roles.dequeued),
+        }
+    }
+
+    /// 復号済みの値列から
+    pub fn of_values(roles: FieldRoles, values: &[CapturedValue]) -> Self {
+        let raw: Vec<(ValueCapture, Option<u64>)> =
+            values.iter().map(|v| (v.capture, v.value.scalar_bits())).collect();
+        Self::of(roles, &raw)
     }
 }
 
@@ -368,6 +540,25 @@ impl From<TypedValue<Generic>> for TypedValue {
 }
 
 impl<H: Holds> TypedValue<H> {
+    /// 結果の判定に使う整数の生値 (I32 は符号拡張、Bool は 0/1)。整数でない変種は None
+    pub fn scalar_bits(&self) -> Option<u64> {
+        match self {
+            Self::I32(x) => Some(i64::from(*x) as u64),
+            Self::I64(x) => Some(*x as u64),
+            Self::U32(x) => Some(u64::from(*x)),
+            Self::U64(x) => Some(*x),
+            Self::Bool(b) => Some(u64::from(*b)),
+            Self::F32Bits(_)
+            | Self::F64Bits(_)
+            | Self::Str(_)
+            | Self::Str16(_)
+            | Self::Bytes(_)
+            | Self::BlobRef(_)
+            | Self::Ptr32(_)
+            | Self::Ptr64(_) => None,
+        }
+    }
+
     pub fn ty(&self) -> Ty {
         match self {
             Self::I32(_) => Ty::I32,
@@ -408,36 +599,47 @@ pub enum ValueCapture {
 }
 
 impl ValueCapture {
-    /// この取得状態が、`flags` を持つフィールドについて「取得すべき値を取得できた」と言えるか。
+    /// この取得状態が、`flags` を持つフィールドについて、実際の結果 `facts` のもとで
+    /// 「取得すべき値を取得できた」と言えるか。
     ///
     /// Stale と NotApplicable は「その結果では値が定義されない」ことの表明であり、
-    /// それが許されるフィールドは Schema が宣言する (2026-11-19 レビュー #4/#5):
-    /// - Stale は LastError の意味条件を宣言したフィールドだけ (条件のない
-    ///   Unspecified と、常に意味を持つ Always では、古い値はあり得ない)。
-    /// - NotApplicable は呼び出し後に取る出力 (After / Completion / Both) だけ。
-    ///   入力は結果によらず定義されている。
-    ///
-    /// これ以外のフィールドに付いた Stale / NotApplicable は取得失敗と同じく数える
-    /// (必須の入力に Stale と書いて Complete を名乗れないように)。
-    pub fn is_complete_for(self, flags: u32) -> bool {
+    /// 宣言だけでなく実際の結果と照合する (7c5a553 レビュー P2-1):
+    /// - Stale は LastError の意味条件を宣言したフィールドで、その条件が実際の戻り値で
+    ///   偽のときだけ (戻り値が FALSE なのに Stale と書いた LastError は取得失敗と同じ)。
+    ///   戻り値が取れていない記録では古い値だと示せないので数えない。DependsOnInputs は
+    ///   戻り値で言える必要条件 (呼び出しが成功している) だけをここで見る。
+    /// - NotApplicable は呼び出し後に取る出力 (After / Completion / Both) で、
+    ///   [`OutputCondition`] が実際の結果で偽のときだけ。
+    pub fn is_complete_given(self, flags: u32, facts: &ResultFacts) -> bool {
         // 変種を足したら、ここで完全性に数えるかを決めるまでコンパイルが通らない
         match self {
             Self::Captured => true,
             Self::Stale => match LastErrorMeaning::from_flags(flags) {
                 LastErrorMeaning::Unspecified | LastErrorMeaning::Always => false,
-                LastErrorMeaning::WhenReturnIsFalse
+                // 戻り値だけで言える必要条件: 入力で決まる条件はどれも、呼び出しの失敗
+                // (NULL / INVALID_HANDLE_VALUE / FALSE) では LastError に意味を持たせる。
+                // 入力まで照らした判定は enter と組にできる conformance
+                // (`last-error-inputs`) が [`LastErrorMeaning::resolve_inputs`] で行う
+                | LastErrorMeaning::DependsOnInputs => facts.ret.is_some_and(|r| {
+                    !LastErrorMeaning::WhenReturnIsNullOrInvalidHandle.is_meaningful(r)
+                }),
+                m @ (LastErrorMeaning::WhenReturnIsFalse
                 | LastErrorMeaning::WhenReturnIsInvalidHandle
                 | LastErrorMeaning::WhenReturnIsNull
                 | LastErrorMeaning::Never
                 | LastErrorMeaning::WhenReturnIsMinusOne
                 | LastErrorMeaning::WhenReturnIsNotNull
-                | LastErrorMeaning::DependsOnInputs
-                | LastErrorMeaning::WhenReturnIsNullOrInvalidHandle => true,
+                | LastErrorMeaning::WhenReturnIsNullOrInvalidHandle) => {
+                    facts.ret.is_some_and(|r| !m.is_meaningful(r))
+                }
             },
-            Self::NotApplicable => match CaptureTiming::from_flags(flags) {
-                CaptureTiming::Unspecified | CaptureTiming::Before => false,
-                CaptureTiming::After | CaptureTiming::Completion | CaptureTiming::Both => true,
-            },
+            Self::NotApplicable => {
+                let after = match CaptureTiming::from_flags(flags) {
+                    CaptureTiming::Unspecified | CaptureTiming::Before => false,
+                    CaptureTiming::After | CaptureTiming::Completion | CaptureTiming::Both => true,
+                };
+                after && OutputCondition::from_flags(flags).defined(facts) == Some(false)
+            }
             Self::Unreadable | Self::Truncated | Self::Unsupported | Self::LimitExceeded => false,
         }
     }
@@ -560,11 +762,16 @@ pub fn schema_types(def: &SchemaDef) -> Option<Vec<Ty>> {
 pub struct FieldShapes<'a> {
     types: &'a [Ty],
     flags: &'a [u32],
+    roles: FieldRoles,
 }
 
 impl<'a> FieldShapes<'a> {
     pub fn types(self) -> &'a [Ty] {
         self.types
+    }
+    /// 結果を決めるフィールドの位置 (Stale / NotApplicable の照合に使う)
+    pub fn roles(self) -> FieldRoles {
+        self.roles
     }
     pub fn iter(self) -> impl Iterator<Item = (Ty, u32)> + 'a {
         self.types.iter().copied().zip(self.flags.iter().copied())
@@ -578,6 +785,7 @@ pub struct SchemaRegistry {
     order: Vec<u32>,
     types_by_id: std::collections::HashMap<u32, Vec<Ty>>,
     flags_by_id: std::collections::HashMap<u32, Vec<u32>>,
+    roles_by_id: std::collections::HashMap<u32, FieldRoles>,
 }
 
 impl SchemaRegistry {
@@ -611,6 +819,8 @@ impl SchemaRegistry {
             self.types_by_id.insert(def.schema_id, types);
             self.flags_by_id
                 .insert(def.schema_id, def.fields.iter().map(|f| f.flags).collect());
+            self.roles_by_id
+                .insert(def.schema_id, FieldRoles::of(&def.fields));
         }
         self.order.push(def.schema_id);
         self.by_id.insert(def.schema_id, def);
@@ -631,6 +841,7 @@ impl SchemaRegistry {
         Some(FieldShapes {
             types: self.types_by_id.get(&schema_id)?,
             flags: self.flags_by_id.get(&schema_id)?,
+            roles: self.roles_by_id.get(&schema_id).copied().unwrap_or_default(),
         })
     }
     pub fn len(&self) -> usize {
@@ -848,33 +1059,150 @@ mod tests {
             CaptureTiming::Completion,
             CaptureTiming::Both,
         ];
+        let conditions = [
+            OutputCondition::Unspecified,
+            OutputCondition::Always,
+            OutputCondition::WhenReturnIsTrue,
+            OutputCondition::WhenReturnIsTrueOrMoreData,
+            OutputCondition::WhenNotPending,
+            OutputCondition::WhenPacketDequeued,
+        ];
+        let mut facts = vec![ResultFacts::default()];
+        for ret in [None, Some(0), Some(1), Some(u64::MAX)] {
+            for last_error in [None, Some(0), Some(ERROR_MORE_DATA), Some(ERROR_IO_PENDING), Some(5)] {
+                for dequeued in [None, Some(0), Some(0x1000)] {
+                    facts.push(ResultFacts { ret, last_error, dequeued });
+                }
+            }
+        }
         for code in 0..=u8::MAX {
             let Some(capture) = ValueCapture::from_code(code) else {
                 continue;
             };
             for m in meanings {
                 for t in timings {
-                    let flags = m.flags() | t.flags() | ValueKind::Scalar.flags();
-                    let want = match capture {
-                        ValueCapture::Captured => true,
-                        ValueCapture::Stale => {
-                            !matches!(m, LastErrorMeaning::Unspecified | LastErrorMeaning::Always)
+                    for c in conditions {
+                        for f in &facts {
+                            let flags = m.flags() | t.flags() | c.flags() | ValueKind::Scalar.flags();
+                            let got = capture.is_complete_given(flags, f);
+                            match capture {
+                                ValueCapture::Captured => assert!(got),
+                                // 古い値と言えるのは、宣言した条件が実際の戻り値で偽のときだけ
+                                // (DependsOnInputs は入力で決まるので、戻り値で言える必要条件だけ)
+                                ValueCapture::Stale => assert_eq!(
+                                    got,
+                                    match m {
+                                        LastErrorMeaning::Unspecified | LastErrorMeaning::Always => false,
+                                        LastErrorMeaning::DependsOnInputs => f.ret.is_some_and(|r| {
+                                            !LastErrorMeaning::WhenReturnIsNullOrInvalidHandle.is_meaningful(r)
+                                        }),
+                                        LastErrorMeaning::WhenReturnIsFalse
+                                        | LastErrorMeaning::WhenReturnIsInvalidHandle
+                                        | LastErrorMeaning::WhenReturnIsNull
+                                        | LastErrorMeaning::Never
+                                        | LastErrorMeaning::WhenReturnIsMinusOne
+                                        | LastErrorMeaning::WhenReturnIsNotNull
+                                        | LastErrorMeaning::WhenReturnIsNullOrInvalidHandle => {
+                                            f.ret.is_some_and(|r| !m.is_meaningful(r))
+                                        }
+                                    },
+                                    "{m:?} {f:?}"
+                                ),
+                                // 値がないと言えるのは、呼び出し後の出力で、その結果では定義されないときだけ
+                                ValueCapture::NotApplicable => assert_eq!(
+                                    got,
+                                    matches!(t, CaptureTiming::After | CaptureTiming::Completion | CaptureTiming::Both)
+                                        && c.defined(f) == Some(false),
+                                    "{t:?} {c:?} {f:?}"
+                                ),
+                                ValueCapture::Unreadable
+                                | ValueCapture::Truncated
+                                | ValueCapture::Unsupported
+                                | ValueCapture::LimitExceeded => assert!(!got),
+                            }
                         }
-                        ValueCapture::NotApplicable => {
-                            !matches!(t, CaptureTiming::Unspecified | CaptureTiming::Before)
-                        }
-                        ValueCapture::Unreadable
-                        | ValueCapture::Truncated
-                        | ValueCapture::Unsupported
-                        | ValueCapture::LimitExceeded => false,
-                    };
-                    assert_eq!(
-                        capture.is_complete_for(flags),
-                        want,
-                        "{capture:?} {m:?} {t:?}"
-                    );
+                    }
                 }
             }
+        }
+    }
+
+    /// 7c5a553 レビュー P2-1 の組み合わせ (CloseHandle の leave): 戻り値が FALSE なのに Stale と
+    /// 書いた LastError、正常に戻った関数の戻り値そのものを NotApplicable と書いたもの
+    #[test]
+    fn input_dependent_last_error_is_resolved_from_the_enter() {
+        let none = |_: &str| None;
+        let disp = |d: u64| move |n: &str| (n == "dwCreationDisposition").then_some(d);
+        let r = |f, i: &dyn Fn(&str) -> Option<u64>, ret, e| LastErrorMeaning::resolve_inputs(f, i, ret, e);
+        for f in ["CreateFileW", "CreateFileA"] {
+            for d in 0..8u64 {
+                let want = if matches!(d, 2 | 4) {
+                    LastErrorMeaning::Always
+                } else {
+                    LastErrorMeaning::WhenReturnIsInvalidHandle
+                };
+                assert_eq!(r(f, &disp(d), 0x1234, 0), want);
+            }
+            assert_eq!(r(f, &disp(u64::MAX), 0x1234, 0), LastErrorMeaning::DependsOnInputs);
+            assert_eq!(r(f, &none, 0x1234, 0), LastErrorMeaning::DependsOnInputs);
+        }
+        let name = |p: u64| move |n: &str| (n == "lpName").then_some(p);
+        for f in ["CreateMutexW", "CreateMutexExW", "CreateEventW", "CreateEventExW", "CreateSemaphoreW"] {
+            assert_eq!(r(f, &name(0), 0, 5), LastErrorMeaning::Always);
+            assert_eq!(r(f, &name(0), 0x10, 0), LastErrorMeaning::Never);
+            assert_eq!(r(f, &name(0x99), 0x10, ERROR_ALREADY_EXISTS), LastErrorMeaning::Always);
+            assert_eq!(r(f, &name(0x99), 0x10, 0), LastErrorMeaning::DependsOnInputs);
+            assert_eq!(r(f, &none, 0x10, 0), LastErrorMeaning::DependsOnInputs);
+        }
+        assert_eq!(r("OpenFile", &disp(1), 0x10, 0), LastErrorMeaning::DependsOnInputs);
+        // leave 単体の検査は、戻り値で言える必要条件だけを見る
+        let flags = LastErrorMeaning::DependsOnInputs.flags();
+        let facts = |ret| ResultFacts { ret, ..ResultFacts::default() };
+        assert!(ValueCapture::Stale.is_complete_given(flags, &facts(Some(0x1234))));
+        for failed in [0, u64::MAX, 0xffff_ffff] {
+            assert!(!ValueCapture::Stale.is_complete_given(flags, &facts(Some(failed))));
+        }
+        assert!(!ValueCapture::Stale.is_complete_given(flags, &facts(None)));
+    }
+
+    #[test]
+    fn stale_and_not_applicable_are_checked_against_the_actual_result() {
+        let last_error = LastErrorMeaning::WhenReturnIsFalse.flags() | CaptureTiming::After.flags();
+        let failed = ResultFacts { ret: Some(0), last_error: Some(6), dequeued: None };
+        let ok = ResultFacts { ret: Some(1), last_error: Some(6), dequeued: None };
+        assert!(!ValueCapture::Stale.is_complete_given(last_error, &failed));
+        assert!(ValueCapture::Stale.is_complete_given(last_error, &ok));
+        assert!(!ValueCapture::Stale.is_complete_given(last_error, &ResultFacts::default()));
+        let ret = CaptureTiming::After.flags() | ValueKind::Scalar.flags();
+        assert!(!ValueCapture::NotApplicable.is_complete_given(ret, &ok));
+        assert!(!ValueCapture::NotApplicable.is_complete_given(ret, &failed));
+        // ReadFile の data: 部分読み取り (FALSE + ERROR_MORE_DATA) では値がある
+        let data = CaptureTiming::After.flags() | OutputCondition::WhenReturnIsTrueOrMoreData.flags();
+        let more = ResultFacts { ret: Some(0), last_error: Some(ERROR_MORE_DATA), dequeued: None };
+        assert!(!ValueCapture::NotApplicable.is_complete_given(data, &more));
+        assert!(ValueCapture::NotApplicable.is_complete_given(data, &failed));
+        // GetQueuedCompletionStatus: FALSE でも OVERLAPPED を取り出したなら値がある
+        let gqcs = CaptureTiming::After.flags() | OutputCondition::WhenPacketDequeued.flags();
+        let failed_io = ResultFacts { ret: Some(0), last_error: Some(38), dequeued: Some(0x1000) };
+        let none = ResultFacts { ret: Some(0), last_error: Some(258), dequeued: Some(0) };
+        assert!(!ValueCapture::NotApplicable.is_complete_given(gqcs, &failed_io));
+        assert!(ValueCapture::NotApplicable.is_complete_given(gqcs, &none));
+        assert!(!ValueCapture::NotApplicable.is_complete_given(gqcs, &ResultFacts { dequeued: None, ..none }));
+    }
+
+    #[test]
+    fn output_condition_flags_round_trip_and_stay_in_their_bits() {
+        for c in [
+            OutputCondition::Unspecified,
+            OutputCondition::Always,
+            OutputCondition::WhenReturnIsTrue,
+            OutputCondition::WhenReturnIsTrueOrMoreData,
+            OutputCondition::WhenNotPending,
+            OutputCondition::WhenPacketDequeued,
+        ] {
+            assert_eq!(OutputCondition::from_flags(c.flags()), c);
+            assert_eq!(c.flags() & !OUTPUT_CONDITION_MASK, 0);
+            assert_eq!(c.flags() & (VALUE_KIND_MASK | CAPTURE_TIMING_MASK | LAST_ERROR_MEANING_MASK), 0);
         }
     }
 

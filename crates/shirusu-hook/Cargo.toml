@@ -28,6 +28,8 @@ cc = "1"
 
 [dev-dependencies]
 proptest = "1"
+shirusu-analysis = { path = "../shirusu-analysis" }
+shirusu-conformance = { path = "../shirusu-conformance" }
 
 [lints]
 workspace = true

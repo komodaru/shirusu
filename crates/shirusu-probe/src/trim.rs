@@ -22,12 +22,11 @@
 
 use crate::select::involved_calls;
 use shirusu_compare::{compare_traces, Candidate, NormTrace};
-use shirusu_trace::compact::decode_values;
 use shirusu_trace::error::TraceError;
-use shirusu_trace::model::{EventBatch, PayloadRef};
+use shirusu_trace::model::EventBatch;
 use shirusu_trace::proto::{integrity_level, CaptureEnvironment, SessionMetadata};
 use shirusu_trace::reader::ReadTrace;
-use shirusu_trace::schema::TypedValue;
+use shirusu_trace::refs::EventBlobRefs;
 use shirusu_trace::writer::{FinalizationInfo, TraceWriter};
 use shirusu_trace::BlobId;
 use std::collections::HashSet;
@@ -82,23 +81,19 @@ pub fn trim_trace(
                 if e.schema_id != 0 && !used_schemas.contains(&e.schema_id) {
                     used_schemas.push(e.schema_id);
                 }
-                if let PayloadRef::Blob(id) = &e.payload {
-                    if seen_blob.insert(*id) {
-                        blob_ids.push(*id);
-                    }
+                // Payload と引数の BlobRef の両方 (shirusu_trace::refs)。引数値列が読めず参照を
+                // 列挙しきれないイベントは、内容を落とさない側へ倒してファイルの Blob をすべて残す
+                // (repair と同じ扱い)
+                let refs = e.blob_refs(&source.registry);
+                let mut ids: Vec<BlobId> = refs.known().iter().map(|u| u.id).collect();
+                if let EventBlobRefs::Partial { .. } = refs {
+                    let mut all: Vec<BlobId> = source.blobs.keys().copied().collect();
+                    all.sort();
+                    ids.extend(all);
                 }
-                // 引数値列の中の BlobRef も解決可能な状態で残す。
-                if let (Some(types), Some(args)) =
-                    (source.registry.types(e.schema_id), e.args.as_deref())
-                {
-                    if let Ok(values) = decode_values(&types, args) {
-                        for v in values {
-                            if let TypedValue::BlobRef(id) = v.value {
-                                if seen_blob.insert(id) {
-                                    blob_ids.push(id);
-                                }
-                            }
-                        }
+                for id in ids {
+                    if seen_blob.insert(id) {
+                        blob_ids.push(id);
                     }
                 }
             }
@@ -208,7 +203,7 @@ pub fn verify_trimmed(left: &ReadTrace, right: &ReadTrace, original: &Candidate)
 mod tests {
     use super::*;
     use shirusu_trace::container::FileHeader;
-    use shirusu_trace::model::TraceEvent;
+    use shirusu_trace::model::{PayloadRef, TraceEvent};
     use shirusu_trace::proto::Finalization;
     use shirusu_trace::schema::{make_schema, EventCapture, SchemaRegistry, Ty};
 

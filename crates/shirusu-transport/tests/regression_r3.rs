@@ -34,7 +34,7 @@ fn concurrent_reclaim_claim_never_reissues_generation() {
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
-                    if let Some(h) = pool.claim(100 + t) {
+                    if let Some(h) = pool.claim(100 + t).map(shirusu_transport::slot::SlotClaim::confirm) {
                         break h;
                     }
                     std::thread::yield_now();

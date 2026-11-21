@@ -48,15 +48,20 @@ enum CaptureOp {
         address: usize,
         length: usize,
     },
+    /// 結果の種類 (IoOutcome) は戻り値 `returns` と LastError `last_error` から決める
+    /// (7c5a553 レビュー P1-3: 成否だけでは ERROR_MORE_DATA の部分データを表せない)
     OutputCount {
         address: usize,
+        returns: usize,
+        last_error: usize,
         asynchronous: usize,
     },
     OutputBuffer {
         address: usize,
         capacity: usize,
         count_field: usize,
-        success: usize,
+        returns: usize,
+        last_error: usize,
         asynchronous: usize,
     },
     LastError {
@@ -217,6 +222,13 @@ fn capture_function(api: &Api, leave: bool) -> Result<String, String> {
             .first()
             .is_some_and(|f| matches!(f.capture, CaptureOp::Scalar { arg } if arg == index))
     };
+    // 結果の分類に使う LastError は、leave の last_error フィールドと同じ引数
+    let last_error_is = |index: usize| {
+        api.leave.iter().any(|f| {
+            f.name == "last_error"
+                && matches!(f.capture, CaptureOp::LastError { arg, .. } | CaptureOp::LastErrorWithInput { arg, .. } if arg == index)
+        })
+    };
     let needs_memory = fields.iter().any(|f| {
         matches!(
             f.capture,
@@ -274,37 +286,46 @@ fn capture_function(api: &Api, leave: bool) -> Result<String, String> {
             }
             CaptureOp::OutputCount {
                 address,
+                returns,
+                last_error,
                 asynchronous,
             } => {
                 if !leave
                     || field.ty != "U32"
                     || !arg_is(address, "u64")
+                    || !arg_is(returns, "i32")
+                    || !return_is(returns)
+                    || !arg_is(last_error, "u32")
+                    || !last_error_is(last_error)
                     || !arg_is(asynchronous, "bool")
                 {
                     return Err(bad());
                 }
-                format!("read_io_count(mem, a{address}, a{asynchronous})")
+                format!("read_io_count(mem, a{address}, IoOutcome::classify(a{returns}, a{last_error}), a{asynchronous})")
             }
             CaptureOp::OutputBuffer {
                 address,
                 capacity,
                 count_field,
-                success,
+                returns,
+                last_error,
                 asynchronous,
             } => {
                 if !leave
                     || field.ty != "Bytes"
                     || !arg_is(address, "u64")
                     || !arg_is(capacity, "u32")
-                    || !arg_is(success, "i32")
-                    || !return_is(success)
+                    || !arg_is(returns, "i32")
+                    || !return_is(returns)
+                    || !arg_is(last_error, "u32")
+                    || !last_error_is(last_error)
                     || !arg_is(asynchronous, "bool")
                     || count_field >= i
-                    || !matches!(fields[count_field].capture, CaptureOp::OutputCount { asynchronous: a, .. } if a == asynchronous)
+                    || !matches!(fields[count_field].capture, CaptureOp::OutputCount { asynchronous: a, returns: r, last_error: e, .. } if a == asynchronous && r == returns && e == last_error)
                 {
                     return Err(bad());
                 }
-                format!("read_io_output(mem, a{success}, a{address}, a{capacity}, &v{count_field}, a{asynchronous})")
+                format!("read_io_output(mem, IoOutcome::classify(a{returns}, a{last_error}), a{address}, a{capacity}, &v{count_field}, a{asynchronous})")
             }
             CaptureOp::LastErrorWithInput {
                 arg,

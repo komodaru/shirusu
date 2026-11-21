@@ -20,7 +20,7 @@
 use crate::{IntegrityLevel, IntegrityReport, LossEvent};
 use shirusu_api_catalog::api as hook_api;
 use shirusu_trace::compact::validate_values_completeness;
-use shirusu_trace::error::Result as TraceResult;
+use shirusu_trace::error::{Result as TraceResult, TraceError};
 use shirusu_trace::model::{EventBatch, PayloadLossReason, PayloadRef, TraceEvent};
 use shirusu_trace::proto::{
     loss_kind, ApiProfile, CaptureEnvironment, LossRecord, ProfileSummary, SchemaDef,
@@ -132,6 +132,74 @@ pub struct ArgsConversionStats {
     pub args_incomplete: usize,
     /// 引数値列として復号できず Blob として保持した件数。
     pub args_fallback_blob: usize,
+}
+
+/// 1 イベントの引数の扱い (集計の元。保存できたイベントの分だけ数える)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArgsOutcome {
+    Attached { complete: bool },
+    FallbackBlob,
+    NotArgs,
+}
+
+impl ArgsConversionStats {
+    fn of(outcomes: &[ArgsOutcome]) -> Self {
+        let mut stats = Self::default();
+        for o in outcomes {
+            match *o {
+                ArgsOutcome::Attached { complete } => {
+                    stats.args_attached += 1;
+                    stats.args_incomplete += usize::from(!complete);
+                }
+                ArgsOutcome::FallbackBlob => stats.args_fallback_blob += 1,
+                ArgsOutcome::NotArgs => {}
+            }
+        }
+        stats
+    }
+
+    /// 別の集計を足す
+    pub fn absorb(&mut self, other: ArgsConversionStats) {
+        self.args_attached += other.args_attached;
+        self.args_incomplete += other.args_incomplete;
+        self.args_fallback_blob += other.args_fallback_blob;
+    }
+}
+
+/// 全部は書けなかったバッチ。Trace に残った接頭辞の引数集計を持つので、失敗を受けた側が
+/// 保存できた分の集計 (不完全な引数の件数など) を失わない (7c5a553 レビュー P2-3: 以前は
+/// 集計を `?` で捨て、部分書き込みで保存されたイベントの劣化が報告から消えた)。
+/// `TraceError` への `From` は置かない (`?` で集計を落とせないように):
+///
+/// ```compile_fail,E0277
+/// use shirusu_host::trace_convert::{TraceBatchContext, TraceRecorder};
+/// fn forward(
+///     rec: &mut TraceRecorder<Vec<u8>>,
+///     ctx: &TraceBatchContext,
+/// ) -> shirusu_trace::error::Result<()> {
+///     rec.record_owned_batch_with_args(ctx, Vec::new())?;
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug)]
+pub struct BatchWriteError {
+    /// Trace に残ったイベントの集計
+    pub saved: ArgsConversionStats,
+    /// 書けなかったイベント数 (記録モードで間引いたものは含まない)
+    pub unsaved_events: usize,
+    pub error: TraceError,
+}
+
+impl std::fmt::Display for BatchWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} event(s) not written: {}", self.unsaved_events, self.error)
+    }
+}
+
+impl std::error::Error for BatchWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 /// 記録モード（L09、overview「記録モードと性能目標」節）。
@@ -367,8 +435,10 @@ impl<W: DurableWrite> TraceRecorder<W> {
         ctx: &TraceBatchContext,
         events: &[ReceivedEvent],
     ) -> TraceResult<()> {
+        // (引数を写さないので集計は常に空。失敗は TraceError だけで足りる)
         self.record_batch_inner(ctx, events.iter().map(Cow::Borrowed), false, true)
             .map(|_| ())
+            .map_err(|e| e.error)
     }
 
     /// フック由来のイベント列を記録する。Writer に登録済みの Schema を
@@ -381,7 +451,7 @@ impl<W: DurableWrite> TraceRecorder<W> {
         &mut self,
         ctx: &TraceBatchContext,
         events: &[ReceivedEvent],
-    ) -> TraceResult<ArgsConversionStats> {
+    ) -> Result<ArgsConversionStats, BatchWriteError> {
         self.record_batch_inner(ctx, events.iter().map(Cow::Borrowed), true, true)
     }
 
@@ -391,7 +461,7 @@ impl<W: DurableWrite> TraceRecorder<W> {
         &mut self,
         ctx: &TraceBatchContext,
         events: Vec<ReceivedEvent>,
-    ) -> TraceResult<ArgsConversionStats> {
+    ) -> Result<ArgsConversionStats, BatchWriteError> {
         self.record_batch_inner(ctx, events.into_iter().map(Cow::Owned), true, true)
     }
 
@@ -399,7 +469,7 @@ impl<W: DurableWrite> TraceRecorder<W> {
         &mut self,
         ctx: &TraceBatchContext,
         events: Vec<ReceivedEvent>,
-    ) -> TraceResult<ArgsConversionStats> {
+    ) -> Result<ArgsConversionStats, BatchWriteError> {
         self.record_batch_inner(ctx, events.into_iter().map(Cow::Owned), true, false)
     }
 
@@ -409,83 +479,45 @@ impl<W: DurableWrite> TraceRecorder<W> {
         events: impl ExactSizeIterator<Item = Cow<'a, ReceivedEvent>>,
         args_mode: bool,
         compress_events: bool,
-    ) -> TraceResult<ArgsConversionStats> {
-        let mut stats = ArgsConversionStats::default();
+    ) -> Result<ArgsConversionStats, BatchWriteError> {
         if events.len() == 0 {
-            return Ok(stats);
+            return Ok(ArgsConversionStats::default());
         }
         if matches!(self.mode, RecordMode::Profile) {
             for event in events {
                 self.profile.observe(ctx.thread_id, &event);
             }
-            return Ok(stats);
+            return Ok(ArgsConversionStats::default());
         }
+        let mut events = events;
+        // converted[i] の引数の扱い。集計は保存できた接頭辞の分だけ数える (P2-3)
+        let mut outcomes: Vec<ArgsOutcome> = Vec::with_capacity(events.len());
         let mut converted = Vec::with_capacity(events.len());
-        for event in events {
+        while let Some(event) = events.next() {
             let d = event.descriptor;
-            if let RecordMode::Filtered { apis } = &self.mode {
-                if !apis.contains(&d.api_id) {
-                    continue;
+            if !self.keeps(d.api_id) {
+                continue;
+            }
+            match self.convert_event(&event, args_mode) {
+                Ok((e, outcome)) => {
+                    converted.push(e);
+                    outcomes.push(outcome);
+                }
+                Err(error) => {
+                    // 変換の途中で失敗した: このバッチのイベントはどれも書いていない
+                    let rest = events.filter(|e| self.keeps(e.descriptor.api_id)).count();
+                    return Err(BatchWriteError {
+                        saved: ArgsConversionStats::default(),
+                        unsaved_events: converted.len() + 1 + rest,
+                        error,
+                    });
                 }
             }
-            if self.lazy_schemas.is_some() {
-                self.ensure_schema(d.schema_id)?;
-            }
-            let mut args = None;
-            let payload = if d.payload_dropped() {
-                // A72：欠落 Payload にはキーを作らず、理由だけを残す。
-                PayloadRef::Dropped {
-                    original_len: d.payload_len as u64,
-                    reason: payload_loss_reason(&event),
-                }
-            } else if event.payload.is_empty() {
-                PayloadRef::None
-            } else if args_mode && d.schema_id != 0 {
-                match self
-                    .writer
-                    .schema_shape_ref(d.schema_id)
-                    .and_then(|shapes| validate_values_completeness(shapes, &event.payload).ok())
-                {
-                    Some(complete) => {
-                        stats.args_incomplete += usize::from(!complete);
-                        args = Some(event.payload.to_vec());
-                        stats.args_attached += 1;
-                        PayloadRef::None
-                    }
-                    _ => {
-                        // 未登録 Schema、または値列として復号できない
-                        // Payload は Blob として保持する（データを失わない）。
-                        stats.args_fallback_blob += 1;
-                        PayloadRef::Blob(self.writer.add_payload(&event.payload)?)
-                    }
-                }
-            } else {
-                // 格納済み Payload は Blob 化し、ID だけを Trace に残す。
-                // 一時キーはここでも使わない（突き合わせは DrainWorker 側）。
-                PayloadRef::Blob(self.writer.add_payload(&event.payload)?)
-            };
-            converted.push(TraceEvent {
-                kind: d.kind,
-                sequence: d.sequence,
-                timestamp_qpc: d.timestamp_qpc,
-                call_id: d.call_id,
-                parent_call_id: d.parent_call_id,
-                api_id: d.api_id,
-                schema_id: d.schema_id,
-                capture: convert_capture(d.capture_state()),
-                payload,
-                args,
-                // L11: 0 は未割当として None にする（--order=global 無効時）。
-                global_order: if d.global_order == 0 {
-                    None
-                } else {
-                    Some(d.global_order)
-                },
-            });
         }
         if converted.is_empty() {
-            return Ok(stats);
+            return Ok(ArgsConversionStats::default());
         }
+        let total = converted.len();
         let batch = EventBatch {
             session_id: ctx.session_id,
             process_id: ctx.process_id,
@@ -494,12 +526,95 @@ impl<W: DurableWrite> TraceRecorder<W> {
             qpc_frequency: ctx.qpc_frequency,
             events: converted,
         };
-        if compress_events {
-            self.writer.write_batch(&batch)?;
+        let written = if compress_events {
+            self.writer.write_batch(&batch)
         } else {
-            self.writer.write_batch_uncompressed(&batch)?;
+            self.writer.write_batch_uncompressed(&batch)
+        };
+        match written {
+            Ok(()) => Ok(ArgsConversionStats::of(&outcomes)),
+            Err(error) => {
+                // PartialBatch なら written 件の接頭辞が Trace に残っている (それ以外は 0 件)
+                let saved = error.written_events().min(total);
+                Err(BatchWriteError {
+                    saved: ArgsConversionStats::of(outcomes.get(..saved).unwrap_or(&[])),
+                    unsaved_events: total - saved,
+                    error,
+                })
+            }
         }
-        Ok(stats)
+    }
+
+    /// 記録モードがこの API を残すか (Filtered の間引き)
+    fn keeps(&self, api_id: u32) -> bool {
+        match &self.mode {
+            RecordMode::Filtered { apis } => apis.contains(&api_id),
+            RecordMode::Full | RecordMode::Detailed | RecordMode::Profile => true,
+        }
+    }
+
+    /// 1 イベントを Trace のイベントへ。引数の扱いも返す
+    fn convert_event(
+        &mut self,
+        event: &ReceivedEvent,
+        args_mode: bool,
+    ) -> TraceResult<(TraceEvent, ArgsOutcome)> {
+        let d = event.descriptor;
+        if self.lazy_schemas.is_some() {
+            self.ensure_schema(d.schema_id)?;
+        }
+        let mut args = None;
+        let mut outcome = ArgsOutcome::NotArgs;
+        let payload = if d.payload_dropped() {
+            // A72：欠落 Payload にはキーを作らず、理由だけを残す。
+            PayloadRef::Dropped {
+                original_len: d.payload_len as u64,
+                reason: payload_loss_reason(event),
+            }
+        } else if event.payload.is_empty() {
+            PayloadRef::None
+        } else if args_mode && d.schema_id != 0 {
+            match self
+                .writer
+                .schema_shape_ref(d.schema_id)
+                .and_then(|shapes| validate_values_completeness(shapes, &event.payload).ok())
+            {
+                Some(complete) => {
+                    outcome = ArgsOutcome::Attached { complete };
+                    args = Some(event.payload.to_vec());
+                    PayloadRef::None
+                }
+                None => {
+                    // 未登録 Schema、または値列として復号できない
+                    // Payload は Blob として保持する（データを失わない）。
+                    outcome = ArgsOutcome::FallbackBlob;
+                    PayloadRef::Blob(self.writer.add_payload(&event.payload)?)
+                }
+            }
+        } else {
+            // 格納済み Payload は Blob 化し、ID だけを Trace に残す。
+            // 一時キーはここでも使わない（突き合わせは DrainWorker 側）。
+            PayloadRef::Blob(self.writer.add_payload(&event.payload)?)
+        };
+        let converted = TraceEvent {
+            kind: d.kind,
+            sequence: d.sequence,
+            timestamp_qpc: d.timestamp_qpc,
+            call_id: d.call_id,
+            parent_call_id: d.parent_call_id,
+            api_id: d.api_id,
+            schema_id: d.schema_id,
+            capture: convert_capture(d.capture_state()),
+            payload,
+            args,
+            // L11: 0 は未割当として None にする（--order=global 無効時）。
+            global_order: if d.global_order == 0 {
+                None
+            } else {
+                Some(d.global_order)
+            },
+        };
+        Ok((converted, outcome))
     }
 
     /// DrainWorker が集めた LossEvent をまとめて記録する。

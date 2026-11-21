@@ -242,7 +242,7 @@ proptest! {
                     tid += 1;
                     // 影モデル: 先頭の Free を first-fit で取る
                     let expect = shadow.iter().position(|(s, _)| *s == ShadowState::Free);
-                    match (pool.claim(tid), expect) {
+                    match (pool.claim(tid).map(shirusu_transport::slot::SlotClaim::confirm), expect) {
                         (Some(h), Some(idx)) => {
                             prop_assert_eq!(h.index, idx);
                             prop_assert_eq!(h.generation, shadow[idx].1);
@@ -305,6 +305,74 @@ proptest! {
                 }
             }
             prop_assert_eq!(pool.missing_calls(), missing);
+        }
+    }
+
+    /// 7c5a553 レビュー P3: 取り消しは今の claim にしか効かない。同じスレッドが同じ Slot を
+    /// 何度取り直しても (取り消しは Generation を進めない)、取り消しで動くのは消費した claim の
+    /// Slot だけで、確定した Slot と他の未確定の claim は変わらない。
+    #[test]
+    fn cancelling_a_claim_only_frees_that_claim(
+        ops in prop::collection::vec((0u8..4, 0usize..8), 0..80),
+    ) {
+        const N: usize = 2;
+        let pool = SlotPool::new(N);
+        let mut pending: Vec<shirusu_transport::slot::SlotClaim> = Vec::new();
+        let mut confirmed: Vec<SlotHandle> = Vec::new();
+        // 影: Slot ごとの (状態, Generation)
+        let mut shadow: Vec<(ShadowState, u64)> = (0..N).map(|_| (ShadowState::Free, 1)).collect();
+        let mut missing = 0u64;
+        for (op, pick) in ops {
+            match op {
+                0 => {
+                    // スレッド ID は 2 種類だけ: 同じスレッドの取り直しを多く起こす
+                    let tid = 7 + (pick as u64 % 2);
+                    let expect = shadow.iter().position(|(st, _)| *st == ShadowState::Free);
+                    match (pool.claim(tid), expect) {
+                        (Some(c), Some(idx)) => {
+                            prop_assert_eq!(c.index(), idx);
+                            prop_assert_eq!(c.generation(), shadow[idx].1);
+                            shadow[idx].0 = ShadowState::Active;
+                            pending.push(c);
+                        }
+                        (None, None) => missing += 1,
+                        (got, exp) => prop_assert!(false, "claim mismatch: {:?} vs {:?}", got, exp),
+                    }
+                }
+                1 if !pending.is_empty() => {
+                    let c = pending.swap_remove(pick % pending.len());
+                    let idx = c.index();
+                    prop_assert!(pool.cancel_claim(c));
+                    missing += 1;
+                    shadow[idx].0 = ShadowState::Free;
+                }
+                2 if !pending.is_empty() => {
+                    confirmed.push(pending.swap_remove(pick % pending.len()).confirm());
+                }
+                3 if !confirmed.is_empty() => {
+                    // 確定した Slot は DETACH → 終了確認 → 回収で空く (Generation が進む)
+                    let h = confirmed.swap_remove(pick % confirmed.len());
+                    prop_assert!(pool.begin_detach(&h));
+                    prop_assert!(pool.host_confirm_ended_and_drained(&h, true, true));
+                    prop_assert!(pool.host_reclaim(&h));
+                    shadow[h.index] = (ShadowState::Free, shadow[h.index].1 + 1);
+                }
+                _ => {}
+            }
+            for (idx, (st, gen)) in shadow.iter().enumerate() {
+                let want = match st {
+                    ShadowState::Free => SlotState::Free,
+                    ShadowState::Active => SlotState::Active,
+                    ShadowState::Draining => SlotState::Draining,
+                    ShadowState::Reclaimable => SlotState::Reclaimable,
+                };
+                prop_assert_eq!(pool.slot(idx).state(), want, "slot {}", idx);
+                prop_assert_eq!(pool.slot(idx).generation(), *gen, "slot {}", idx);
+            }
+            prop_assert_eq!(pool.missing_calls(), missing);
+        }
+        for c in pending {
+            prop_assert!(pool.cancel_claim(c));
         }
     }
 

@@ -251,7 +251,7 @@ fn c08_loss_counters_read_during_concurrent_updates_stay_monotonic() {
 fn c09_detach_does_not_reuse_until_host_confirms() {
     // 転送層での再現。実 DLL_THREAD_DETACH 版は e2e で扱う。
     let pool = SlotPool::new(1);
-    let h = pool.claim(555).unwrap();
+    let h = pool.claim(555).unwrap().confirm();
     assert!(pool.begin_detach(&h));
     assert_eq!(pool.slot(h.index).state(), SlotState::Draining);
     // DETACH 後の呼出は記録せず欠落カウント
@@ -261,7 +261,7 @@ fn c09_detach_does_not_reuse_until_host_confirms() {
     assert!(pool.claim(777).is_none());
     assert!(pool.host_confirm_ended_and_drained(&h, true, true));
     assert!(pool.host_reclaim(&h));
-    let h2 = pool.claim(777).unwrap();
+    let h2 = pool.claim(777).unwrap().confirm();
     assert_eq!(h2.generation, h.generation + 1);
 }
 
@@ -280,8 +280,8 @@ fn c10_host_killed_agent_continues_passthrough() {
 fn c11_host_stops_during_mapping_expansion_existing_rings_continue() {
     let pool = SlotPool::with_low_watermark(3, 2);
     let (_r, mut w, mut rd) = mk(8, 256, true);
-    pool.claim(1).unwrap();
-    pool.claim(2).unwrap(); // free 1 < low watermark 2 -> expansion request
+    pool.claim(1).unwrap().confirm();
+    pool.claim(2).unwrap().confirm(); // free 1 < low watermark 2 -> expansion request
     assert!(pool.take_expansion_request());
     // Host が止まって拡張が来なくても、既存 Ring では記録を続けられる
     let monitor = HostMonitor::new(|| false);

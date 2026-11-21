@@ -78,12 +78,15 @@ pub struct FieldView {
     pub flags: u32,
     pub capture: ValueCapture,
     pub value: TypedValue,
+    /// 取得すべき値を取得できたか。同じイベントの実際の結果 (戻り値・LastError) と照合した
+    /// 答え (`ValueCapture::is_complete_given`)。復号の時に一度だけ決める
+    pub complete: bool,
 }
 
 impl FieldView {
-    /// 取得すべき値を取得できたか (`ValueCapture::is_complete_for`)。
+    /// 取得すべき値を取得できたか (同じイベントの結果と照合済み)。
     pub fn is_complete(&self) -> bool {
-        self.capture.is_complete_for(self.flags)
+        self.complete
     }
 }
 
@@ -571,7 +574,7 @@ pub struct IntegritySummary {
     pub degraded_events: u64,
     /// Reader が記録した回復 issue の件数（種別ごとの内訳つき）。
     pub recovery_issues: Vec<String>,
-    /// 参照先 Blob がファイル内に無いイベント数。
+    /// 参照先 Blob がファイル内に無い参照の数 (イベントごとに Blob の重複を除く; Payload と引数の両方)。
     pub missing_blob_refs: u64,
     pub index_matches_scan: bool,
     pub has_stored_index: bool,
@@ -593,7 +596,7 @@ impl IntegrityCounts {
         &mut self,
         registry: &SchemaRegistry,
         e: &TraceEvent,
-        blob_present: impl FnOnce(&BlobId) -> bool,
+        blob_present: impl Fn(&BlobId) -> bool,
     ) {
         self.events += 1;
         if let PayloadRef::Dropped { original_len, .. } = &e.payload {
@@ -611,11 +614,14 @@ impl IntegrityCounts {
         if e.capture != EventCapture::Captured || !values_complete {
             self.degraded_events += 1;
         }
-        if let PayloadRef::Blob(id) = &e.payload {
-            if !blob_present(id) {
-                self.missing_blob_refs += 1;
-            }
-        }
+        // Payload と引数の BlobRef の両方 (shirusu_trace::refs; 7c5a553 レビュー P1-1 は
+        // 引数側を数えず、引数の Blob を失った修復結果を Complete とした)
+        // (一つのイベントの中で同じ Blob は 1 件: stream.rs の集計と同じ数え方)
+        let mut missing: Vec<BlobId> =
+            e.blob_refs(registry).missing(&blob_present).map(|u| u.id).collect();
+        missing.sort();
+        missing.dedup();
+        self.missing_blob_refs += missing.len() as u64;
     }
 }
 
@@ -728,33 +734,210 @@ impl IntegritySummary {
         }
     }
 
-    pub fn is_complete(&self) -> bool {
-        self.finalized_cleanly
-            && self.has_finalization
-            && !self.has_event_loss()
-            && self.degraded_events == 0
-            && [
-                self.capture_coverage,
-                self.event_integrity,
-                self.semantic_completeness,
-            ]
+    /// 観測が揃っていない理由のすべて (空なら Complete)。inspect・NoIntegrityLoss・compare が
+    /// 同じ答えを使う (7c5a553 レビュー P1-2: compare は一部の項目だけを選んで比べ、読み取り側が
+    /// 見つけた破損とイベント件数の不一致を見落とした)。変種を足すと、ここと
+    /// [`Incompleteness::is_event_loss`] の網羅的な match が書かれるまでコンパイルが通らない。
+    pub fn incompleteness(&self) -> Vec<Incompleteness> {
+        let mut out = Vec::new();
+        if !self.has_finalization {
+            out.push(Incompleteness::NoFinalization);
+        } else if !self.finalized_cleanly {
+            out.push(Incompleteness::NotFinalizedCleanly);
+        }
+        if self.event_count_mismatch {
+            out.push(Incompleteness::EventCountMismatch);
+        }
+        if !self.loss_records_by_kind.is_empty() {
+            out.push(Incompleteness::LossRecords {
+                total: self.total_loss_count,
+            });
+        }
+        let issues: Vec<String> = self
+            .recovery_issues
             .iter()
-            .all(|level| *level == Some(0))
+            .filter(|issue| *issue != "index_mismatch")
+            .cloned()
+            .collect();
+        if !issues.is_empty() {
+            out.push(Incompleteness::RecoveryIssues(issues));
+        }
+        if self.dropped_payload_events > 0 {
+            out.push(Incompleteness::DroppedPayloads {
+                events: self.dropped_payload_events,
+            });
+        }
+        if self.missing_blob_refs > 0 {
+            out.push(Incompleteness::MissingBlobRefs {
+                refs: self.missing_blob_refs,
+            });
+        }
+        if self.degraded_events > 0 {
+            out.push(Incompleteness::DegradedEvents {
+                events: self.degraded_events,
+            });
+        }
+        for (aspect, level) in [
+            (IntegrityAspect::CaptureCoverage, self.capture_coverage),
+            (IntegrityAspect::EventIntegrity, self.event_integrity),
+            (IntegrityAspect::SemanticCompleteness, self.semantic_completeness),
+        ] {
+            if level != Some(0) {
+                out.push(Incompleteness::Declared { aspect, level });
+            }
+        }
+        out
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.incompleteness().is_empty()
     }
 
     /// Event Integrity に損失があるか（Loss Record・落ちた Payload・
     /// Finalization の非 Complete 宣言のいずれか）。shirusu-test の
     /// `no-integrity-loss` ルールの判定材料。
     pub fn has_event_loss(&self) -> bool {
-        self.event_count_mismatch
-            || !self.loss_records_by_kind.is_empty()
-            || self
-                .recovery_issues
-                .iter()
-                .any(|issue| issue != "index_mismatch")
-            || self.dropped_payload_events > 0
-            || self.missing_blob_refs > 0
-            || matches!(self.event_integrity, Some(level) if level != 0)
+        self.incompleteness().iter().any(Incompleteness::is_event_loss)
+    }
+}
+
+/// 終了時に宣言される 3 つの完全性
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrityAspect {
+    CaptureCoverage,
+    EventIntegrity,
+    SemanticCompleteness,
+}
+
+impl IntegrityAspect {
+    pub fn name(self) -> &'static str {
+        match self {
+            IntegrityAspect::CaptureCoverage => "capture_coverage",
+            IntegrityAspect::EventIntegrity => "event_integrity",
+            IntegrityAspect::SemanticCompleteness => "semantic_completeness",
+        }
+    }
+}
+
+/// 観測が揃っていない理由の一つ ([`IntegritySummary::incompleteness`])
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Incompleteness {
+    /// Finalization がない (途中で終わった)
+    NoFinalization,
+    /// Finalization はあるが、きれいに終わっていない
+    NotFinalizedCleanly,
+    /// 終了時に記録したイベント総数と、読めたイベント数が違う
+    EventCountMismatch,
+    /// Loss Record がある (件数の合計)
+    LossRecords { total: u64 },
+    /// 読み取り側が見つけた破損 (index_mismatch は最適化の Index だけなので含めない)
+    RecoveryIssues(Vec<String>),
+    /// 落とした Payload を持つイベントがある
+    DroppedPayloads { events: u64 },
+    /// 参照先 Blob がない参照がある
+    MissingBlobRefs { refs: u64 },
+    /// 取得状態が揃っていないイベントがある
+    DegradedEvents { events: u64 },
+    /// 終了時の宣言が Complete (0) でない (None は宣言なし)
+    Declared {
+        aspect: IntegrityAspect,
+        level: Option<u32>,
+    },
+}
+
+/// 欠けの項目 (compare が項目ごとに左右を比べる単位)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncompletenessKey {
+    Finalization,
+    EventCountMismatch,
+    LossRecords,
+    RecoveryIssues,
+    DroppedPayloads,
+    MissingBlobRefs,
+    DegradedEvents,
+    Declared(IntegrityAspect),
+}
+
+impl IncompletenessKey {
+    pub const ALL: [IncompletenessKey; 10] = [
+        IncompletenessKey::Declared(IntegrityAspect::CaptureCoverage),
+        IncompletenessKey::Declared(IntegrityAspect::EventIntegrity),
+        IncompletenessKey::Declared(IntegrityAspect::SemanticCompleteness),
+        IncompletenessKey::Finalization,
+        IncompletenessKey::EventCountMismatch,
+        IncompletenessKey::RecoveryIssues,
+        IncompletenessKey::LossRecords,
+        IncompletenessKey::DroppedPayloads,
+        IncompletenessKey::MissingBlobRefs,
+        IncompletenessKey::DegradedEvents,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            IncompletenessKey::Finalization => "finalization",
+            IncompletenessKey::EventCountMismatch => "event_count_mismatch",
+            IncompletenessKey::LossRecords => "loss_records",
+            IncompletenessKey::RecoveryIssues => "recovery_issues",
+            IncompletenessKey::DroppedPayloads => "dropped_payload_events",
+            IncompletenessKey::MissingBlobRefs => "missing_blob_refs",
+            IncompletenessKey::DegradedEvents => "degraded_events",
+            IncompletenessKey::Declared(a) => a.name(),
+        }
+    }
+}
+
+impl Incompleteness {
+    /// どの項目の欠けか
+    pub fn key(&self) -> IncompletenessKey {
+        match self {
+            Incompleteness::NoFinalization | Incompleteness::NotFinalizedCleanly => {
+                IncompletenessKey::Finalization
+            }
+            Incompleteness::EventCountMismatch => IncompletenessKey::EventCountMismatch,
+            Incompleteness::LossRecords { .. } => IncompletenessKey::LossRecords,
+            Incompleteness::RecoveryIssues(_) => IncompletenessKey::RecoveryIssues,
+            Incompleteness::DroppedPayloads { .. } => IncompletenessKey::DroppedPayloads,
+            Incompleteness::MissingBlobRefs { .. } => IncompletenessKey::MissingBlobRefs,
+            Incompleteness::DegradedEvents { .. } => IncompletenessKey::DegradedEvents,
+            Incompleteness::Declared { aspect, .. } => IncompletenessKey::Declared(*aspect),
+        }
+    }
+
+    /// イベントそのものの欠落か (no-integrity-loss の対象)。取得状態の劣化と、Event Integrity
+    /// 以外の宣言は、イベントを失ったことを示さない
+    pub fn is_event_loss(&self) -> bool {
+        match self {
+            Incompleteness::EventCountMismatch
+            | Incompleteness::LossRecords { .. }
+            | Incompleteness::RecoveryIssues(_)
+            | Incompleteness::DroppedPayloads { .. }
+            | Incompleteness::MissingBlobRefs { .. } => true,
+            Incompleteness::Declared { aspect, level } => match aspect {
+                IntegrityAspect::EventIntegrity => matches!(level, Some(l) if *l != 0),
+                IntegrityAspect::CaptureCoverage | IntegrityAspect::SemanticCompleteness => false,
+            },
+            Incompleteness::NoFinalization
+            | Incompleteness::NotFinalizedCleanly
+            | Incompleteness::DegradedEvents { .. } => false,
+        }
+    }
+
+    /// 一行の説明
+    pub fn describe(&self) -> String {
+        match self {
+            Incompleteness::NoFinalization => "no_finalization".into(),
+            Incompleteness::NotFinalizedCleanly => "not_finalized_cleanly".into(),
+            Incompleteness::EventCountMismatch => "event_count_mismatch".into(),
+            Incompleteness::LossRecords { total } => format!("loss_records(total={total})"),
+            Incompleteness::RecoveryIssues(i) => format!("recovery_issues({})", i.join(", ")),
+            Incompleteness::DroppedPayloads { events } => format!("dropped_payloads(events={events})"),
+            Incompleteness::MissingBlobRefs { refs } => format!("missing_blob_refs({refs})"),
+            Incompleteness::DegradedEvents { events } => format!("degraded_events({events})"),
+            Incompleteness::Declared { aspect, level } => match level {
+                Some(l) => format!("{}={}", aspect.name(), integrity_level_name(*l)),
+                None => format!("{}=undeclared", aspect.name()),
+            },
+        }
     }
 }
 
@@ -839,6 +1022,10 @@ fn decode_fields(
     };
     match decode_values(&types, bytes) {
         Ok(values) => {
+            let facts = shirusu_trace::schema::ResultFacts::of_values(
+                shirusu_trace::schema::FieldRoles::of(&def.fields),
+                &values,
+            );
             let fields = values
                 .into_iter()
                 .enumerate()
@@ -855,6 +1042,9 @@ fn decode_fields(
                         .map(|f| ValueKind::from_flags(f.flags))
                         .unwrap_or(ValueKind::Unspecified),
                     flags: def.fields.get(i).map_or(0, |f| f.flags),
+                    complete: cv
+                        .capture
+                        .is_complete_given(def.fields.get(i).map_or(0, |f| f.flags), &facts),
                     capture: cv.capture,
                     value: cv.value,
                 })
@@ -1082,6 +1272,7 @@ mod tests {
                 flags: 0,
                 capture,
                 value: TypedValue::U32(0),
+                complete: false,
             };
             assert_eq!(format_field(&f), format!("x=<{name}>"));
         }

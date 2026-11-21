@@ -64,7 +64,6 @@ fn write_staged<W: DurableWrite>(
     if !staged.events.is_empty() && totals.storage_full {
         totals.storage_full_dropped_events += staged.events.len() as u64;
     } else if !staged.events.is_empty() {
-        let count = staged.events.len() as u64;
         let backlogged =
             state.queued_bytes.load(Ordering::Acquire) > state.byte_budget / BACKLOG_FRACTION;
         let written = if backlogged {
@@ -75,12 +74,12 @@ fn write_staged<W: DurableWrite>(
             recorder.record_owned_batch_with_args(&staged.context, staged.events)
         };
         match written {
-            Ok(stats) => {
-                totals.args.args_attached += stats.args_attached;
-                totals.args.args_incomplete += stats.args_incomplete;
-                totals.args.args_fallback_blob += stats.args_fallback_blob;
+            Ok(stats) => totals.args.absorb(stats),
+            Err(e) => {
+                // 保存できた接頭辞の集計は、失敗でも報告に入れる (7c5a553 レビュー P2-3)
+                totals.args.absorb(e.saved);
+                absorb_storage_full(totals, Err(e.error), e.unsaved_events as u64, 0)?;
             }
-            Err(e) => absorb_storage_full(totals, Err(e), count, 0)?,
         }
     }
     for bytes in staged.bytes {
@@ -245,6 +244,8 @@ pub(crate) struct PipelineReport {
 
 /// Turn running out of space into "drop and count" (P2-10): the Writer kept
 /// room for Finalization, so the Trace can still be closed as degraded.
+/// `events` / `losses` are the counts that were not written (the caller knows the
+/// saved prefix: [`crate::trace_convert::BatchWriteError::unsaved_events`]).
 fn absorb_storage_full(
     totals: &mut PipelineReport,
     result: Result<(), TraceError>,
@@ -254,7 +255,7 @@ fn absorb_storage_full(
     match result {
         Err(e) if shirusu_trace::writer::is_storage_full(&e) => {
             totals.storage_full = true;
-            totals.storage_full_dropped_events += events.saturating_sub(e.written_events() as u64);
+            totals.storage_full_dropped_events += events;
             totals.storage_full_dropped_losses += losses;
             Ok(())
         }
@@ -968,6 +969,145 @@ mod tests {
             1
         );
         drop(pipeline);
+    }
+
+    /// 書けるバイト数に上限のある出力 (超える書き込みは StorageFull)
+    struct Limited {
+        bytes: Arc<Mutex<Vec<u8>>>,
+        limit: usize,
+    }
+    impl Write for Limited {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut held = self.bytes.lock().unwrap();
+            if held.len() + bytes.len() > self.limit {
+                return Err(io::Error::new(io::ErrorKind::StorageFull, "disk full"));
+            }
+            held.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    impl DurableWrite for Limited {
+        fn sync_all(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn truncate_to(&mut self, len: u64) -> io::Result<bool> {
+            self.bytes.lock().unwrap().truncate(len as usize);
+            Ok(true)
+        }
+    }
+
+    /// 書いたバイト列 (Limited と共有)
+    type Written = Arc<Mutex<Vec<u8>>>;
+
+    /// 1 イベントずつ Event Chunk にする recorder (部分書き込みを起こせるように)
+    fn chunked(limit: usize) -> Option<(TraceRecorder<Limited>, Written)> {
+        let bytes: Written = Default::default();
+        let writer = Limited { bytes: bytes.clone(), limit };
+        let options = shirusu_trace::writer::WriterOptions {
+            chunk_raw_target: 1,
+            reserve_bytes: 0,
+            ..Default::default()
+        };
+        let mut recorder =
+            TraceRecorder::from_environment_with_options(writer, environment(), options).ok()?;
+        let api = api_by_id(API_CLOSE_HANDLE).unwrap();
+        recorder.register_schema(api.enter_schema()).ok()?;
+        recorder.register_schema(api.leave_schema()).ok()?;
+        Some((recorder, bytes))
+    }
+
+    /// Trace に残ったイベントから数え直した引数の集計 (報告が従うべき答え)
+    fn stats_in(bytes: &[u8]) -> ArgsConversionStats {
+        let trace = shirusu_trace::read_trace(bytes).unwrap();
+        let mut stats = ArgsConversionStats::default();
+        for e in trace.batches.iter().flat_map(|b| &b.events) {
+            if let Some(args) = &e.args {
+                let shapes = trace.registry.shape_ref(e.schema_id).unwrap();
+                let complete =
+                    shirusu_trace::compact::validate_values_completeness(shapes, args).unwrap();
+                stats.args_attached += 1;
+                stats.args_incomplete += usize::from(!complete);
+            }
+        }
+        stats
+    }
+
+    #[test]
+    fn a_partial_write_reports_the_args_of_the_saved_prefix() {
+        // 7c5a553 レビュー P2-3: 部分書き込み (PartialBatch) の失敗で集計を `?` で捨て、
+        // 保存済みの不完全な引数が報告から消えた。不完全なイベントが保存された側にある場合と、
+        // 書けなかった側にだけある場合の両方を、書ける量のすべての境界で確かめる
+        for incomplete_first in [true, false] {
+            let batch = || {
+                let (a, b) = if incomplete_first { (2, 3) } else { (1, 2) };
+                let mut v = events(a);
+                v.extend(events(b));
+                v
+            };
+            let (mut whole, whole_bytes) = chunked(usize::MAX).unwrap();
+            let full = whole.record_owned_batch_with_args(&context(), batch()).unwrap();
+            assert_eq!(full.args_incomplete, 1);
+            let len = whole_bytes.lock().unwrap().len();
+            let mut partial_seen = 0;
+            for limit in 0..=len {
+                // 見出しすら書けない上限は対象外 (バッチまで届かない)
+                let Some((mut rec, bytes)) = chunked(limit) else {
+                    continue;
+                };
+                let result = rec.record_owned_batch_with_args(&context(), batch());
+                let saved_bytes = bytes.lock().unwrap().clone();
+                let in_trace = stats_in(&saved_bytes);
+                let saved_events: usize = shirusu_trace::read_trace(&saved_bytes)
+                    .unwrap()
+                    .batches
+                    .iter()
+                    .map(|b| b.events.len())
+                    .sum();
+                match result {
+                    Ok(stats) => {
+                        assert_eq!(stats, full, "limit {limit}");
+                        assert_eq!(in_trace, full);
+                    }
+                    Err(e) => {
+                        assert!(shirusu_trace::writer::is_storage_full(&e.error), "{e}");
+                        assert_eq!(e.saved, in_trace, "limit {limit} first={incomplete_first}");
+                        assert_eq!(e.unsaved_events + saved_events, 4, "limit {limit}");
+                        partial_seen += usize::from(saved_events > 0);
+                    }
+                }
+            }
+            assert!(partial_seen > 0, "no limit produced a partial batch");
+        }
+    }
+
+    #[test]
+    fn the_pipeline_report_keeps_the_args_of_a_partial_write() {
+        // 同じ境界を非同期の経路 (write_staged) でも: 報告は Trace の中身と一致する
+        let (mut whole, whole_bytes) = chunked(usize::MAX).unwrap();
+        whole.record_owned_batch_with_args(&context(), events(2)).unwrap();
+        let len = whole_bytes.lock().unwrap().len();
+        let mut partial_seen = 0;
+        for limit in 0..=len {
+            let Some((rec, bytes)) = chunked(limit) else {
+                continue;
+            };
+            let mut pipeline = TracePipeline::new(rec).unwrap();
+            pipeline.record_owned_batch_with_args(&context(), events(2)).unwrap();
+            let Ok((_recorder, report)) = pipeline.finish() else {
+                continue;
+            };
+            let saved = bytes.lock().unwrap().clone();
+            let in_trace = stats_in(&saved);
+            assert_eq!(report.args, in_trace, "limit {limit}");
+            if report.storage_full && in_trace.args_attached > 0 {
+                partial_seen += 1;
+                assert_eq!(report.storage_full_dropped_events, 1, "limit {limit}");
+            }
+        }
+        assert!(partial_seen > 0, "no limit produced a partial batch");
     }
 
     #[test]

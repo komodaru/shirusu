@@ -8,7 +8,7 @@
 //! 呼び出し側の関数へ 1 件ずつ渡し、メタデータと完全性の集計だけを残す。
 
 use crate::view::{IntegrityCounts, IntegritySummary};
-use shirusu_trace::model::{EventBatch, PayloadRef, TraceEvent};
+use shirusu_trace::model::{EventBatch, TraceEvent};
 use shirusu_trace::reader::{ReadTrace, RecoveryIssue};
 use shirusu_trace::schema::SchemaRegistry;
 use shirusu_trace::stream::{StreamItem, StreamOptions, TraceStream};
@@ -78,8 +78,13 @@ pub fn stream_trace<R: Read + Seek>(
                     total_events += 1;
                     // 欠落 Blob は読み終えてから決まる (前方参照がある)。
                     counts.note(stream.registry(), e, |_| true);
-                    if let PayloadRef::Blob(id) = &e.payload {
-                        *blob_refs.entry(*id).or_default() += 1;
+                    // (一つのイベントが同じ Blob を何か所から参照しても 1 件: view の note と同じ数え方)
+                    let mut ids: Vec<BlobId> =
+                        e.blob_refs(stream.registry()).known().iter().map(|u| u.id).collect();
+                    ids.sort();
+                    ids.dedup();
+                    for id in ids {
+                        *blob_refs.entry(id).or_default() += 1;
                     }
                     visit(stream.registry(), &batch, e);
                 }

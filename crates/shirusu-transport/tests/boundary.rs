@@ -905,9 +905,9 @@ fn slot_pool_capacity_and_free_count_lifecycle() {
     let pool = SlotPool::new(3);
     assert_eq!(pool.capacity(), 3);
     assert_eq!(pool.free_count(), 3);
-    let h1 = pool.claim(1).unwrap();
+    let h1 = pool.claim(1).unwrap().confirm();
     assert_eq!(pool.free_count(), 2);
-    let _h2 = pool.claim(2).unwrap();
+    let _h2 = pool.claim(2).unwrap().confirm();
     assert_eq!(pool.free_count(), 1);
     pool.begin_detach(&h1);
     assert_eq!(pool.free_count(), 1, "detach alone does not free");
@@ -1029,7 +1029,7 @@ fn slot_state_encoding_matrix() {
     assert_eq!(slot.state(), SlotState::Free);
     assert_eq!(slot.generation(), 1);
     assert_eq!(slot.owner_thread_id(), 0);
-    let _h = pool.claim(4242).unwrap();
+    let _h = pool.claim(4242).unwrap().confirm();
     let slot = pool.slot(0);
     // claim は CLAIMED を経由して ACTIVE まで進めてから返る
     assert_eq!(slot.state(), SlotState::Active);
@@ -1302,8 +1302,8 @@ fn slot_pool_zero_capacity() {
 fn slot_low_watermark_zero_and_above_capacity() {
     // 低水位 0: 残りが何件でも拡張要求は立たない
     let pool = SlotPool::with_low_watermark(2, 0);
-    pool.claim(1).unwrap();
-    pool.claim(2).unwrap();
+    pool.claim(1).unwrap().confirm();
+    pool.claim(2).unwrap().confirm();
     assert_eq!(
         pool.expansion_request_count.load(Ordering::Relaxed),
         0,
@@ -1312,23 +1312,23 @@ fn slot_low_watermark_zero_and_above_capacity() {
     assert!(!pool.take_expansion_request());
     // 低水位が容量以上: 最初の claim で要求が立つが、フラグが立っている間は増えない
     let pool = SlotPool::with_low_watermark(3, 99);
-    pool.claim(1).unwrap();
+    pool.claim(1).unwrap().confirm();
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 1);
-    pool.claim(2).unwrap();
+    pool.claim(2).unwrap().confirm();
     assert_eq!(
         pool.expansion_request_count.load(Ordering::Relaxed),
         1,
         "request flag latches until taken"
     );
     assert!(pool.take_expansion_request());
-    pool.claim(3).unwrap(); // free 0 < 99 なので再び立つ
+    pool.claim(3).unwrap().confirm(); // free 0 < 99 なので再び立つ
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 2);
 }
 
 #[test]
 fn slot_stale_handle_rejected_in_every_transition() {
     let pool = SlotPool::new(1);
-    let h1 = pool.claim(1).unwrap();
+    let h1 = pool.claim(1).unwrap().confirm();
     // Active のままでは confirm/reclaim できない
     assert!(!pool.host_confirm_ended_and_drained(&h1, true, true));
     assert!(!pool.host_reclaim(&h1));
@@ -1341,7 +1341,7 @@ fn slot_stale_handle_rejected_in_every_transition() {
     assert!(pool.note_call_after_detach(&h1));
     assert!(pool.host_reclaim(&h1));
     // 再利用後に古い handle は全ての遷移で効かない
-    let h2 = pool.claim(2).unwrap();
+    let h2 = pool.claim(2).unwrap().confirm();
     assert_eq!(h2.index, h1.index);
     assert!(!pool.begin_detach(&h1));
     assert!(!pool.host_confirm_ended_and_drained(&h1, true, true));
@@ -1355,7 +1355,7 @@ fn slot_generation_increments_each_reuse_cycle() {
     let pool = SlotPool::new(1);
     let mut prev = 0u64;
     for cycle in 1..=5u64 {
-        let h = pool.claim(cycle).unwrap();
+        let h = pool.claim(cycle).unwrap().confirm();
         assert_eq!(h.generation, prev + 1, "cycle {cycle}");
         prev = h.generation;
         assert!(pool.begin_detach(&h));

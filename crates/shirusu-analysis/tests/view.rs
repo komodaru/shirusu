@@ -332,6 +332,7 @@ fn stale_last_error_renders_as_stale_not_value() {
         flags: 0,
         capture: ValueCapture::Stale,
         value: TypedValue::U32(5),
+        complete: false,
     };
     assert_eq!(format_field(&f), "last_error=<stale>");
     assert_eq!(value_capture_name(ValueCapture::Stale), "stale");
@@ -1054,6 +1055,7 @@ fn iid_identification_requires_captured_com_context_and_is_exported() {
             flags: 0,
             capture: ValueCapture::Captured,
             value: TypedValue::Bytes(vec![12, 0, 0, 0, 0, 0, 0, 0, 192, 0, 0, 0, 0, 0, 0, 70]),
+            complete: true,
         }],
     };
     assert!(event

@@ -442,11 +442,29 @@ Schema が型と順序を定め、値ごとの型タグは持たない（overvie
 不正として拒否する。
 
 完全性（Semantic Completeness）に数えるのは「取得すべき値を取得できた」値だけで、
-判定は `ValueCapture::is_complete_for(flags)` に一本化する（Host・解析・適合性検査・
-比較・テストが共有）。Captured は常に数える。Stale は、その Field の flags が
-LastError の意味条件（Unspecified と Always 以外）を宣言している場合だけ数える。
-NotApplicable は、取得時期が呼び出し後（After / Completion / Both）の出力だけ数える。
-それ以外の Field（必須の入力など）に付いた Stale / NotApplicable は、取得失敗と
+判定は `ValueCapture::is_complete_given(flags, facts)` に一本化する（Host・解析・適合性検査・
+比較・テストが共有）。`facts`（`ResultFacts`）は同じイベントの実際の結果で、Captured の
+`return` / `last_error` / `dequeuedOverlapped` の値だけから作る（7c5a553 レビュー P2-1）。
+
+- Captured は常に数える。
+- Stale は、Field の flags が LastError の意味条件を宣言し、その条件が実際の戻り値で偽の
+  ときだけ数える。Unspecified と Always では数えない。戻り値が取れていない記録でも数えない。
+  DependsOnInputs は、戻り値で言える必要条件（NULL / INVALID_HANDLE_VALUE / FALSE で
+  ない）だけをここで見る。enter の入力まで照らした判定は適合性検査 `last-error-inputs` が、
+  取得側と同じ規則 `LastErrorMeaning::resolve_inputs` で行う。
+- NotApplicable は、取得時期が呼び出し後（After / Completion / Both）の出力で、flags の
+  出力条件 `OutputCondition`（ビット 12..14）が実際の結果で偽のときだけ数える。
+
+| OutputCondition | 値 | 出力が定義される結果 |
+|---|---|---|
+| Unspecified | 0 | 常に（NotApplicable は数えない） |
+| Always | 1 | 常に |
+| WhenReturnIsTrue | 2 | 戻り値が 0 以外 |
+| WhenReturnIsTrueOrMoreData | 3 | 戻り値が 0 以外、または FALSE と ERROR_MORE_DATA（234: 部分読み取り） |
+| WhenNotPending | 4 | ERROR_IO_PENDING（997）で保留になった FALSE 以外 |
+| WhenPacketDequeued | 5 | `dequeuedOverlapped` が 0 以外（GetQueuedCompletionStatus がパケットを取り出した） |
+
+これ以外の Field（必須の入力など）に付いた Stale / NotApplicable は、取得失敗と
 同じく Complete と矛盾する（2026-11-19 レビュー #4/#5）。
 
 ### イベント列のレイアウト（Event Chunk 内）

@@ -25,7 +25,7 @@ use crate::{CommittedRangeCollector, DrainWorker, IntegrityLevel, IntegrityRepor
 use shirusu_trace::proto::{CaptureEnvironment, ProfileSummary};
 use shirusu_trace::writer::{Durability, WriterOptions};
 use shirusu_transport::ring::SharedRegion;
-use shirusu_transport::shm::{Shm, Word};
+use shirusu_transport::shm::{ReaderRegistration, Shm, Word};
 use shirusu_transport::RingConfig;
 #[cfg(windows)]
 use shirusu_transport_win::SharedMapping;
@@ -161,19 +161,27 @@ pub struct RingSpec {
 /// Ring の裏付けメモリ。ヒープ・借用・Windows の File Mapping のどれでも
 /// 実体は [`Shm`] が共有して保つ (セッションより先に元の所有者が手放しても
 /// 解放されない)。
-struct RingMapping(Shm);
+/// 回収する Ring の Mapping。読み手の登録権 (ReaderRegistration) を持つことでしか作れない
+/// ので、同じ共有領域を二度登録して二つの回収に同じイベントを読ませることはできない
+/// (7c5a553 レビュー P2-2)。
+struct RingMapping(ReaderRegistration);
 impl RingMapping {
+    fn claim(shm: &Shm) -> Result<Self, SessionError> {
+        shm.reserve_reader()
+            .map(RingMapping)
+            .ok_or_else(|| SessionError::Config("ring mapping already registered for reading".into()))
+    }
+    fn shm(&self) -> &Shm {
+        self.0.shm()
+    }
     fn control(&self) -> shirusu_transport::Control<'_> {
-        self.0.control()
+        self.shm().control()
     }
     /// 空き通知を待つ印 (Relaxed。順序は呼び出し側の SeqCst fence が付ける)。
     fn set_host_waiting(&self, on: bool) {
         // SAFETY: CaptureSession は写した全 Ring の Host 側 (読み手) であり、
         // 書くのは読み手の HostWaiting だけ。Cursor には触れない。
-        unsafe { self.0.consumer_control() }.set_host_waiting(on, Ordering::Relaxed)
-    }
-    fn len(&self) -> usize {
-        self.0.len()
+        unsafe { self.shm().consumer_control() }.set_host_waiting(on, Ordering::Relaxed)
     }
     /// Agent が Control 領域を初期化済みか（Magic の出現で判定する）。
     ///
@@ -685,13 +693,13 @@ impl CaptureSession {
         region: SharedRegion,
         spec: RingSpec,
     ) -> Result<usize, SessionError> {
-        self.add_ring(RingMapping(region.shm().clone()), spec, None)
+        self.add_ring(region.shm(), spec, None)
     }
 
     /// 他の所有者 (Agent が保持する領域など) と実体を共有して登録する。
     /// Host と同一プロセスで回収する場合に使う。
     pub fn add_shared_ring(&mut self, shm: Shm, spec: RingSpec) -> Result<usize, SessionError> {
-        self.add_ring(RingMapping(shm), spec, None)
+        self.add_ring(&shm, spec, None)
     }
 
     /// Windows の File Mapping を Ring として登録する。space_available
@@ -704,23 +712,25 @@ impl CaptureSession {
         spec: RingSpec,
         space_notify: Option<std::sync::Arc<shirusu_transport_win::RingNotify>>,
     ) -> Result<usize, SessionError> {
-        self.add_ring(RingMapping(mapping.shm().clone()), spec, space_notify)
+        self.add_ring(mapping.shm(), spec, space_notify)
     }
 
     fn add_ring(
         &mut self,
-        mapping: RingMapping,
+        shm: &Shm,
         spec: RingSpec,
         space_notify: Option<std::sync::Arc<shirusu_transport_win::RingNotify>>,
     ) -> Result<usize, SessionError> {
         self.ensure_state(SessionState::Created, "add_ring")?;
-        if mapping.len() < self.config.ring_config.required_len() {
+        if shm.len() < self.config.ring_config.required_len() {
             return Err(SessionError::Config(format!(
                 "ring mapping too small: {} < {}",
-                mapping.len(),
+                shm.len(),
                 self.config.ring_config.required_len()
             )));
         }
+        // 読み手は Mapping ごとに一つ (同じ実体の別ビューも同じ Control を見る)
+        let mapping = RingMapping::claim(shm)?;
         self.next_trace_thread_id = self.next_trace_thread_id.max(spec.thread_id + 1);
         let index = self.rings.len();
         self.rings.push(RingEndpoint {
@@ -796,7 +806,7 @@ impl CaptureSession {
                 // incarnation は読み位置 0 から始まる。領域の長さは add_ring で
                 // 確かめてあるので Err にはならない。
                 let Ok(collector) = (unsafe {
-                    CommittedRangeCollector::new(ring.mapping.0.clone(), self.config.ring_config)
+                    CommittedRangeCollector::new(ring.mapping.shm().clone(), self.config.ring_config)
                 }) else {
                     ring.stopped = true;
                     stats.stopped_rings += 1;

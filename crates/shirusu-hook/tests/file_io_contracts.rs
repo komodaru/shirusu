@@ -63,22 +63,27 @@ fn captures() -> String {
         );
     }
     add("read-enter", 2, false, read_file_enter(42, 0x2000, 3, 0));
-    for (name, success, requested, count_addr, overlapped) in [
-        ("read-success", 1, 3, 0x3000, false),
-        ("read-noncanonical-bool", -1, 3, 0x3000, false),
-        ("read-count-exceeds-capacity", 1, 2, 0x3000, false),
-        ("read-failure", 0, 3, 0x3000, false),
-        ("read-null-count", 1, 3, 0, false),
-        ("read-unreadable-count", 1, 3, 0x9999, false),
-        ("read-pending", 0, 3, 0x3000, true),
-        ("read-overlapped-success", 1, 3, 0x3000, true),
+    // (結果の種類ごと: 成功、部分読み取り ERROR_MORE_DATA (234)、保留 ERROR_IO_PENDING (997)、
+    // 有効な出力のない失敗 (5))
+    for (name, success, requested, count_addr, overlapped, last_error) in [
+        ("read-success", 1, 3, 0x3000, false, 997),
+        ("read-noncanonical-bool", -1, 3, 0x3000, false, 997),
+        ("read-count-exceeds-capacity", 1, 2, 0x3000, false, 997),
+        ("read-failure", 0, 3, 0x3000, false, 5),
+        ("read-more-data", 0, 3, 0x3000, false, 234),
+        ("read-sync-997", 0, 3, 0x3000, false, 997),
+        ("read-null-count", 1, 3, 0, false, 997),
+        ("read-unreadable-count", 1, 3, 0x9999, false, 997),
+        ("read-pending", 0, 3, 0x3000, true, 997),
+        ("read-overlapped-failure", 0, 3, 0x3000, true, 5),
+        ("read-overlapped-success", 1, 3, 0x3000, true, 997),
     ] {
         add(
             name,
             2,
             true,
             read_file_leave(
-                &memory, success, 0x2000, requested, count_addr, overlapped, 997,
+                &memory, success, 0x2000, requested, count_addr, overlapped, last_error,
             ),
         );
     }
@@ -94,17 +99,17 @@ fn captures() -> String {
         false,
         write_file_enter(&memory, 42, 0x9999, 3, 0),
     );
-    for (name, success, count_addr, overlapped) in [
-        ("write-success", 1, 0x3000, false),
-        ("write-failure", 0, 0x3000, false),
-        ("write-null-count", 1, 0, false),
-        ("write-pending", 0, 0x3000, true),
+    for (name, success, count_addr, overlapped, last_error) in [
+        ("write-success", 1, 0x3000, false, 997),
+        ("write-failure", 0, 0x3000, false, 5),
+        ("write-null-count", 1, 0, false, 997),
+        ("write-pending", 0, 0x3000, true, 997),
     ] {
         add(
             name,
             3,
             true,
-            write_file_leave(&memory, success, count_addr, overlapped, 997),
+            write_file_leave(&memory, success, count_addr, overlapped, last_error),
         );
     }
     add("close-enter", 4, false, close_handle_enter(42));

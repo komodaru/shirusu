@@ -92,9 +92,14 @@ fn run(args: &[String]) -> Result<u8, (u8, String)> {
     let left = load(positional[0])?;
     let right = load(positional[1])?;
     let report = shirusu_compare::compare_traces(&left, &right);
-    if report.candidates.is_empty() {
-        eprintln!("no difference candidates; nothing to package");
-        return Ok(1);
+    match report.verdict() {
+        shirusu_compare::Verdict::Differs { .. } => {}
+        // (入力の不完全さは候補ではないので包めないが、一致とも言わない)
+        v @ (shirusu_compare::Verdict::Identical
+        | shirusu_compare::Verdict::ObservedPrefixAgrees { .. }) => {
+            eprintln!("no difference candidates ({}); nothing to package", v.name());
+            return Ok(1);
+        }
     }
     let cand = report.candidates.get(candidate).ok_or((
         2,

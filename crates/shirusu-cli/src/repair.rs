@@ -1,6 +1,7 @@
 //! `shirusu repair`（L12）。
 
 use super::*;
+use shirusu_trace::refs::EventBlobRefs;
 
 // ---------------------------------------------------------------------------
 // L12: `shirusu repair`
@@ -75,6 +76,25 @@ pub(crate) fn add_lost(report: &mut RepairReport, cause: &str, n: u64) {
 /// view.rs の IntegritySummary と同じ文字列で issue を表す。
 /// 新しい RecoveryIssue バリアントが増えたらここも非網羅マッチで
 /// コンパイルエラーになる（view.rs と同じ方針）。
+/// 一つの Blob を修復後のファイルへ運ぶ (同じ Blob は一度だけ)
+fn carry(
+    writer: &mut TraceWriter<Vec<u8>>,
+    carried: &mut HashSet<BlobId>,
+    trace: &ReadTrace,
+    id: BlobId,
+) -> Result<(), ToolError> {
+    if !carried.insert(id) {
+        return Ok(());
+    }
+    let Some(data) = trace.blobs.get(&id) else {
+        return Err(ToolError::Runtime(format!("cannot carry blob {id}: not in the input")));
+    };
+    writer
+        .add_payload(data)
+        .map_err(|err| ToolError::Runtime(format!("cannot carry blob {id}: {err}")))?;
+    Ok(())
+}
+
 pub(crate) fn format_issue(issue: &RecoveryIssue) -> String {
     match issue {
         RecoveryIssue::TruncatedTail { offset } => {
@@ -180,14 +200,16 @@ pub(crate) fn repair_trace(
         }
         // 参照先 Blob が無いイベントは落とす（内容を推測しない）。
         let mut kept: Vec<TraceEvent> = Vec::new();
+        // 参照は Payload と引数の BlobRef の両方 (shirusu_trace::refs; P1-1 は引数側を見落とした)
+        let mut kept_refs: Vec<EventBlobRefs> = Vec::new();
         for e in &batch.events {
-            if let PayloadRef::Blob(id) = &e.payload {
-                if !trace.blobs.contains_key(id) {
-                    add_lost(&mut report, "missing_blob", 1);
-                    continue;
-                }
+            let refs = e.blob_refs(&trace.registry);
+            if refs.all_present(|id| trace.blobs.contains_key(id)) == Some(false) {
+                add_lost(&mut report, "missing_blob", 1);
+                continue;
             }
             kept.push(e.clone());
+            kept_refs.push(refs);
         }
         if kept.is_empty() {
             report.batches_skipped += 1;
@@ -213,13 +235,29 @@ pub(crate) fn repair_trace(
             add_lost(&mut report, "sequence_regression", kept.len() as u64);
             continue;
         }
-        for e in &kept {
-            if let PayloadRef::Blob(id) = &e.payload {
-                let data = &trace.blobs[id];
-                writer
-                    .add_payload(data)
-                    .map_err(|err| ToolError::Runtime(format!("cannot carry blob {id}: {err}")))?;
-                carried.insert(*id);
+        for refs in &kept_refs {
+            match refs {
+                EventBlobRefs::Known(uses) => {
+                    for u in uses {
+                        carry(&mut writer, &mut carried, trace, u.id)?;
+                    }
+                }
+                EventBlobRefs::Partial { known, why } => {
+                    // 引数値列が読めず、どの Blob を参照するか列挙しきれない。内容を落とさない側へ
+                    // 倒し、ファイルにある Blob をすべて運ぶ (参照を推測で選ばない)
+                    for u in known {
+                        carry(&mut writer, &mut carried, trace, u.id)?;
+                    }
+                    let mut all: Vec<BlobId> = trace.blobs.keys().copied().collect();
+                    all.sort();
+                    for id in all {
+                        carry(&mut writer, &mut carried, trace, id)?;
+                    }
+                    report.issues.push(format!(
+                        "args_unreadable(thread={}, reason={why:?}): carried every blob",
+                        batch.thread_id
+                    ));
+                }
             }
         }
         let filtered = EventBatch {
@@ -510,6 +548,7 @@ mod tests {
     use super::*;
     use shirusu_trace::proto::{ApiProfile, ProfileSummary};
     use shirusu_trace::reader::{read_trace, read_trace_with_limits, ReaderLimits};
+    use shirusu_trace::PayloadRef;
 
     fn env() -> CaptureEnvironment {
         CaptureEnvironment {
@@ -620,7 +659,8 @@ mod pbt {
     use proptest::prelude::*;
     use shirusu_trace::container::HEADER_LEN;
     use shirusu_trace::reader::read_trace;
-    use shirusu_trace::schema::{make_schema, EventCapture, Ty};
+    use shirusu_trace::schema::{make_schema, CapturedValue, EventCapture, Ty, TypedValue, ValueCapture};
+    use shirusu_trace::PayloadRef;
 
     #[derive(Debug, Clone)]
     enum Op {
@@ -657,6 +697,14 @@ mod pbt {
             vec![("x".into(), Ty::U32, 0)],
         ))
         .unwrap();
+        // 引数から Blob を参照する Schema (7c5a553 レビュー P1-1: 生成器が args: None に固定で、
+        // 引数側の参照を一度も作らなかった)
+        w.register_schema(make_schema(
+            2,
+            "k32!W/enter",
+            vec![("x".into(), Ty::U32, 0), ("buf".into(), Ty::BlobRef, 0)],
+        ))
+        .unwrap();
         let mut blobs: Vec<BlobId> = Vec::new();
         let mut seq: HashMap<u64, u64> = HashMap::new();
         for op in ops {
@@ -668,6 +716,35 @@ mod pbt {
                         .map(|r| {
                             let s = seq.entry(*thread).or_insert(0);
                             *s += 1;
+                            // 同じ参照関係の表現を全部: 参照なし、Payload から、引数から、両方から
+                            let site = if blobs.is_empty() { 0 } else { r % 4 };
+                            let pick = |k: usize| blobs[(r / 4 + k) % blobs.len().max(1)];
+                            let payload = match site {
+                                1 | 3 => PayloadRef::Blob(pick(0)),
+                                _ => PayloadRef::Inline(vec![*r as u8]),
+                            };
+                            let (schema_id, args) = match site {
+                                2 | 3 => (
+                                    2,
+                                    Some(
+                                        shirusu_trace::compact::encode_values(
+                                            &[Ty::U32, Ty::BlobRef],
+                                            &[
+                                                CapturedValue {
+                                                    capture: ValueCapture::Captured,
+                                                    value: TypedValue::U32(*r as u32),
+                                                },
+                                                CapturedValue {
+                                                    capture: ValueCapture::Captured,
+                                                    value: TypedValue::BlobRef(pick(1)),
+                                                },
+                                            ],
+                                        )
+                                        .unwrap(),
+                                    ),
+                                ),
+                                _ => (1, None),
+                            };
                             TraceEvent {
                                 kind: 1,
                                 sequence: *s,
@@ -675,14 +752,10 @@ mod pbt {
                                 call_id: *s,
                                 parent_call_id: 0,
                                 api_id: 1,
-                                schema_id: 1,
+                                schema_id,
                                 capture: EventCapture::Captured,
-                                payload: if blobs.is_empty() || r % 3 == 0 {
-                                    PayloadRef::Inline(vec![*r as u8])
-                                } else {
-                                    PayloadRef::Blob(blobs[r % blobs.len()])
-                                },
-                                args: None,
+                                payload,
+                                args,
                                 global_order: None,
                             }
                         })
@@ -823,6 +896,43 @@ mod pbt {
         }
     }
 
+    /// conformance の参照検査 (blob-refs-resolvable) が通るか
+    fn blob_refs_pass(t: &ReadTrace) -> bool {
+        shirusu_conformance::check_trace(t)
+            .finding("blob-refs-resolvable")
+            .is_some_and(|f| f.status == shirusu_conformance::CheckStatus::Pass)
+    }
+
+    /// 7c5a553 レビュー P1-1: 引数の BlobRef だけが参照する Blob。修復前は 2 イベント 1 Blob で
+    /// conformance に適合し、修復後は Blob 0 で不適合なのに Complete と報告していた
+    #[test]
+    fn repair_keeps_a_blob_referenced_only_from_an_argument() {
+        let ops = [
+            Op::Payload(b"argument buffer".to_vec()),
+            Op::Batch { thread: 1, refs: vec![2, 2] },
+        ];
+        let input = read_trace(&write(&ops, true, 0)).unwrap();
+        assert_eq!(input.blobs.len(), 1);
+        assert!(input
+            .batches
+            .iter()
+            .flat_map(|b| &b.events)
+            .all(|e| matches!(e.payload, PayloadRef::Inline(_)) && e.args.is_some()));
+        assert!(blob_refs_pass(&input));
+        let (bytes, report) = repair_trace("in", &input).unwrap();
+        let out = read_trace(&bytes).unwrap();
+        assert_eq!((report.recovered, report.lost, report.blobs_carried), (2, 0, 1));
+        assert_eq!(out.blobs, input.blobs);
+        assert_eq!(shirusu_analysis::IntegritySummary::of(&out).missing_blob_refs, 0);
+        assert!(blob_refs_pass(&out));
+        // 引数の Blob を消したファイルは、完全性の集計でも conformance でも欠落になる
+        let mut gone = read_trace(&bytes).unwrap();
+        gone.blobs.clear();
+        assert_eq!(shirusu_analysis::IntegritySummary::of(&gone).missing_blob_refs, 2);
+        assert!(!shirusu_analysis::IntegritySummary::of(&gone).is_complete());
+        assert!(!blob_refs_pass(&gone));
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(
             std::env::var("SHIRUSU_PBT_CASES").ok().and_then(|v| v.parse().ok()).unwrap_or(256)
@@ -855,12 +965,19 @@ mod pbt {
             for e in events(&out) {
                 prop_assert!(it.any(|s| *s == e), "event not from the input in order: {e:?}");
             }
-            // 参照する Blob はすべて運ばれている。
+            // 参照する Blob (Payload と引数の両方) はすべて、入力と同じ内容で運ばれている。
             for (_, e) in events(&out) {
-                if let PayloadRef::Blob(id) = e.payload {
-                    prop_assert!(out.blobs.contains_key(&id));
+                let refs = e.blob_refs(&out.registry);
+                prop_assert!(matches!(refs, EventBlobRefs::Known(_)), "{refs:?}");
+                for u in refs.known() {
+                    prop_assert_eq!(out.blobs.get(&u.id), input.blobs.get(&u.id), "{:?}", u);
+                    prop_assert!(out.blobs.contains_key(&u.id), "{:?}", u);
                 }
             }
+            // ほかの道具も同じ答え: 完全性の集計は欠落参照 0、conformance の参照検査は通る
+            let summary = shirusu_analysis::IntegritySummary::of(&out);
+            prop_assert_eq!(summary.missing_blob_refs, 0);
+            prop_assert!(blob_refs_pass(&out));
             let f = out.finalization.as_ref().unwrap();
             if report.lost > 0 {
                 prop_assert_ne!(f.event_integrity, 0, "lost events but still Complete");

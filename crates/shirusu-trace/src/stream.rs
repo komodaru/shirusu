@@ -34,7 +34,7 @@ use crate::container::{
     self, BlockType, Compression, FileHeader, HEADER_LEN, MAX_RAW_LEN, MAX_STORED_LEN,
 };
 use crate::error::{Result, TraceError};
-use crate::model::{EventBatch, PayloadRef};
+use crate::model::EventBatch;
 use crate::proto::{
     BlockIndex, CaptureEnvironment, Finalization, LossRecord, ProfileSummary, SchemaDef, SchemaSet,
 };
@@ -830,8 +830,9 @@ impl<R: Read + Seek> TraceStream<R> {
                         });
                     }
                     for e in &batch.events {
-                        if let PayloadRef::Blob(id) = &e.payload {
-                            self.first_ref.entry(*id).or_insert(offset);
+                        // Payload と引数の BlobRef の両方 (crate::refs)
+                        for u in e.blob_refs(&self.registry).known() {
+                            self.first_ref.entry(u.id).or_insert(offset);
                         }
                     }
                     Some(StreamItem::Events(batch))

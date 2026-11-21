@@ -30,7 +30,10 @@
 //!   相関できる）。
 
 use shirusu_trace::proto::SchemaDef;
-use shirusu_trace::schema::{make_schema, CaptureTiming, LastErrorMeaning, Ty, ValueKind};
+use shirusu_trace::schema::{
+    make_schema, CaptureTiming, LastErrorMeaning, OutputCondition, Ty, ValueKind,
+    DEQUEUED_OVERLAPPED_FIELD,
+};
 
 pub const API_CREATE_FILE_W: u32 = 1;
 pub const API_READ_FILE: u32 = 2;
@@ -68,7 +71,30 @@ pub struct ApiDef {
     pub last_error_meaning: LastErrorMeaning,
 }
 
+/// 結果によって定義されない出力と、その条件 (関数名, leave のフィールド名, 条件)。取得側が
+/// NotApplicable と書くフィールドはここにある (書いたのに条件がないと検査器が取得失敗と数える:
+/// shirusu-hook の tests/io_outcome.rs が全結果で確かめる)。ここにないフィールドは
+/// OutputCondition::Unspecified で、NotApplicable を認めない。
+pub const OUTPUT_CONDITIONS: &[(&str, &str, OutputCondition)] = &[
+    ("ReadFile", "lpNumberOfBytesRead", OutputCondition::WhenNotPending),
+    ("ReadFile", "data", OutputCondition::WhenReturnIsTrueOrMoreData),
+    ("WriteFile", "lpNumberOfBytesWritten", OutputCondition::WhenNotPending),
+    (
+        "GetQueuedCompletionStatus",
+        "lpNumberOfBytesTransferred",
+        OutputCondition::WhenPacketDequeued,
+    ),
+];
+
 impl ApiDef {
+    /// leave のフィールド `field` の出力条件 ([`OUTPUT_CONDITIONS`])
+    pub fn output_condition(&self, field: &str) -> OutputCondition {
+        OUTPUT_CONDITIONS
+            .iter()
+            .find(|(f, n, _)| *f == self.function && *n == field)
+            .map_or(OutputCondition::Unspecified, |(_, _, c)| *c)
+    }
+
     /// ファイル内 Schema ID: 表の順に enter = 2n-1, leave = 2n。
     #[inline]
     pub fn enter_schema_id(&self) -> u32 {
@@ -101,7 +127,7 @@ impl ApiDef {
             self.leave_fields
                 .iter()
                 .map(|(n, t, k, timing)| {
-                    let mut flags = k.flags() | timing.flags();
+                    let mut flags = k.flags() | timing.flags() | self.output_condition(n).flags();
                     // F20: last_error フィールドに意味条件を格納する。
                     if *n == "last_error" {
                         flags |= self.last_error_meaning.flags();
@@ -188,6 +214,10 @@ pub const HANDWRITTEN_API_TABLE: &[ApiDef] = &[
                 ValueKind::Scalar,
                 AFTER,
             ),
+            // 取り出した OVERLAPPED (*lpOverlapped)。FALSE でも非 NULL なら失敗した I/O の
+            // パケットで、バイト数が定義される: 検査器はこの値で NotApplicable を照合する
+            // (7c5a553 レビュー P2-1)
+            (DEQUEUED_OVERLAPPED_FIELD, HANDLE, ValueKind::Pointer, AFTER),
             ("last_error", DWORD, ValueKind::Scalar, AFTER),
         ],
         // F20: GetQueuedCompletionStatus は FALSE を返す場合にだけ LastError が意味を持つ。

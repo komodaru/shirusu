@@ -113,7 +113,7 @@ proptest! {
         );
         let report = shirusu_compare::compare_traces(&left, &right);
         prop_assert!(
-            report.is_identical(),
+            report.verdict().is_identical(),
             "renumbered trace must produce no candidates: {:?}",
             report.candidates
         );
@@ -124,6 +124,6 @@ proptest! {
         let ops = interpret(&tags);
         let trace = render(&ops, Env::default());
         let report = shirusu_compare::compare_traces(&trace, &trace);
-        prop_assert!(report.is_identical(), "self-compare: {:?}", report.candidates);
+        prop_assert!(report.verdict().is_identical(), "self-compare: {:?}", report.candidates);
     }
 }

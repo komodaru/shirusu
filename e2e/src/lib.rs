@@ -5,6 +5,7 @@
 
 pub mod perf;
 
+use shirusu_transport::slot::SlotClaim;
 use shirusu_transport::clock::{system_clock, Clock, ManualClock};
 use shirusu_transport::context::HostMonitor;
 use shirusu_transport::ring::{
@@ -528,11 +529,11 @@ pub fn scenario_slot_reuse() -> ScenarioReport {
 }
 fn scenario_slot_reuse_steps() -> Setup<ScenarioReport> {
     let pool = SlotPool::new(1);
-    let h1 = pool.claim(100).ctx("claim")?;
+    let h1 = pool.claim(100).map(SlotClaim::confirm).ctx("claim")?;
     pool.begin_detach(&h1);
     let blocked = pool.claim(200).is_none();
     let released = shirusu_host::host_release_slot(&pool, &h1, true, true);
-    let h2 = pool.claim(200).ctx("claim")?;
+    let h2 = pool.claim(200).map(SlotClaim::confirm).ctx("claim")?;
     let ok = blocked && released && h2.generation == h1.generation + 1 && h2.index == h1.index;
     // 世代の違う像は検証で弾かれる
     let cfg = RingConfig::new(8, 256);
@@ -673,7 +674,7 @@ fn scenario_producer_storm_32_threads_steps() -> Setup<ScenarioReport> {
         .map(|t| {
             let pool = pool.clone();
             std::thread::spawn(move || -> Setup<(u64, bool, u64)> {
-                let handle = pool.claim(t).ctx("32 slots for 32 threads")?;
+                let handle = pool.claim(t).map(SlotClaim::confirm).ctx("32 slots for 32 threads")?;
                 let cfg = RingConfig::new(256, 32768);
                 let region = SharedRegion::new(cfg, 1, t).ctx("SharedRegion::new")?;
                 let mut w = writer_over(&region, true);

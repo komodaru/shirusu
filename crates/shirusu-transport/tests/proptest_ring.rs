@@ -166,7 +166,7 @@ proptest! {
             match op {
                 0 => {
                     tid += 1;
-                    if let Some(h) = pool.claim(tid) {
+                    if let Some(h) = pool.claim(tid).map(shirusu_transport::slot::SlotClaim::confirm) {
                         handles.push((h, false));
                     }
                 }

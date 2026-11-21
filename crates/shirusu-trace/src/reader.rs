@@ -259,9 +259,10 @@ pub fn read_trace_with_limits(data: &[u8], limits: ReaderLimits) -> Result<ReadT
     let mut seen_missing: HashSet<BlobId> = HashSet::new();
     for batch in &scan.batches {
         for e in &batch.events {
-            if let PayloadRef::Blob(id) = &e.payload {
-                if !scan.blobs.contains_key(id) && seen_missing.insert(*id) {
-                    missing.push(*id);
+            // (Payload と引数の BlobRef の両方: crate::refs)
+            for u in e.blob_refs(&scan.registry).missing(|id| scan.blobs.contains_key(id)) {
+                if seen_missing.insert(u.id) {
+                    missing.push(u.id);
                 }
             }
         }
@@ -280,11 +281,11 @@ pub fn read_trace_with_limits(data: &[u8], limits: ReaderLimits) -> Result<ReadT
     let mut seen_forward: HashSet<BlobId> = HashSet::new();
     for (batch, &batch_offset) in scan.batches.iter().zip(scan.batch_offsets.iter()) {
         for e in &batch.events {
-            if let PayloadRef::Blob(id) = &e.payload {
-                if let Some(&blob_offset) = scan.blob_offsets.get(id) {
-                    if blob_offset > batch_offset && seen_forward.insert(*id) {
+            for u in e.blob_refs(&scan.registry).known() {
+                if let Some(&blob_offset) = scan.blob_offsets.get(&u.id) {
+                    if blob_offset > batch_offset && seen_forward.insert(u.id) {
                         scan.issues
-                            .push(RecoveryIssue::ForwardBlobReference { id: *id });
+                            .push(RecoveryIssue::ForwardBlobReference { id: u.id });
                     }
                 }
             }

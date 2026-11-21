@@ -43,7 +43,7 @@ fn pool_in_state(state: &str) -> (SlotPool, SlotHandle) {
             generation: 1,
             thread_id: 0,
         },
-        _ => pool.claim(42).unwrap(),
+        _ => pool.claim(42).unwrap().confirm(),
     };
     match state {
         "draining" | "reclaimable" => {
@@ -141,7 +141,7 @@ fn reclaimable_state_only_reclaim_succeeds() {
 fn stale_handle_rejected_by_all_generation_checked_ops() {
     let (pool, h) = pool_in_state("reclaimable");
     assert!(pool.host_reclaim(&h)); // generation advances; h is now stale
-    let h2 = pool.claim(7).unwrap();
+    let h2 = pool.claim(7).unwrap().confirm();
     assert_eq!(h2.generation, h.generation + 1);
     assert!(pool.begin_detach(&h2));
     // 古い世代の handle では、世代を照合する操作は全て失敗する
@@ -168,7 +168,7 @@ fn stale_handle_note_counts_by_state_only() {
 fn generation_increments_each_reuse_cycle() {
     let pool = SlotPool::new(1);
     for expect_gen in 1..=4u64 {
-        let h = pool.claim(1).unwrap();
+        let h = pool.claim(1).unwrap().confirm();
         assert_eq!(h.generation, expect_gen);
         assert!(pool.begin_detach(&h));
         assert!(pool.host_confirm_ended_and_drained(&h, true, true));
@@ -178,7 +178,7 @@ fn generation_increments_each_reuse_cycle() {
 #[test]
 fn owner_thread_recorded_on_claim() {
     let pool = SlotPool::new(2);
-    let h = pool.claim(4242).unwrap();
+    let h = pool.claim(4242).unwrap().confirm();
     assert_eq!(pool.slot(h.index).owner_thread_id(), 4242);
     assert_eq!(h.thread_id, 4242);
 }
@@ -190,7 +190,7 @@ macro_rules! claim_case {
         fn $name() {
             let pool = SlotPool::new($cap);
             for i in 0..$cap {
-                let h = pool.claim(100 + i as u64).expect("slot available");
+                let h = pool.claim(100 + i as u64).expect("slot available").confirm();
                 assert_eq!(h.index, i, "claims take slots in order");
                 assert_eq!(h.generation, 1);
                 assert_eq!(pool.free_count(), $cap - i - 1);
@@ -209,12 +209,12 @@ claim_case!(claim_order_cap5, 5);
 #[test]
 fn claim_reuses_first_freed_slot() {
     let pool = SlotPool::new(2);
-    let a = pool.claim(1).unwrap();
-    let _b = pool.claim(2).unwrap();
+    let a = pool.claim(1).unwrap().confirm();
+    let _b = pool.claim(2).unwrap().confirm();
     assert!(pool.begin_detach(&a));
     assert!(pool.host_confirm_ended_and_drained(&a, true, true));
     assert!(pool.host_reclaim(&a));
-    let c = pool.claim(3).unwrap();
+    let c = pool.claim(3).unwrap().confirm();
     assert_eq!(c.index, a.index, "first free slot is reused");
     assert_eq!(c.generation, a.generation + 1);
 }
@@ -223,36 +223,36 @@ fn claim_reuses_first_freed_slot() {
 #[test]
 fn watermark_zero_never_requests() {
     let pool = SlotPool::with_low_watermark(2, 0);
-    pool.claim(1).unwrap();
-    pool.claim(2).unwrap(); // free = 0 でも 0 未満にはならない
+    pool.claim(1).unwrap().confirm();
+    pool.claim(2).unwrap().confirm(); // free = 0 でも 0 未満にはならない
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 0);
     assert!(!pool.take_expansion_request());
 }
 #[test]
 fn watermark_one_requests_when_pool_empties() {
     let pool = SlotPool::with_low_watermark(2, 1);
-    pool.claim(1).unwrap(); // free = 1, not < 1
+    pool.claim(1).unwrap().confirm(); // free = 1, not < 1
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 0);
-    pool.claim(2).unwrap(); // free = 0 < 1
+    pool.claim(2).unwrap().confirm(); // free = 0 < 1
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 1);
 }
 #[test]
 fn watermark_above_capacity_requests_on_first_claim() {
     let pool = SlotPool::with_low_watermark(2, 8);
-    pool.claim(1).unwrap(); // free = 1 < 8
+    pool.claim(1).unwrap().confirm(); // free = 1 < 8
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 1);
 }
 #[test]
 fn expansion_request_latches_until_taken() {
     let pool = SlotPool::with_low_watermark(10, 8);
-    pool.claim(1).unwrap();
-    pool.claim(2).unwrap();
-    pool.claim(3).unwrap(); // free = 7 < 8: request fires once
-    pool.claim(4).unwrap(); // still below, but latched: no second count
+    pool.claim(1).unwrap().confirm();
+    pool.claim(2).unwrap().confirm();
+    pool.claim(3).unwrap().confirm(); // free = 7 < 8: request fires once
+    pool.claim(4).unwrap().confirm(); // still below, but latched: no second count
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 1);
     assert!(pool.take_expansion_request());
     assert!(!pool.take_expansion_request());
-    pool.claim(5).unwrap(); // below watermark again: re-request
+    pool.claim(5).unwrap().confirm(); // below watermark again: re-request
     assert_eq!(pool.expansion_request_count.load(Ordering::Relaxed), 2);
 }
 

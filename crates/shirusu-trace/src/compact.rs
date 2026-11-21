@@ -233,26 +233,36 @@ pub fn validate_values(types: &[Ty], data: &[u8]) -> Result<(), CompactError> {
     validate_values_in(types.iter().map(|ty| (*ty, 0)), data).map(|_| ())
 }
 
+/// 値列の取得状態と、結果の判定に使うスカラーの生値 (取得状態の照合の材料)
+type Scanned = Vec<(u32, ValueCapture, Option<u64>)>;
+
 /// Validate without allocating and report whether every field was captured.
 /// A field may say Stale / NotApplicable only where its schema flags allow it
-/// (`ValueCapture::is_complete_for`).
+/// (`ValueCapture::is_complete_given`).
 pub fn validate_values_completeness(
     shapes: crate::schema::FieldShapes<'_>,
     data: &[u8],
 ) -> Result<bool, CompactError> {
-    validate_values_in(shapes.iter(), data)
+    let scanned = validate_values_in(shapes.iter(), data)?;
+    // 結果 (戻り値・LastError・取り出した OVERLAPPED) は値列の後ろにあることもあるので、
+    // 全部を読んでから照合する
+    let raw: Vec<(ValueCapture, Option<u64>)> = scanned.iter().map(|(_, c, v)| (*c, *v)).collect();
+    let facts = crate::schema::ResultFacts::of(shapes.roles(), &raw);
+    Ok(scanned
+        .iter()
+        .all(|(flags, capture, _)| capture.is_complete_given(*flags, &facts)))
 }
 
 fn validate_values_in(
     shapes: impl Iterator<Item = (Ty, u32)>,
     data: &[u8],
-) -> Result<bool, CompactError> {
-    let mut complete = true;
+) -> Result<Scanned, CompactError> {
+    let mut scanned = Scanned::new();
     let mut cur = Cursor::new(data);
     for (ty, flags) in shapes {
         let code = cur.read_u8()?;
         let capture = ValueCapture::from_code(code).ok_or(CompactError::InvalidCapture(code))?;
-        complete &= capture.is_complete_for(flags);
+        let mut bits = None;
         match ty {
             Ty::Str => {
                 std::str::from_utf8(cur.read_len_bytes()?)
@@ -270,13 +280,18 @@ fn validate_values_in(
             // string/byte variants make the enum substantially larger than a
             // scalar). Preserve the decoder's range and representation checks.
             Ty::I32 => {
-                i32::try_from(cur.read_sleb()?).map_err(|_| CompactError::IntegerOutOfRange)?;
+                let v = i32::try_from(cur.read_sleb()?).map_err(|_| CompactError::IntegerOutOfRange)?;
+                bits = TypedValue::<crate::schema::Generic>::I32(v).scalar_bits();
             }
             Ty::U32 => {
-                u32::try_from(cur.read_uleb()?).map_err(|_| CompactError::IntegerOutOfRange)?;
+                let v = u32::try_from(cur.read_uleb()?).map_err(|_| CompactError::IntegerOutOfRange)?;
+                bits = Some(u64::from(v));
             }
-            Ty::I64 | Ty::U64 => {
-                cur.read_uleb()?;
+            Ty::I64 => {
+                bits = Some(cur.read_sleb()? as u64);
+            }
+            Ty::U64 => {
+                bits = Some(cur.read_uleb()?);
             }
             Ty::F32 | Ty::Ptr32 => {
                 cur.read_exact(4)?;
@@ -292,13 +307,15 @@ fn validate_values_in(
                 if value > 1 {
                     return Err(CompactError::InvalidBool(value));
                 }
+                bits = Some(u64::from(value));
             }
         }
+        scanned.push((flags, capture, bits));
     }
     if !cur.is_done() {
         return Err(CompactError::TrailingBytes(cur.remaining()));
     }
-    Ok(complete)
+    Ok(scanned)
 }
 
 /// fuzz ターゲット `decode_compact` の入口：SchemaSet の Protobuf

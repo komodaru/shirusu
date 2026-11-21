@@ -11,7 +11,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
-        Ok(has_candidates) => ExitCode::from(if has_candidates { 1 } else { 0 }),
+        Ok(not_identical) => ExitCode::from(if not_identical { 1 } else { 0 }),
         Err((code, msg)) => {
             eprintln!("error: {msg}");
             ExitCode::from(code)
@@ -74,5 +74,6 @@ fn run(args: &[String]) -> Result<bool, (u8, String)> {
         }
         None => print!("{rendered}"),
     }
-    Ok(!report.candidates.is_empty())
+    // 一致 (Identical) 以外は終了コード 1: 候補がある、または観測が揃っていない
+    Ok(!report.verdict().is_identical())
 }

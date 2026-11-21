@@ -45,6 +45,9 @@
 //!   一致すること。Blob ID は内容ハッシュそのものが設計であり、
 //!   CRC32C はこの同一性を保証しない (レビュー #4 の #5)。Reader も
 //!   取り込み時に照合するが、適合性検査でも独立に照合する。
+//! - last-error-inputs: 入力で意味が決まる LastError (DependsOnInputs) を Stale と書いた
+//!   leave が、同じ呼び出しの enter の入力と戻り値で本当に残留値であること。取得側と同じ
+//!   規則 (`LastErrorMeaning::resolve_inputs`) で照らす (7c5a553 レビュー P2-1)。
 //! - integrity-consistent: 完全性 3 指標の自己申告が記録内容と
 //!   矛盾しないこと（Complete を名乗りながら損失が記録されて
 //!   いる、等）。Capture Coverage の真偽は Trace の中からは
@@ -53,10 +56,10 @@
 
 use shirusu_analysis::{JsonValue, Phase, TraceView};
 use shirusu_trace::blob::BlobId;
-use shirusu_trace::model::PayloadRef;
 use shirusu_trace::proto::integrity_level;
 use shirusu_trace::reader::{ReadTrace, RecoveryIssue};
-use shirusu_trace::schema::TypedValue;
+use shirusu_trace::refs::BlobSite;
+use shirusu_trace::schema::{LastErrorMeaning, ValueCapture};
 use std::collections::{HashMap, HashSet};
 
 /// 検査 1 件の結果。
@@ -185,6 +188,7 @@ pub fn check_trace(trace: &ReadTrace) -> ConformanceReport {
             check_enter_leave_pairing(trace, &view),
             check_blob_refs(trace, &view),
             check_blob_hashes(trace),
+            check_last_error_inputs(&view),
             check_integrity_consistency(trace, &view),
         ],
     }
@@ -583,30 +587,26 @@ fn check_blob_refs(trace: &ReadTrace, view: &TraceView) -> CheckFinding {
             missing.push(what);
         }
     };
+    // 参照の列挙は shirusu_trace::refs の一か所 (repair・完全性の集計と同じ答えになる)
+    let mut index = 0usize;
     for batch in &trace.batches {
         for e in &batch.events {
-            if let PayloadRef::Blob(blob) = &e.payload {
-                if !trace.blobs.contains_key(blob) {
-                    note(
-                        &mut missing,
-                        &mut seen,
-                        format!("payload blob {blob} (event seq={})", e.sequence),
-                    );
-                }
+            let refs = e.blob_refs(&trace.registry);
+            for u in refs.missing(|b| trace.blobs.contains_key(b)) {
+                let what = match u.site {
+                    BlobSite::Payload => format!("payload blob {} (event seq={})", u.id, e.sequence),
+                    BlobSite::Arg { index: field } => {
+                        let name = view
+                            .events
+                            .get(index)
+                            .and_then(|ev| ev.fields.get(field))
+                            .map_or_else(|| format!("#{field}"), |f| f.name.clone());
+                        format!("field {name} blob {} (event #{index})", u.id)
+                    }
+                };
+                note(&mut missing, &mut seen, what);
             }
-        }
-    }
-    for ev in &view.events {
-        for f in &ev.fields {
-            if let TypedValue::BlobRef(blob) = &f.value {
-                if !trace.blobs.contains_key(blob) {
-                    note(
-                        &mut missing,
-                        &mut seen,
-                        format!("field {} blob {} (event #{})", f.name, blob, ev.index),
-                    );
-                }
-            }
+            index += 1;
         }
     }
     if missing.is_empty() {
@@ -658,6 +658,70 @@ fn check_blob_hashes(trace: &ReadTrace) -> CheckFinding {
                 bad.join(", ")
             ),
         )
+    }
+}
+
+fn check_last_error_inputs(view: &TraceView) -> CheckFinding {
+    let id = "last-error-inputs";
+    let captured = |f: &shirusu_analysis::FieldView| match f.capture {
+        ValueCapture::Captured => f.value.scalar_bits(),
+        ValueCapture::Unreadable
+        | ValueCapture::Truncated
+        | ValueCapture::Unsupported
+        | ValueCapture::LimitExceeded
+        | ValueCapture::Stale
+        | ValueCapture::NotApplicable => None,
+    };
+    let mut enters: HashMap<(ThreadKey, u64), &shirusu_analysis::EventView> = HashMap::new();
+    let mut problems: Vec<String> = Vec::new();
+    let mut checked = 0u64;
+    for ev in &view.events {
+        let key = (thread_key(ev.session_id, ev.process_id, ev.thread_id), ev.call_id);
+        match ev.phase() {
+            Phase::Enter => {
+                enters.insert(key, ev);
+                continue;
+            }
+            Phase::Leave => {}
+            Phase::Aborted | Phase::Completed | Phase::Other(_) => continue,
+        }
+        let enter = enters.remove(&key);
+        let Some(le) = ev.fields.iter().find(|f| f.name == "last_error") else {
+            continue;
+        };
+        let depends = LastErrorMeaning::from_flags(le.flags) == LastErrorMeaning::DependsOnInputs;
+        if !depends || le.capture != ValueCapture::Stale {
+            continue;
+        }
+        checked += 1;
+        let api = ev.api_name.as_deref().unwrap_or("?");
+        let at = format!("{api} call {} on thread {}", ev.call_id, ev.thread_id);
+        let Some(enter) = enter else {
+            problems.push(format!("{at}: Stale last_error has no enter to resolve its inputs"));
+            continue;
+        };
+        let ret = ev.fields.iter().find(|f| f.name == "return").and_then(captured);
+        let Some(ret) = ret else {
+            problems.push(format!("{at}: Stale last_error without a captured return"));
+            continue;
+        };
+        let raw = le.value.scalar_bits().and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+        let input = |name: &str| enter.fields.iter().find(|f| f.name == name).and_then(captured);
+        let function = api.rsplit('!').next().unwrap_or(api);
+        let meaning = LastErrorMeaning::resolve_inputs(function, &input, ret, raw);
+        if meaning.is_meaningful(ret) {
+            problems.push(format!(
+                "{at}: last_error is Stale but the inputs make it {meaning:?} for return {ret:#x}"
+            ));
+        }
+    }
+    if problems.is_empty() {
+        CheckFinding::pass(
+            id,
+            format!("{checked} input-dependent Stale last_error value(s) agree with their enter"),
+        )
+    } else {
+        CheckFinding::fail(id, problems.join("; "))
     }
 }
 
@@ -720,6 +784,7 @@ mod tests {
     use shirusu_analysis::{KIND_ABORTED, KIND_COMPLETED};
     use shirusu_trace::container::FileHeader;
     use shirusu_trace::model::{EventBatch, PayloadRef, TraceEvent};
+    use shirusu_trace::schema::TypedValue;
     use shirusu_trace::proto::{CaptureEnvironment, Finalization, SessionMetadata};
     use shirusu_trace::schema::{make_schema, EventCapture, SchemaRegistry, Ty};
 
@@ -906,27 +971,37 @@ mod tests {
 
     #[test]
     fn undefined_claims_on_fields_that_cannot_be_undefined_contradict_complete() {
-        use shirusu_trace::schema::{CaptureTiming, LastErrorMeaning, ValueCapture};
-        // (field flags, capture, may claim Complete)
+        use shirusu_trace::schema::{CaptureTiming, LastErrorMeaning, OutputCondition, ValueCapture};
+        // Stale / NotApplicable は宣言だけでなく、同じイベントの実際の戻り値で検査される。
+        // (field flags, capture, return value or None = return not captured, may claim Complete)
         let le = LastErrorMeaning::WhenReturnIsFalse.flags();
         let after = CaptureTiming::After.flags();
         let before = CaptureTiming::Before.flags();
-        for (flags, capture, ok) in [
-            (le, ValueCapture::Stale, true),
-            (0, ValueCapture::Stale, false),
-            (LastErrorMeaning::Always.flags(), ValueCapture::Stale, false),
-            (after, ValueCapture::NotApplicable, true),
-            (before, ValueCapture::NotApplicable, false),
-            (0, ValueCapture::NotApplicable, false),
-            (le, ValueCapture::Unreadable, false),
+        let on_true = OutputCondition::WhenReturnIsTrue.flags();
+        for (flags, capture, ret, ok) in [
+            (le, ValueCapture::Stale, Some(1), true),
+            (le, ValueCapture::Stale, Some(0), false),
+            (le, ValueCapture::Stale, None, false),
+            (0, ValueCapture::Stale, Some(1), false),
+            (LastErrorMeaning::Always.flags(), ValueCapture::Stale, Some(1), false),
+            (after | on_true, ValueCapture::NotApplicable, Some(0), true),
+            (after | on_true, ValueCapture::NotApplicable, Some(1), false),
+            (after | on_true, ValueCapture::NotApplicable, None, false),
+            (after, ValueCapture::NotApplicable, Some(0), false),
+            (before | on_true, ValueCapture::NotApplicable, Some(0), false),
+            (0, ValueCapture::NotApplicable, Some(0), false),
+            (le, ValueCapture::Unreadable, Some(1), false),
         ] {
             let mut t = valid_trace();
             let mut registry = SchemaRegistry::new();
             registry
                 .register(make_schema(
                     1,
-                    "x!Y/enter",
-                    vec![("h".into(), Ty::U64, flags)],
+                    "x!Y/leave",
+                    vec![
+                        ("return".into(), Ty::I32, after),
+                        ("h".into(), Ty::U64, flags),
+                    ],
                 ))
                 .unwrap();
             t.schemas[0] = registry.get(1).unwrap().clone();
@@ -937,20 +1012,32 @@ mod tests {
                 }
                 r
             };
-            let values = [shirusu_trace::schema::CapturedValue {
-                capture,
-                value: TypedValue::U64(9),
-            }];
-            t.batches[0].events[0].args =
-                Some(shirusu_trace::compact::encode_values(&[Ty::U64], &values).unwrap());
+            let values = [
+                shirusu_trace::schema::CapturedValue {
+                    capture: if ret.is_some() {
+                        ValueCapture::Captured
+                    } else {
+                        ValueCapture::Unsupported
+                    },
+                    value: TypedValue::I32(ret.unwrap_or(0)),
+                },
+                shirusu_trace::schema::CapturedValue {
+                    capture,
+                    value: TypedValue::U64(9),
+                },
+            ];
+            t.batches[0].events[0].args = Some(
+                shirusu_trace::compact::encode_values(&[Ty::I32, Ty::U64], &values).unwrap(),
+            );
             t.batches[0].events[0].schema_id = 1;
             let got = status(&check_trace(&t), "integrity-consistent");
+            // 戻り値が取れていない場合はそれ自体が不完全なので、Complete の主張は常に矛盾する
             let want = if ok {
                 CheckStatus::Pass
             } else {
                 CheckStatus::Fail
             };
-            assert_eq!(got, want, "flags {flags:#x} {capture:?}");
+            assert_eq!(got, want, "flags {flags:#x} {capture:?} ret {ret:?}");
         }
     }
 

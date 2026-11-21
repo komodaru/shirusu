@@ -15,6 +15,9 @@
 //!   Finalization の書出し）。
 //! - [`reader`]: Trace Reader（回復意味論。壊れた入力は issue として
 //!   記録し、読める範囲を返す）。
+// Kani 0.68 の固定 nightly では Rust 1.100 で安定した `!` (TypedValue<Generic>) がまだ feature の後ろにある
+// (cargo kani だけが cfg(kani) を立てる; 通常のビルドは安定版のまま)
+#![cfg_attr(kani, feature(never_type))]
 
 pub mod blob;
 pub mod com_catalog;
@@ -25,6 +28,7 @@ pub mod model;
 pub mod module;
 pub mod proto;
 pub mod reader;
+pub mod refs;
 pub mod schema;
 pub mod static_dep;
 pub mod stream;

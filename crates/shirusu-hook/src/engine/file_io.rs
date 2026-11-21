@@ -10,8 +10,8 @@ pub(super) fn record_overlapped_completion(
     rt: &HookRuntime,
     tid: u64,
     pending: capture::PendingOverlapped,
-    transferred: u32,
-    success: bool,
+    transferred: Option<u32>,
+    outcome: capture::IoOutcome,
     last_error: u32,
 ) {
     let Some(api) = api_by_id(pending.api_id) else {
@@ -23,11 +23,11 @@ pub(super) fn record_overlapped_completion(
             pending.buffer,
             pending.requested_len,
             transferred,
-            success,
+            outcome,
             last_error,
         ),
         capture::OverlappedDirection::Write => {
-            capture::complete_write_file_leave(transferred, success, last_error)
+            capture::complete_write_file_leave(transferred, outcome, last_error)
         }
     };
     if let Ok(bytes) = capture::encode_leave(api, &values) {
@@ -416,7 +416,9 @@ pub(super) unsafe extern "system-unwind" fn detour_read_file(
     // F27: 同期完了した OVERLAPPED 操作は leave 時点で既に完了して
     // いるため、転送バイト数とバッファ内容をここで取る。未完了
     // (ERROR_IO_PENDING) なら完了の観測に備えて登録する。
-    let values = if is_overlapped && ret != 0 {
+    // 同期に終わった部分読み取り (FALSE + ERROR_MORE_DATA) も、読めた分はここで有効
+    let outcome = capture::IoOutcome::classify(ret, last_error);
+    let values = if is_overlapped && outcome.has_output() {
         match capture::read_overlapped_transferred(
             &ProcessMemory,
             bytes_read as u64,
@@ -426,8 +428,8 @@ pub(super) unsafe extern "system-unwind" fn detour_read_file(
                 &ProcessMemory,
                 buffer as u64,
                 bytes_to_read,
-                n,
-                true,
+                Some(n),
+                outcome,
                 last_error,
             ),
             None => capture::read_file_leave(
@@ -543,7 +545,7 @@ pub(super) unsafe extern "system-unwind" fn detour_write_file(
             bytes_written as u64,
             overlapped as u64,
         ) {
-            Some(n) => capture::complete_write_file_leave(n, true, last_error),
+            Some(n) => capture::complete_write_file_leave(Some(n), capture::IoOutcome::Completed, last_error),
             None => capture::write_file_leave(
                 &ProcessMemory,
                 ret,
@@ -703,12 +705,15 @@ pub(super) unsafe extern "system-unwind" fn detour_get_overlapped_result(
     if ret != 0 {
         if let Some(pending) = take() {
             if let Some(n) = transferred {
-                record_overlapped_completion(&rt, tid, pending, n, true, last_error);
+                let outcome = capture::IoOutcome::Completed;
+                record_overlapped_completion(&rt, tid, pending, Some(n), outcome, last_error);
             }
         }
     } else if last_error != capture::ERROR_IO_INCOMPLETE {
         if let Some(pending) = take() {
-            record_overlapped_completion(&rt, tid, pending, 0, false, last_error);
+            // 失敗の完了でも ERROR_MORE_DATA なら転送した分は有効 (IoOutcome::MoreData)
+            let outcome = capture::IoOutcome::of_completion(false, last_error);
+            record_overlapped_completion(&rt, tid, pending, transferred, outcome, last_error);
         }
     }
     // SAFETY: LastError を復元する。
@@ -815,7 +820,8 @@ pub(super) unsafe extern "system-unwind" fn detour_get_queued_completion_status(
         let signature = capture::read_overlapped_signature(&ProcessMemory, dequeued);
         if let Some(pending) = rt.take_matching_overlapped(dequeued, None, signature) {
             if let Some(n) = packet.transferred() {
-                record_overlapped_completion(&rt, tid, pending, n, ret != 0, last_error);
+                let outcome = capture::IoOutcome::of_completion(ret != 0, last_error);
+                record_overlapped_completion(&rt, tid, pending, Some(n), outcome, last_error);
             }
         }
     }

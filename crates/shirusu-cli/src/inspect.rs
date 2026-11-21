@@ -557,6 +557,7 @@ pub(crate) fn inspect_json(path: &str, d: &InspectData) -> JsonValue {
 mod tests {
     use super::*;
     use shirusu_trace::schema::{make_schema, EventCapture, Ty};
+    use shirusu_trace::PayloadRef;
 
     #[test]
     fn profile_names_survive_api_ids_from_the_file() {

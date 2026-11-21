@@ -77,7 +77,7 @@ fn relocated_com_factories_compare_equal_across_pointer_widths() {
     for base in [0x2000, 0x1000_0000, 0x1234_5678_0000] {
         let right = trace(base, 64, 1, Some(CLSID_SHELL_LINK));
         let report = compare_traces(&left, &right);
-        assert!(report.is_identical(), "{report:?}");
+        assert!(report.verdict().is_identical(), "{report:?}");
         assert!(shirusu_analysis::TraceView::build(&right).events[0]
             .to_json()
             .render()

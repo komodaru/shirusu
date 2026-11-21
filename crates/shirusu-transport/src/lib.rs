@@ -46,4 +46,4 @@ pub use shm::{
     Backing, ConsumerControl, ConsumerWord, Control, ProducerControl, ProducerWord, Shm, ShmError,
     UninitializedRing, Word,
 };
-pub use slot::{SlotHandle, SlotPool, SlotState};
+pub use slot::{SlotClaim, SlotHandle, SlotPool, SlotState};

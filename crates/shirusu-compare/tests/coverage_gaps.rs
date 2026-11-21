@@ -297,7 +297,8 @@ fn norm_call_objects_dedups_referenced() {
 #[test]
 fn norm_value_covers_pointer_and_misc_types() {
     let known = BlobId::of_content(b"known-blob");
-    let unknown = BlobId::from_bytes([0xAB; 32]);
+    // (Writer は参照先のない BlobRef を書かないので、書いてから読んだ側で消す)
+    let unknown = BlobId::of_content(b"unknown-blob");
     let mut x = X::new();
     x.push(
         1,
@@ -355,12 +356,13 @@ fn norm_value_covers_pointer_and_misc_types() {
         PayloadRef::None,
         EventCapture::Captured,
     );
-    let trace = x.finish(
+    let mut trace = x.finish(
         misc_schemas(),
         FinalizationInfo::default(),
         &[],
-        &[b"known-blob"],
+        &[b"known-blob", b"unknown-blob"],
     );
+    assert!(trace.blobs.remove(&unknown).is_some());
     let nt = NormTrace::build(&trace);
     // U32 の CreatedObject フィールドは生成とみなさない（272 行）。
     assert!(nt.objects.is_empty(), "objects: {:?}", nt.objects);

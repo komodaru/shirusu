@@ -270,7 +270,7 @@ fn handle_renumbering_alone_produces_no_candidates() {
     let b = read(&record(0x777, true, true, 9_999_999));
     let report = compare_traces(&a, &b);
     assert!(
-        report.is_identical(),
+        report.verdict().is_identical(),
         "renumbering must be normalized away: {:?}",
         report
             .candidates
@@ -395,7 +395,7 @@ fn generated_create_file_contract_preserves_only_meaningful_success_errors() {
             assert_eq!(report.candidates[0].kind, CandidateKind::ReturnDifference);
         } else {
             assert!(
-                report.is_identical(),
+                report.verdict().is_identical(),
                 "{disposition}: {:?}",
                 report.candidates
             );

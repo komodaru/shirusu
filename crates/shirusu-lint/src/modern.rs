@@ -121,8 +121,7 @@ fn flag_holders(file: &syn::File) -> Vec<String> {
                     let ty = f
                         .unnamed
                         .first()
-                        .map(|f| tokens(&f.ty).replace(' ', ""))
-                        .unwrap_or_default();
+                        .map_or_default(|f| tokens(&f.ty).replace(' ', ""));
                     (ty.starts_with('&') && ty.ends_with("AtomicBool")).then(|| s.ident.to_string())
                 }
                 _ => None,

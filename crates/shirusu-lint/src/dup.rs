@@ -8,7 +8,8 @@
 //!   not a path segment) replaced by their order of first use (a copy whose variables were renamed).
 //!
 //! A group of two or more items with the same shape, at least [`Kind::min_tokens`] long, is a
-//! finding unless the known list (tools/ci/dup-sites.tsv) has that group with its reason (a test's
+//! finding unless the known list (masu: tools/ci/dup-sites.tsv; shirusu: scripts/ci/dup-known.tsv;
+//! kikizake: tools/lint/dup-known.tsv) has that group with its reason (a test's
 //! independent oracle, a measured Windows model...). The known list only shrinks by itself:
 //! `--update` drops the groups that are gone; a new one is added by hand, with its why.
 //!
@@ -417,7 +418,7 @@ pub fn report(new: &[&Group], sites: &str) -> String {
             .map(|(m, l)| format!("{}:{l} ({})", m.file, m.name))
             .collect();
         out.push_str(&format!(
-            "dup: {} copy, {} tokens:\n    {}\n    (keep one and call it from the others; an intended copy goes in {sites} with its why:\n    {})\n",
+            "dup: {} copy, {} tokens:\n    {}\n    (keep one and call it from the others; an intended copy goes in {sites} as this line, its why filled in:)\n    {}\n",
             g.kind.id(),
             g.tokens,
             at.join("\n    "),

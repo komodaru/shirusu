@@ -1373,3 +1373,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(kani)]
+#[path = "view_proofs.rs"]
+mod proofs;

@@ -2364,3 +2364,111 @@ mod guest_address_props {
         );
     }
 }
+
+/// Kani: a result's kind decides which outputs are valid, and an output the result leaves
+/// undefined, or that was not read, is never recorded as captured (scripts/ci/kani.sh).
+///
+/// * classify / of_completion: TRUE is Completed; FALSE with ERROR_MORE_DATA a partial result
+///   (its outputs valid); FALSE with ERROR_IO_PENDING pending (at leave only: a completion is
+///   never pending); any other FALSE a failure; `ret` gives the raw return back.
+/// * complete_read_file_leave (the outputs of a ReadFile completion) on a guest memory of any
+///   readable window: the count and the data are Captured only for a result with output, a
+///   count observed and the bytes really read; a failure's data is NotApplicable, an unknown
+///   count makes both Unsupported (not 0 and empty, which would be a captured value).
+/// * QueuedCompletion: no packet leaves the count NotApplicable; a packet whose count could
+///   not be read records Unreadable, never a 0.
+///
+/// Correspondence: the real fns. Bounds: transfers of up to 3 bytes (read_buffer's buffer),
+/// any addresses, requested sizes and errors.
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// a guest memory readable on [base, base + len) only
+    struct Window {
+        base: u64,
+        len: u64,
+    }
+    impl MemoryReader for Window {
+        fn read_exact(&self, addr: u64, buf: &mut [u8]) -> bool {
+            let ok = addr >= self.base
+                && (addr - self.base).checked_add(buf.len() as u64).is_some_and(|end| end <= self.len);
+            if ok {
+                for b in buf.iter_mut() {
+                    *b = kani::any();
+                }
+            }
+            ok
+        }
+    }
+
+    #[kani::proof]
+    fn a_result_is_classified_by_its_return_and_error() {
+        let (ret, le): (i32, u32) = (kani::any(), kani::any());
+        let o = IoOutcome::classify(ret, le);
+        assert_eq!(o == IoOutcome::Completed, ret != 0);
+        assert_eq!(o == IoOutcome::MoreData, ret == 0 && le == ERROR_MORE_DATA);
+        assert_eq!(o == IoOutcome::Pending, ret == 0 && le == ERROR_IO_PENDING);
+        assert_eq!(o.has_output(), ret != 0 || le == ERROR_MORE_DATA);
+        assert_eq!(o.ret() != 0, ret != 0);
+        let success: bool = kani::any();
+        let c = IoOutcome::of_completion(success, le);
+        assert!(c != IoOutcome::Pending);
+        assert_eq!(c.has_output(), success || le == ERROR_MORE_DATA);
+        assert_eq!(c.ret() != 0, success);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn read_completion_outputs_are_captured_only_when_valid_and_read() {
+        let mem = Window { base: kani::any(), len: kani::any() };
+        let (buffer, requested): (u64, u32) = (kani::any(), kani::any());
+        let transferred: Option<u32> = if kani::any() { Some(kani::any()) } else { None };
+        kani::assume(transferred.is_none_or(|n| n <= 3));
+        let outcome = IoOutcome::of_completion(kani::any(), kani::any());
+        let v = complete_read_file_leave(&mem, buffer, requested, transferred, outcome, kani::any());
+        let [_, count, data, _] = v.as_slice() else { panic!("ReadFile's leave has 4 values") };
+        let valid = outcome.has_output();
+        if count.capture == ValueCapture::Captured {
+            assert!(valid && count.value == TypedValue::U32(transferred.unwrap_or(u32::MAX)));
+        }
+        if data.capture == ValueCapture::Captured {
+            let n = transferred.unwrap_or(0);
+            assert!(valid && n <= requested);
+            // (the bytes were in readable memory, or there were none)
+            let read = n == 0 || (buffer != 0 && mem.read_exact(buffer, &mut vec![0u8; n as usize]));
+            assert!(read);
+            assert!(matches!(&data.value, TypedValue::Bytes(b) if b.len() == n as usize));
+        }
+        if !valid {
+            assert_eq!(data.capture, ValueCapture::NotApplicable);
+        }
+        if valid && transferred.is_none() {
+            assert!(count.capture == ValueCapture::Unsupported && data.capture == ValueCapture::Unsupported);
+        }
+        kani::cover!(data.capture == ValueCapture::Captured && transferred == Some(3), "3 bytes read");
+        kani::cover!(data.capture == ValueCapture::Truncated, "a part read");
+        kani::cover!(data.capture == ValueCapture::Unreadable, "nothing readable");
+        kani::cover!(outcome == IoOutcome::MoreData && data.capture == ValueCapture::Captured, "a partial result's data");
+    }
+
+    #[kani::proof]
+    fn a_completion_packet_count_is_never_made_up() {
+        let (result, overlapped): (i32, u64) = (kani::any(), kani::any());
+        let read: Option<u32> = if kani::any() { Some(kani::any()) } else { None };
+        let q = QueuedCompletion::observe(result, overlapped, || read);
+        let v = q.leave_values(kani::any());
+        let [ret, bytes, dequeued, _] = v.as_slice() else { panic!("4 values") };
+        assert_eq!(dequeued.value, TypedValue::U64(overlapped));
+        assert_eq!(ret.value, TypedValue::I32(if result != 0 { result } else { 0 }));
+        let packet = result != 0 || overlapped != 0;
+        match bytes.capture {
+            ValueCapture::Captured => assert!(packet && bytes.value == TypedValue::U32(read.unwrap_or(u32::MAX)) && read.is_some()),
+            ValueCapture::Unreadable => assert!(packet && read.is_none()),
+            ValueCapture::NotApplicable => assert!(!packet),
+            ValueCapture::Truncated | ValueCapture::Unsupported | ValueCapture::LimitExceeded | ValueCapture::Stale => panic!("no other state"),
+        }
+        kani::cover!(packet && read.is_none(), "a packet whose count was not readable");
+        kani::cover!(result == 0 && overlapped != 0 && read.is_some(), "a failed I/O's packet");
+    }
+}

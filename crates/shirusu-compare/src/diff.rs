@@ -801,6 +801,52 @@ fn align_greedy(a: &[&str], b: &[&str]) -> Vec<AlignStep> {
     steps
 }
 
+/// Kani: the verdict keeps what the inputs miss (scripts/ci/kani.sh). Any report of no
+/// candidate or some, either side's observation whole or missing parts: Identical exactly when
+/// there is no candidate and neither side misses anything (so, with view_proofs.rs's
+/// `nothing_unknown_is_reported_whole`, only when both summaries are whole: compare_traces
+/// takes `left_input` / `right_input` from `incompleteness()`); ObservedPrefixAgrees carries
+/// each side's gaps as they were; Differs counts every candidate. Bounds: up to 2 candidates,
+/// up to 2 gaps a side, of two kinds.
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    fn any_gaps() -> Vec<Incompleteness> {
+        let n: u8 = kani::any();
+        kani::assume(n <= 2);
+        (0..n).map(|_| if kani::any() { Incompleteness::NoFinalization } else { Incompleteness::DegradedEvents { events: kani::any() } }).collect()
+    }
+
+    #[kani::proof]
+    #[kani::unwind(4)]
+    fn the_verdict_is_identical_only_when_nothing_is_missing() {
+        let n: u8 = kani::any();
+        kani::assume(n <= 2);
+        let report = DiffReport {
+            candidates: (0..n).map(|_| Candidate::new(CandidateKind::MissingCall, Severity::High, String::new())).collect(),
+            left_input: any_gaps(),
+            right_input: any_gaps(),
+            ..Default::default()
+        };
+        let v = report.verdict();
+        let whole = report.left_input.is_empty() && report.right_input.is_empty();
+        assert_eq!(v.is_identical(), report.candidates.is_empty() && whole);
+        match &v {
+            Verdict::Identical => {}
+            Verdict::ObservedPrefixAgrees { left, right } => {
+                assert!(report.candidates.is_empty() && !whole);
+                assert_eq!(left, &report.left_input);
+                assert_eq!(right, &report.right_input);
+            }
+            Verdict::Differs { candidates } => assert_eq!(*candidates, report.candidates.len()),
+        }
+        kani::cover!(matches!(v, Verdict::ObservedPrefixAgrees { .. }) && !report.left_input.is_empty() && report.right_input.is_empty(), "only the left side misses parts");
+        kani::cover!(matches!(v, Verdict::Differs { candidates: 2 }) && !whole, "differs with gaps");
+        kani::cover!(v.is_identical(), "identical");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

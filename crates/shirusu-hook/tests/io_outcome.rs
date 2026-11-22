@@ -78,6 +78,18 @@ fn through_trace(api_id: u32, values: &[CapturedValue]) -> (bool, bool) {
 
 /// enter と leave 1 組の Trace を書いて読み戻し、conformance の `last-error-inputs` を返す
 fn last_error_inputs(api_id: u32, enter: &[CapturedValue], leave: &[CapturedValue]) -> CheckStatus {
+    let t = pair_trace(api_id, enter, leave);
+    let report = shirusu_conformance::check_trace(&t);
+    report.finding("last-error-inputs").unwrap().status
+}
+
+/// enter と leave 1 組の Trace (書いて読み戻したもの)
+fn pair_trace(api_id: u32, enter: &[CapturedValue], leave: &[CapturedValue]) -> shirusu_trace::reader::ReadTrace {
+    shirusu_trace::read_trace(&pair_bytes(api_id, enter, leave)).unwrap()
+}
+
+/// enter と leave 1 組の Trace のバイト列
+fn pair_bytes(api_id: u32, enter: &[CapturedValue], leave: &[CapturedValue]) -> Vec<u8> {
     let api = api_by_id(api_id).unwrap();
     let env = CaptureEnvironment {
         session: SessionMetadata {
@@ -115,10 +127,7 @@ fn last_error_inputs(api_id: u32, enter: &[CapturedValue], leave: &[CapturedValu
         ],
     })
     .unwrap();
-    let bytes = w.finish(FinalizationInfo::default()).unwrap();
-    let t = shirusu_trace::read_trace(&bytes).unwrap();
-    let report = shirusu_conformance::check_trace(&t);
-    report.finding("last-error-inputs").unwrap().status
+    w.finish(FinalizationInfo::default()).unwrap()
 }
 
 fn memory(data: &[u8], count: u32) -> MapMemory {
@@ -279,10 +288,9 @@ proptest! {
         forced[1].capture = ValueCapture::Stale;
         let want = if hook_says_stale { CheckStatus::Pass } else { CheckStatus::Fail };
         prop_assert_eq!(last_error_inputs(1, &enter, &forced), want, "{:?}", leave);
-        // 戻り値だけの必要条件 (失敗した呼び出しの Stale は不完全) も同じ向き
-        if !hook_says_stale && (ret == 0 || ret == u64::MAX || ret == 0xffff_ffff) {
-            prop_assert!(!complete(1, &forced));
-        }
+        // 完全性の集計も conformance と同じ答え (呼び出し単位の照合を共有する: d4fc3c0 レビュー 1.6)
+        let summary = shirusu_analysis::IntegritySummary::of(&pair_trace(1, &enter, &forced));
+        prop_assert_eq!(summary.inconsistent_calls.is_empty(), hook_says_stale, "{:?}", summary.inconsistent_calls);
     }
 }
 
@@ -295,8 +303,19 @@ fn stale_last_error_of_create_always_is_rejected() {
     assert_eq!(leave[1].capture, ValueCapture::Captured);
     leave[1].capture = ValueCapture::Stale;
     assert_eq!(last_error_inputs(1, &enter, &leave), CheckStatus::Fail);
-    // 戻り値だけでは分からないので、leave 単体の検査は通る (入力の照合は conformance が担う)
+    // 戻り値だけでは分からないので、leave 単体の検査は通る (入力の照合は呼び出し単位の検査)
     assert!(complete(1, &leave));
+    // d4fc3c0 レビュー 1.6: 呼び出し単位の照合の結果は、conformance だけでなく完全性の判定と比較も
+    // 使う (以前は conformance が拒み、IntegritySummary は完全、自己比較は Identical だった)
+    let t = pair_trace(1, &enter, &leave);
+    let summary = shirusu_analysis::IntegritySummary::of(&t);
+    assert_eq!(summary.inconsistent_calls.len(), 1, "{:?}", summary.inconsistent_calls);
+    assert!(!summary.is_complete());
+    assert!(!shirusu_compare::compare_traces(&t, &t).verdict().is_identical());
+    // ストリーミング読みも同じ答え
+    let bytes = pair_bytes(1, &enter, &leave);
+    let streamed = shirusu_analysis::stream_trace(&mut std::io::Cursor::new(bytes), |_, _, _| {}).unwrap();
+    assert_eq!(streamed.integrity.inconsistent_calls, summary.inconsistent_calls);
     // CREATE_NEW の成功の Stale は正しい
     let enter = create_file_w_enter(&m, 0, 0x4000_0000, 0, 0, 1, 0x80, 0);
     assert_eq!(last_error_inputs(1, &enter, &create_file_w_leave(0x1234, 0, 1)), CheckStatus::Pass);

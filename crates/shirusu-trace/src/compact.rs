@@ -9,7 +9,7 @@ use crate::blob::BlobId;
 use crate::error::CompactError;
 use crate::model::{EventBatch, PayloadLossReason, PayloadRef, TraceEvent};
 use crate::proto::BatchHeader;
-use crate::schema::{CapturedValue, EventCapture, Ty, TypedValue, ValueCapture};
+use crate::schema::{Borrowed, CapturedValue, EventCapture, Str16Bytes, Ty, TypedValue, ValueCapture};
 
 // ---------------------------------------------------------------------------
 // LEB128
@@ -128,7 +128,10 @@ fn write_value(out: &mut Vec<u8>, v: &TypedValue) {
     }
 }
 
-fn read_value(cur: &mut Cursor, ty: Ty) -> Result<TypedValue, CompactError> {
+/// 値本体を一つ、バイト列を借りたまま読む (読み方はここだけ: 復号・検証・結果の判定・Blob 参照の
+/// 列挙が同じ規則で読む。d4fc3c0 レビュー 2.1 では検証側の直接走査と復号側が別々に値を読み、
+/// ポインタの戻り値を片方だけが結果情報から落とした)
+fn read_value_ref<'a>(cur: &mut Cursor<'a>, ty: Ty) -> Result<TypedValue<Borrowed<'a>>, CompactError> {
     Ok(match ty {
         Ty::I32 => TypedValue::I32(
             i32::try_from(cur.read_sleb()?).map_err(|_| CompactError::IntegerOutOfRange)?,
@@ -138,14 +141,8 @@ fn read_value(cur: &mut Cursor, ty: Ty) -> Result<TypedValue, CompactError> {
             u32::try_from(cur.read_uleb()?).map_err(|_| CompactError::IntegerOutOfRange)?,
         ),
         Ty::U64 => TypedValue::U64(cur.read_uleb()?),
-        Ty::F32 => {
-            let b = cur.read_array::<4>()?;
-            TypedValue::F32Bits(u32::from_le_bytes(b))
-        }
-        Ty::F64 => {
-            let b = cur.read_array::<8>()?;
-            TypedValue::F64Bits(u64::from_le_bytes(b))
-        }
+        Ty::F32 => TypedValue::F32Bits(u32::from_le_bytes(cur.read_array::<4>()?)),
+        Ty::F64 => TypedValue::F64Bits(u64::from_le_bytes(cur.read_array::<8>()?)),
         Ty::Bool => {
             let b = cur.read_u8()?;
             match b {
@@ -156,30 +153,60 @@ fn read_value(cur: &mut Cursor, ty: Ty) -> Result<TypedValue, CompactError> {
         }
         Ty::Str => {
             let b = cur.read_len_bytes()?;
-            let s = std::str::from_utf8(b).map_err(|_| CompactError::InvalidUtf8)?;
-            TypedValue::Str(s.to_string())
+            TypedValue::Str(std::str::from_utf8(b).map_err(|_| CompactError::InvalidUtf8)?)
         }
         Ty::Str16 => {
-            let n = cur.read_uleb()?;
-            let n = usize::try_from(n).map_err(|_| CompactError::Truncated)?;
-            let mut units = Vec::with_capacity(n.min(1 << 20));
-            for _ in 0..n {
-                let b = cur.read_array::<2>()?;
-                units.push(u16::from_le_bytes(b));
-            }
-            TypedValue::Str16(units)
+            let n = usize::try_from(cur.read_uleb()?).map_err(|_| CompactError::Truncated)?;
+            let bytes = n.checked_mul(2).ok_or(CompactError::Truncated)?;
+            let raw = cur.read_exact(bytes)?;
+            TypedValue::Str16(Str16Bytes::new(raw).ok_or(CompactError::Truncated)?)
         }
-        Ty::Bytes => TypedValue::Bytes(cur.read_len_bytes()?.to_vec()),
+        Ty::Bytes => TypedValue::Bytes(cur.read_len_bytes()?),
         Ty::BlobRef => TypedValue::BlobRef(BlobId::from_bytes(cur.read_array::<32>()?)),
-        Ty::Ptr32 => {
-            let b = cur.read_array::<4>()?;
-            TypedValue::Ptr32(u32::from_le_bytes(b))
-        }
-        Ty::Ptr64 => {
-            let b = cur.read_array::<8>()?;
-            TypedValue::Ptr64(u64::from_le_bytes(b))
-        }
+        Ty::Ptr32 => TypedValue::Ptr32(u32::from_le_bytes(cur.read_array::<4>()?)),
+        Ty::Ptr64 => TypedValue::Ptr64(u64::from_le_bytes(cur.read_array::<8>()?)),
     })
+}
+
+/// 値列を借りたまま一つずつ読む ([`values_ref`])。最後の値の後に余分なバイトがあれば
+/// `TrailingBytes` を一度返す。最初の Err の後は何も返さない。
+pub struct ValuesRef<'a, I> {
+    cur: Cursor<'a>,
+    types: I,
+    done: bool,
+}
+
+impl<'a, I: Iterator<Item = Ty>> Iterator for ValuesRef<'a, I> {
+    type Item = Result<CapturedValue<Borrowed<'a>>, CompactError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let Some(ty) = self.types.next() else {
+            self.done = true;
+            return (!self.cur.is_done()).then(|| Err(CompactError::TrailingBytes(self.cur.remaining())));
+        };
+        let read = (|| {
+            let code = self.cur.read_u8()?;
+            let capture = ValueCapture::from_code(code).ok_or(CompactError::InvalidCapture(code))?;
+            let value = read_value_ref(&mut self.cur, ty)?;
+            Ok(CapturedValue { capture, value })
+        })();
+        if read.is_err() {
+            self.done = true;
+        }
+        Some(read)
+    }
+}
+
+/// 値列を借りたまま読む。受理する入力は [`decode_values`] と同じで、文字列・バイト列を複製しない
+pub fn values_ref<'a, I: IntoIterator<Item = Ty>>(types: I, data: &'a [u8]) -> ValuesRef<'a, I::IntoIter> {
+    ValuesRef {
+        cur: Cursor::new(data),
+        types: types.into_iter(),
+        done: false,
+    }
 }
 
 /// Schema の型列に従って値列を符号化する。値の個数と型は Schema と
@@ -213,109 +240,40 @@ pub fn encode_values_iter(
 
 /// 値列を復号する。末尾の余分なバイトは不正として拒否する。
 pub fn decode_values(types: &[Ty], data: &[u8]) -> Result<Vec<CapturedValue>, CompactError> {
-    let mut cur = Cursor::new(data);
     let mut out = Vec::with_capacity(types.len());
-    for ty in types {
-        let code = cur.read_u8()?;
-        let capture = ValueCapture::from_code(code).ok_or(CompactError::InvalidCapture(code))?;
-        let value = read_value(&mut cur, *ty)?;
-        out.push(CapturedValue { capture, value });
-    }
-    if !cur.is_done() {
-        return Err(CompactError::TrailingBytes(cur.remaining()));
+    for v in values_ref(types.iter().copied(), data) {
+        let v = v?;
+        out.push(CapturedValue {
+            capture: v.capture,
+            value: v.value.to_owned_value(),
+        });
     }
     Ok(out)
 }
 
-/// Validate an encoded value sequence without retaining decoded values or
-/// allocating string/buffer storage. Acceptance matches `decode_values`.
+/// 値列を、復号した値を残さず、ヒープに割り当てずに検証する。受理は `decode_values` と同じ。
 pub fn validate_values(types: &[Ty], data: &[u8]) -> Result<(), CompactError> {
-    validate_values_in(types.iter().map(|ty| (*ty, 0)), data).map(|_| ())
+    values_ref(types.iter().copied(), data).try_for_each(|v| v.map(drop))
 }
 
-/// 値列の取得状態と、結果の判定に使うスカラーの生値 (取得状態の照合の材料)
-type Scanned = Vec<(u32, ValueCapture, Option<u64>)>;
-
-/// Validate without allocating and report whether every field was captured.
-/// A field may say Stale / NotApplicable only where its schema flags allow it
-/// (`ValueCapture::is_complete_given`).
+/// 値列を割り当てずに検証し、どのフィールドも取得すべき値を取得できたかを返す。
+/// Stale / NotApplicable は Schema の flags と実際の結果が許すところだけ
+/// (`ValueCapture::is_complete_given`)。結果 (戻り値・LastError・取り出した OVERLAPPED) は
+/// 値列の後ろにあることもあるので、一度目で結果を読み、二度目で照合する。
 pub fn validate_values_completeness(
     shapes: crate::schema::FieldShapes<'_>,
     data: &[u8],
 ) -> Result<bool, CompactError> {
-    let scanned = validate_values_in(shapes.iter(), data)?;
-    // 結果 (戻り値・LastError・取り出した OVERLAPPED) は値列の後ろにあることもあるので、
-    // 全部を読んでから照合する
-    let raw: Vec<(ValueCapture, Option<u64>)> = scanned.iter().map(|(_, c, v)| (*c, *v)).collect();
-    let facts = crate::schema::ResultFacts::of(shapes.roles(), &raw);
-    Ok(scanned
-        .iter()
-        .all(|(flags, capture, _)| capture.is_complete_given(*flags, &facts)))
-}
-
-fn validate_values_in(
-    shapes: impl Iterator<Item = (Ty, u32)>,
-    data: &[u8],
-) -> Result<Scanned, CompactError> {
-    let mut scanned = Scanned::new();
-    let mut cur = Cursor::new(data);
-    for (ty, flags) in shapes {
-        let code = cur.read_u8()?;
-        let capture = ValueCapture::from_code(code).ok_or(CompactError::InvalidCapture(code))?;
-        let mut bits = None;
-        match ty {
-            Ty::Str => {
-                std::str::from_utf8(cur.read_len_bytes()?)
-                    .map_err(|_| CompactError::InvalidUtf8)?;
-            }
-            Ty::Str16 => {
-                let n = usize::try_from(cur.read_uleb()?).map_err(|_| CompactError::Truncated)?;
-                let bytes = n.checked_mul(2).ok_or(CompactError::Truncated)?;
-                cur.read_exact(bytes)?;
-            }
-            Ty::Bytes => {
-                cur.read_len_bytes()?;
-            }
-            // Validation does not need to materialize a TypedValue (whose
-            // string/byte variants make the enum substantially larger than a
-            // scalar). Preserve the decoder's range and representation checks.
-            Ty::I32 => {
-                let v = i32::try_from(cur.read_sleb()?).map_err(|_| CompactError::IntegerOutOfRange)?;
-                bits = TypedValue::<crate::schema::Generic>::I32(v).scalar_bits();
-            }
-            Ty::U32 => {
-                let v = u32::try_from(cur.read_uleb()?).map_err(|_| CompactError::IntegerOutOfRange)?;
-                bits = Some(u64::from(v));
-            }
-            Ty::I64 => {
-                bits = Some(cur.read_sleb()? as u64);
-            }
-            Ty::U64 => {
-                bits = Some(cur.read_uleb()?);
-            }
-            Ty::F32 | Ty::Ptr32 => {
-                cur.read_exact(4)?;
-            }
-            Ty::F64 | Ty::Ptr64 => {
-                cur.read_exact(8)?;
-            }
-            Ty::BlobRef => {
-                cur.read_exact(32)?;
-            }
-            Ty::Bool => {
-                let value = cur.read_u8()?;
-                if value > 1 {
-                    return Err(CompactError::InvalidBool(value));
-                }
-                bits = Some(u64::from(value));
-            }
-        }
-        scanned.push((flags, capture, bits));
+    let facts = crate::schema::ResultFacts::try_of(
+        shapes.roles(),
+        values_ref(shapes.types().iter().copied(), data)
+            .map(|v| v.map(|v| (v.capture, v.value.scalar_bits()))),
+    )?;
+    let mut complete = true;
+    for ((_, flags), v) in shapes.iter().zip(values_ref(shapes.types().iter().copied(), data)) {
+        complete &= v?.capture.is_complete_given(flags, &facts);
     }
-    if !cur.is_done() {
-        return Err(CompactError::TrailingBytes(cur.remaining()));
-    }
-    Ok(scanned)
+    Ok(complete)
 }
 
 /// fuzz ターゲット `decode_compact` の入口：SchemaSet の Protobuf
@@ -658,14 +616,14 @@ mod integer_bounds_tests {
         let mut bytes = Vec::new();
         write_uleb(&mut bytes, u32::MAX as u64 + 1);
         assert!(matches!(
-            read_value(&mut Cursor::new(&bytes), Ty::U32),
+            read_value_ref(&mut Cursor::new(&bytes), Ty::U32),
             Err(CompactError::IntegerOutOfRange)
         ));
         for value in [i32::MIN as i64 - 1, i32::MAX as i64 + 1] {
             bytes.clear();
             write_sleb(&mut bytes, value);
             assert!(matches!(
-                read_value(&mut Cursor::new(&bytes), Ty::I32),
+                read_value_ref(&mut Cursor::new(&bytes), Ty::I32),
                 Err(CompactError::IntegerOutOfRange)
             ));
         }
@@ -673,7 +631,7 @@ mod integer_bounds_tests {
             bytes.clear();
             write_sleb(&mut bytes, value as i64);
             assert_eq!(
-                read_value(&mut Cursor::new(&bytes), Ty::I32).unwrap(),
+                read_value_ref(&mut Cursor::new(&bytes), Ty::I32).unwrap().to_owned_value(),
                 TypedValue::I32(value)
             );
         }

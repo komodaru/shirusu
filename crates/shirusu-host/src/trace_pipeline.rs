@@ -62,7 +62,8 @@ fn write_staged<W: DurableWrite>(
     staged: Staged,
 ) -> Result<(), TraceError> {
     if !staged.events.is_empty() && totals.storage_full {
-        totals.storage_full_dropped_events += staged.events.len() as u64;
+        // 記録モードの選択規則で数える (間引いたものは失ったイベントではない)
+        totals.storage_full_dropped_events += recorder.discard_unwritable(&staged.context, &staged.events);
     } else if !staged.events.is_empty() {
         let backlogged =
             state.queued_bytes.load(Ordering::Acquire) > state.byte_budget / BACKLOG_FRACTION;
@@ -1131,6 +1132,73 @@ mod tests {
         assert!(report.storage_full);
         assert_eq!(report.storage_full_dropped_events, 6);
         assert_eq!(report.storage_full_dropped_losses, 1);
+    }
+
+    #[test]
+    fn filtered_losses_after_running_out_of_space_do_not_depend_on_chunking() {
+        // d4fc3c0 レビュー 1.5: 容量不足の後に届いたバッチは全件を失ったと数え、間引くはずの
+        // イベントまで数えた (4 件まとめてなら 2、保存対象 2 件の後に除外対象 2 件なら 4)。
+        // 同じ入力と記録モードなら、どこで区切っても欠落件数は保存対象の数
+        let close = api_by_id(API_CLOSE_HANDLE).unwrap().api_id;
+        let other = close + 1;
+        let input = |order: [bool; 4]| -> Vec<ReceivedEvent> {
+            // true は CloseHandle (保存対象)、false は除外対象 (別の API)
+            let mut kept = events(1).into_iter();
+            let mut dropped = events(2).into_iter();
+            order
+                .iter()
+                .filter_map(|keep| {
+                    if *keep {
+                        kept.next()
+                    } else {
+                        dropped.next().map(|mut e| {
+                            e.descriptor.api_id = other;
+                            e
+                        })
+                    }
+                })
+                .zip(1u64..)
+                .map(|(mut e, sequence)| {
+                    // 並べ替えても同じスレッドの順序番号は増え続ける
+                    e.descriptor.sequence = sequence;
+                    e
+                })
+                .collect()
+        };
+        let orders = [
+            [true, true, false, false],
+            [false, false, true, true],
+            [true, false, true, false],
+            [false, true, false, true],
+        ];
+        for mode in [
+            RecordMode::Filtered { apis: [close].into_iter().collect() },
+            RecordMode::Full,
+        ] {
+            let want = match &mode {
+                RecordMode::Filtered { .. } => 2,
+                RecordMode::Full | RecordMode::Detailed | RecordMode::Profile => 4,
+            };
+            for order in orders {
+                for split in 0..=4 {
+                    let (writer, _, _) = controlled();
+                    let flag = writer.mode.clone();
+                    let mut pipeline = TracePipeline::new(recorder(writer, mode.clone())).unwrap();
+                    flag.store(4, Ordering::SeqCst);
+                    let mut all = input(order);
+                    let rest = all.split_off(split);
+                    for part in [all, rest] {
+                        if !part.is_empty() {
+                            pipeline.record_owned_batch_with_args(&context(), part).unwrap();
+                        }
+                        pipeline.barrier().unwrap();
+                    }
+                    let (_recorder, report) = pipeline.finish().expect("not a worker failure");
+                    assert!(report.storage_full, "{mode:?} {order:?} split {split}");
+                    assert_eq!(report.storage_full_dropped_events, want, "{mode:?} {order:?} split {split}");
+                }
+            }
+        }
     }
 
     #[test]

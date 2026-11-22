@@ -197,16 +197,36 @@ impl Drop for ReaderRegistration {
     }
 }
 
+/// [`Shm::reserve_reader`] が登録を拒んだ理由
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReserveReaderError {
+    /// 既に読み手がいる (同じ実体の別ビューからの登録を含む)
+    Busy,
+    /// 今の incarnation は前の読み手が途中まで読んでいる (ReadCursor が 0 でない)。読み手は
+    /// 位置 0 から読むので、登録すれば読み終えたイベントを再び記録するか、残りを損失と誤る
+    /// (d4fc3c0 レビュー 1.2)。途中からの再開は提供しない: Agent が Slot を新しい incarnation へ
+    /// 初期化し直せば (ReadCursor が 0 に戻れば) 登録できる。
+    AlreadyRead { read_cursor: u64 },
+}
+
 impl Shm {
-    /// この Mapping の読み手として登録する。既に読み手がいれば None (同じ実体の別ビューから
-    /// の二度目の登録も拒む)。
-    pub fn reserve_reader(&self) -> Option<ReaderRegistration> {
+    /// この Mapping の、今の incarnation を位置 0 から読む読み手として登録する。既に読み手が
+    /// いれば Busy、前の読み手が途中まで読んだ incarnation なら AlreadyRead。
+    /// 持っている登録権は「新しい incarnation を読む権利」で、前の位置からの再開ではない。
+    pub fn reserve_reader(&self) -> Result<ReaderRegistration, ReserveReaderError> {
         self.control().words[READER_REGISTRATION_WORD]
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-            .ok()?;
-        Some(ReaderRegistration {
+            .map_err(|_| ReserveReaderError::Busy)?;
+        let registration = ReaderRegistration {
             region: self.clone(),
-        })
+        };
+        // 読み手は自分だけになったので、ReadCursor を動かすものはない (書き手は読まない)
+        let read_cursor = self.control().load(Word::ReadCursor, Ordering::Acquire);
+        if read_cursor != 0 {
+            // 登録は drop で取り消される
+            return Err(ReserveReaderError::AlreadyRead { read_cursor });
+        }
+        Ok(registration)
     }
 
     /// 実体を検証して包む。

@@ -196,6 +196,49 @@ fn fixture(r: Rule) -> Fixture {
             ],
             mutate: ("crates/shirusu-cli/src/repair.rs", |t| Some(t + "\nfn _lint_regression(e: &TraceEvent) -> bool {\n    if let PayloadRef::Blob(_) = e.payload {\n        return true;\n    }\n    false\n}\n")),
         },
+        Rule::NeverNeedsNoReturn => Fixture {
+            bad: &[
+                ("crates/shirusu-x/src/lib.rs", "fn f(m: LastErrorMeaning, ret: Option<u64>) -> bool {\n    match m {\n        LastErrorMeaning::WhenReturnIsFalse | LastErrorMeaning::Never => ret.is_some_and(|r| r != 0),\n        _ => false,\n    }\n}\n"),
+                ("crates/shirusu-y/tests/t.rs", "#[test]\nfn t() {\n    let want = match m {\n        Never | WhenReturnIsNull => f.ret.is_some(),\n        _ => false,\n    };\n}\n"),
+            ],
+            good: &[("crates/shirusu-x/src/lib.rs", "// Never | WhenReturnIsFalse とは書かない\nfn rule(m: LastErrorMeaning) -> LastErrorRule {\n    match m {\n        LastErrorMeaning::Never => LastErrorRule::Fixed { meaningful: false },\n        LastErrorMeaning::WhenReturnIsFalse | LastErrorMeaning::WhenReturnIsNull => LastErrorRule::OnReturn(ReturnTest::IsFalse),\n        LastErrorMeaning::Unspecified | LastErrorMeaning::Always => LastErrorRule::Fixed { meaningful: true },\n    }\n}\n")],
+            mutate: ("crates/shirusu-trace/src/schema.rs", |t| Some(t.replace("            Self::WhenReturnIsFalse => LastErrorRule::OnReturn(ReturnTest::IsFalse),", "            Self::WhenReturnIsFalse | Self::Never => LastErrorRule::OnReturn(ReturnTest::IsFalse),"))),
+        },
+        Rule::IntegrityGate => Fixture {
+            bad: &[("crates/shirusu-x/src/lib.rs", "fn gate(i: &IntegritySummary) -> Result<(), String> {\n    if !i.has_finalization\n        || i.event_integrity != Some(0)\n        || i.degraded_events != 0\n    {\n        return Err(\"incomplete\".into());\n    }\n    Ok(())\n}\n")],
+            good: &[
+                ("crates/shirusu-x/src/lib.rs", "// i.event_integrity != Some(0) || i.degraded_events != 0 と並べない\nfn gate(i: &IntegritySummary) -> Result<(), String> {\n    i.require(Use::RecordedSequence)?;\n    if i.dropped_payload_events > 0 { println!(\"{}\", i.dropped_payload_events); }\n    if a || b { }\n    Ok(())\n}\n#[cfg(test)]\nmod tests {\n    fn t(i: &IntegritySummary) -> bool { i.degraded_events != 0 || i.missing_blob_refs != 0 }\n}\n"),
+                (results::INTEGRITY_HOME, "fn incompleteness(&self) -> bool { self.event_count_mismatch || self.degraded_events > 0 }\n"),
+            ],
+            mutate: ("crates/shirusu-probe/src/replay.rs", |t| Some(t + "\nfn _lint_regression(i: &shirusu_analysis::IntegritySummary) -> bool {\n    i.event_integrity != Some(0) || i.degraded_events != 0\n}\n")),
+        },
+        Rule::BlobRefBody => Fixture {
+            bad: &[(results::BLOB_REFS_HOME, "fn walk(v: &CapturedValue<Borrowed<'_>>, known: &mut Vec<BlobId>) {\n    match &v.value {\n        TypedValue::BlobRef(id) => known.push(*id),\n        TypedValue::U32(_) => {}\n    }\n    let values = decode_values(types, args);\n}\n")],
+            good: &[
+                (results::BLOB_REFS_HOME, "// decode_values で複製しない\nfn walk(v: &CapturedValue<Borrowed<'_>>, known: &mut Vec<BlobId>) {\n    match v.read_value() {\n        Some(TypedValue::BlobRef(id)) => known.push(*id),\n        Some(TypedValue::U32(_)) | None => {}\n    }\n}\n"),
+                ("crates/shirusu-x/src/lib.rs", "fn show(v: &CapturedValue) -> String {\n    match &v.value {\n        TypedValue::BlobRef(id) => id.to_hex(),\n        TypedValue::U32(x) => x.to_string(),\n    }\n}\n"),
+            ],
+            mutate: (results::BLOB_REFS_HOME, |t| Some(t.replace("match v.read_value() {", "match Some(&v.value) {"))),
+        },
+        Rule::ValueReader => Fixture {
+            bad: &[("crates/shirusu-trace/src/compact.rs", "fn validate(cur: &mut Cursor, ty: Ty) -> Result<Option<u64>, CompactError> {\n    Ok(match ty {\n        Ty::Str16 => { cur.read_uleb()?; None }\n        Ty::Ptr64 => { cur.read_exact(8)?; None }\n        Ty::U64 => Some(cur.read_uleb()?),\n    })\n}\n")],
+            good: &[("crates/shirusu-trace/src/compact.rs", "fn read_value_ref<'a>(cur: &mut Cursor<'a>, ty: Ty) -> Result<TypedValue<Borrowed<'a>>, CompactError> {\n    Ok(match ty {\n        Ty::Str16 => TypedValue::Str16(Str16Bytes::new(cur.read_exact(2)?).ok_or(CompactError::Truncated)?),\n        Ty::Ptr64 => TypedValue::Ptr64(u64::from_le_bytes(cur.read_array::<8>()?)),\n    })\n}\nfn tag(ty: Ty) -> u32 {\n    match ty {\n        Ty::Str16 => 9,\n        Ty::Ptr64 => 13,\n    }\n}\n")],
+            mutate: ("crates/shirusu-trace/src/compact.rs", |t| Some(t + "\nfn _lint_regression(cur: &mut Cursor, ty: Ty) -> Result<u64, CompactError> {\n    Ok(match ty {\n        Ty::Str16 => cur.read_uleb()?,\n        Ty::Ptr64 => u64::from_le_bytes(cur.read_array::<8>()?),\n        _ => 0,\n    })\n}\n")),
+        },
+        Rule::LastErrorInputsHome => Fixture {
+            bad: &[("crates/shirusu-conformance/src/check.rs", "fn check(f: &str, input: &dyn Fn(&str) -> Option<u64>, ret: u64) -> bool {\n    LastErrorMeaning::resolve_inputs(f, input, ret, 0).is_meaningful(ret)\n}\n")],
+            good: &[
+                ("crates/shirusu-conformance/src/check.rs", "// resolve_inputs( を直接呼ばない\nfn check(i: &IntegritySummary) -> bool {\n    i.inconsistent_calls.is_empty()\n}\n"),
+                ("crates/shirusu-hook/src/capture.rs", "fn m(f: &str) -> LastErrorMeaning { LastErrorMeaning::resolve_inputs(f, &|_| None, 0, 0) }\n"),
+                ("crates/shirusu-trace/src/schema.rs", "fn c(f: &str) -> LastErrorMeaning { LastErrorMeaning::resolve_inputs(f, &|_| None, 0, 0) }\n"),
+            ],
+            mutate: ("crates/shirusu-conformance/src/check.rs", |t| Some(t + "\nfn _lint_regression() -> shirusu_trace::schema::LastErrorMeaning {\n    shirusu_trace::schema::LastErrorMeaning::resolve_inputs(\"CreateFileW\", &|_| None, 0, 0)\n}\n")),
+        },
+        Rule::StorageFullCount => Fixture {
+            bad: &[("crates/shirusu-host/src/trace_pipeline.rs", "fn write(totals: &mut PipelineReport, staged: Staged) {\n    if totals.storage_full {\n        totals.storage_full_dropped_events += staged.events.len() as u64;\n    }\n}\n")],
+            good: &[("crates/shirusu-host/src/trace_pipeline.rs", "// dropped_events += events.len() と数えない\nfn write(totals: &mut PipelineReport, recorder: &mut TraceRecorder<W>, staged: Staged) {\n    if totals.storage_full {\n        totals.storage_full_dropped_events += recorder.discard_unwritable(&staged.context, &staged.events);\n    }\n    totals.storage_full_dropped_losses += losses.len() as u64;\n}\n")],
+            mutate: ("crates/shirusu-host/src/trace_pipeline.rs", |t| Some(t.replace("totals.storage_full_dropped_events += recorder.discard_unwritable(&staged.context, &staged.events);", "totals.storage_full_dropped_events += staged.events.len() as u64;"))),
+        },
         Rule::LoomSyncSource => Fixture {
             bad: &[
                 (regress::LOOM_ROOT, "mod slot_sync { pub use loom::sync::atomic::AtomicU8; }\n#[path = \"../../shirusu-transport/src/slot.rs\"]\nmod slot;\n"),

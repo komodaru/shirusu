@@ -9,15 +9,17 @@
 //! ここでは行わない。それは shirusu-compare の責務であり、本クレート
 //! は「記録されたものを、記録されたとおりに」返すことに徹する。
 
+pub mod calls;
 pub mod json;
 pub mod stream;
 pub mod view;
 
+pub use calls::CallChecks;
 pub use json::JsonValue;
 pub use stream::{stream_trace, StreamedTrace};
 pub use view::{
     api_name_of_schema, capture_name, format_field, integrity_level_name, loss_kind_name,
     reason_name, value_capture_name, EventFilter, EventView, FieldView, IntegrityCounts,
-    Incompleteness, IncompletenessKey, IntegrityAspect, IntegritySummary, PayloadView, Phase, TraceView, KIND_ABORTED, KIND_COMPLETED, KIND_ENTER,
+    Incompleteness, IncompletenessKey, IntegrityAspect, LossCount, Use, IntegritySummary, PayloadView, Phase, TraceView, KIND_ABORTED, KIND_COMPLETED, KIND_ENTER,
     KIND_LEAVE,
 };

@@ -302,31 +302,144 @@ impl LastErrorMeaning {
         LastErrorMeaning::DependsOnInputs
     }
 
-    /// 戻り値の生値に対して、この API の LastError 生値が意味を持つか。
+    /// [`LastErrorMeaning::resolve_inputs`] が `function` について読む enter のフィールド名。
+    /// 呼び出し単位の検査は、enter からこれだけを覚えておけばよい (規則にない関数は空)
+    pub fn input_fields(function: &str) -> &'static [&'static str] {
+        match function {
+            "CreateFileA" | "CreateFileW" => &["dwCreationDisposition"],
+            "CreateMutexW" | "CreateMutexExW" | "CreateEventW" | "CreateEventExW" | "CreateSemaphoreW" => {
+                &["lpName"]
+            }
+            _ => &[],
+        }
+    }
+
+    /// 入力で決まる LastError (DependsOnInputs) を Stale と書いた leave が、同じ呼び出しの
+    /// enter の入力と合うか。取得側と同じ規則 ([`LastErrorMeaning::resolve_inputs`]) で照らす。
+    /// conformance・完全性の集計・比較・テストが同じ答えを使う (d4fc3c0 レビュー 1.6: この照合が
+    /// conformance にしかなく、取得元が誤った Stale を書いた記録を、完全性の判定は完全とした)。
+    /// `enter` は enter が見つからなければ None、`ret` は Captured の戻り値。
+    pub fn check_stale_inputs(
+        function: &str,
+        enter: Option<EnterInputs<'_>>,
+        ret: Option<u64>,
+        raw_error: u32,
+    ) -> StaleInputs {
+        let Some(input) = enter else {
+            return StaleInputs::NoEnter;
+        };
+        let Some(ret) = ret else {
+            return StaleInputs::NoReturn;
+        };
+        let meaning = LastErrorMeaning::resolve_inputs(function, input, ret, raw_error);
+        if meaning.is_meaningful(ret) {
+            StaleInputs::Meaningful { meaning, ret }
+        } else {
+            StaleInputs::Agrees
+        }
+    }
+
+    /// LastError の意味が何で決まるか。条件の種類ごとに必要な材料が違う: Never / Always は
+    /// 結果を見なくても決まり、戻り値を必要としない (d4fc3c0 レビュー P1: Never を戻り値で決まる
+    /// 条件と同じ腕に置き、戻り値のない Sleep などの正しい Stale を不完全と数えた)。
+    pub fn rule(self) -> LastErrorRule {
+        match self {
+            Self::Unspecified | Self::Always => LastErrorRule::Fixed { meaningful: true },
+            Self::Never => LastErrorRule::Fixed { meaningful: false },
+            Self::WhenReturnIsFalse => LastErrorRule::OnReturn(ReturnTest::IsFalse),
+            Self::WhenReturnIsInvalidHandle => LastErrorRule::OnReturn(ReturnTest::IsInvalidHandle),
+            Self::WhenReturnIsNull => LastErrorRule::OnReturn(ReturnTest::IsNull),
+            Self::WhenReturnIsMinusOne => LastErrorRule::OnReturn(ReturnTest::IsMinusOne),
+            Self::WhenReturnIsNotNull => LastErrorRule::OnReturn(ReturnTest::IsNotNull),
+            Self::WhenReturnIsNullOrInvalidHandle => {
+                LastErrorRule::OnReturn(ReturnTest::IsNullOrInvalidHandle)
+            }
+            Self::DependsOnInputs => LastErrorRule::OnInputs,
+        }
+    }
+
+    /// 戻り値の生値が分かっているとき、この API の LastError 生値が意味を持つか。
     /// `return_value` は leave Schema の `return` フィールドの生値
     /// （HANDLE は U64、BOOL は I32 の生値として u64 へ写したもの）。
-    /// DependsOnInputs cannot be decided here and returns true conservatively;
-    /// its capture contract must evaluate inputs and set Captured/Stale.
+    /// DependsOnInputs は戻り値だけでは決まらないので true (値を残す側) を返す:
+    /// 入力まで照らすのは [`LastErrorMeaning::resolve_inputs`]。
+    /// 戻り値が記録にないかもしれない場面では [`LastErrorMeaning::rule`] で分ける。
     pub fn is_meaningful(self, return_value: u64) -> bool {
+        match self.rule() {
+            LastErrorRule::Fixed { meaningful } => meaningful,
+            LastErrorRule::OnReturn(t) => t.holds(return_value),
+            LastErrorRule::OnInputs => true,
+        }
+    }
+}
+
+/// enter のフィールド名から、その Captured の値を引く
+pub type EnterInputs<'a> = &'a dyn Fn(&str) -> Option<u64>;
+
+/// [`LastErrorMeaning::check_stale_inputs`] の答え
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleInputs {
+    /// 入力からも古い値と言える
+    Agrees,
+    /// 入力を照らす enter がない
+    NoEnter,
+    /// 戻り値が取れていない
+    NoReturn,
+    /// 入力によれば LastError に意味がある (Stale は誤り)
+    Meaningful { meaning: LastErrorMeaning, ret: u64 },
+}
+
+impl StaleInputs {
+    /// 誤りなら説明 (`at` は「どの呼び出しか」)
+    pub fn problem(self, at: &str) -> Option<String> {
         match self {
-            Self::Unspecified | Self::Always | Self::DependsOnInputs => true,
-            Self::WhenReturnIsFalse => return_value == 0,
-            Self::WhenReturnIsInvalidHandle => {
-                // INVALID_HANDLE_VALUE はポインタ幅依存（64bit: 全ビット 1、
-                // 32bit: 下位 32 ビットのみ 1。レビュー第5回 #5）。
-                return_value == u64::MAX || return_value == 0x0000_0000_ffff_ffff
-            }
-            Self::WhenReturnIsNull => return_value == 0,
-            Self::WhenReturnIsNotNull => return_value != 0,
-            Self::Never => false,
-            Self::WhenReturnIsMinusOne => {
-                return_value == u64::MAX || return_value == 0x0000_0000_ffff_ffff
-            }
-            Self::WhenReturnIsNullOrInvalidHandle => {
-                return_value == 0
-                    || return_value == u64::MAX
-                    || return_value == 0x0000_0000_ffff_ffff
-            }
+            StaleInputs::Agrees => None,
+            StaleInputs::NoEnter => Some(format!("{at}: Stale last_error has no enter to resolve its inputs")),
+            StaleInputs::NoReturn => Some(format!("{at}: Stale last_error without a captured return")),
+            StaleInputs::Meaningful { meaning, ret } => Some(format!(
+                "{at}: last_error is Stale but the inputs make it {meaning:?} for return {ret:#x}"
+            )),
+        }
+    }
+}
+
+/// [`LastErrorMeaning::rule`]: LastError の意味を決める材料
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LastErrorRule {
+    /// 結果によらず決まっている (戻り値を必要としない)
+    Fixed { meaningful: bool },
+    /// 戻り値がこの条件を満たすときだけ意味を持つ
+    OnReturn(ReturnTest),
+    /// 入力でも決まる ([`LastErrorMeaning::resolve_inputs`])
+    OnInputs,
+}
+
+/// 失敗を示す戻り値の条件 (戻り値の生値で判定する)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReturnTest {
+    /// FALSE / 0
+    IsFalse,
+    /// INVALID_HANDLE_VALUE (ポインタ幅依存: 64bit は全ビット 1、32bit は下位 32 ビットのみ 1。
+    /// レビュー第5回 #5)
+    IsInvalidHandle,
+    /// NULL (0)
+    IsNull,
+    /// -1 (全ビット 1。32bit 形も同じ扱い)
+    IsMinusOne,
+    /// 非 NULL
+    IsNotNull,
+    /// NULL か INVALID_HANDLE_VALUE
+    IsNullOrInvalidHandle,
+}
+
+impl ReturnTest {
+    pub fn holds(self, return_value: u64) -> bool {
+        let all_ones = return_value == u64::MAX || return_value == 0x0000_0000_ffff_ffff;
+        match self {
+            Self::IsFalse | Self::IsNull => return_value == 0,
+            Self::IsInvalidHandle | Self::IsMinusOne => all_ones,
+            Self::IsNotNull => return_value != 0,
+            Self::IsNullOrInvalidHandle => return_value == 0 || all_ones,
         }
     }
 }
@@ -442,26 +555,40 @@ pub struct ResultFacts {
 }
 
 impl ResultFacts {
-    /// `values[i]` = (取得状態, スカラーの生値)
-    pub fn of(roles: FieldRoles, values: &[(ValueCapture, Option<u64>)]) -> Self {
-        let get = |i: Option<usize>| -> Option<u64> {
-            match values.get(i?)? {
-                (ValueCapture::Captured, v) => *v,
-                _ => None,
-            }
-        };
-        ResultFacts {
-            ret: get(roles.ret),
-            last_error: get(roles.last_error).and_then(|v| u32::try_from(v).ok()),
-            dequeued: get(roles.dequeued),
+    /// 値列の i 番目 = (取得状態, スカラーの生値)。Captured の値だけを事実に使う
+    pub fn of(roles: FieldRoles, values: impl IntoIterator<Item = (ValueCapture, Option<u64>)>) -> Self {
+        match Self::try_of::<core::convert::Infallible>(roles, values.into_iter().map(Ok)) {
+            Ok(facts) => facts,
+            Err(never) => match never {},
         }
     }
 
+    /// [`ResultFacts::of`] の、読みながら失敗しうる値列版 (最初の Err を返す。値列は最後まで
+    /// 読む: 末尾の検査も値列の読み手に任せる)
+    pub fn try_of<E>(
+        roles: FieldRoles,
+        values: impl Iterator<Item = Result<(ValueCapture, Option<u64>), E>>,
+    ) -> Result<Self, E> {
+        let mut facts = ResultFacts::default();
+        for (i, v) in values.enumerate() {
+            let (capture, bits) = v?;
+            let bits = capture.fact(bits);
+            if roles.ret == Some(i) {
+                facts.ret = bits;
+            }
+            if roles.last_error == Some(i) {
+                facts.last_error = bits.and_then(|v| u32::try_from(v).ok());
+            }
+            if roles.dequeued == Some(i) {
+                facts.dequeued = bits;
+            }
+        }
+        Ok(facts)
+    }
+
     /// 復号済みの値列から
-    pub fn of_values(roles: FieldRoles, values: &[CapturedValue]) -> Self {
-        let raw: Vec<(ValueCapture, Option<u64>)> =
-            values.iter().map(|v| (v.capture, v.value.scalar_bits())).collect();
-        Self::of(roles, &raw)
+    pub fn of_values<H: Holds>(roles: FieldRoles, values: &[CapturedValue<H>]) -> Self {
+        Self::of(roles, values.iter().map(|v| (v.capture, v.value.scalar_bits())))
     }
 }
 
@@ -477,6 +604,10 @@ pub trait Holds {
     type Blob: core::fmt::Debug + Clone + PartialEq;
     type Ptr32: core::fmt::Debug + Clone + PartialEq;
     type Ptr64: core::fmt::Debug + Clone + PartialEq;
+    /// ポインタの生値 (結果の判定では整数と同じに扱う: d4fc3c0 レビュー 2.1 で、Ptr32 / Ptr64 の
+    /// 戻り値が結果情報から落ち、WhenReturnIsNull の Stale を判定できなかった)
+    fn ptr32_bits(p: &Self::Ptr32) -> u64;
+    fn ptr64_bits(p: &Self::Ptr64) -> u64;
 }
 
 /// トレースの値: 可変長の変種も持てる。
@@ -490,6 +621,74 @@ impl Holds for Owned {
     type Blob = BlobId;
     type Ptr32 = u32;
     type Ptr64 = u64;
+    fn ptr32_bits(p: &u32) -> u64 {
+        u64::from(*p)
+    }
+    fn ptr64_bits(p: &u64) -> u64 {
+        *p
+    }
+}
+
+/// 値列のバイト列を借りたまま読んだ値 ([`crate::compact::values_ref`])。文字列とバイト列を
+/// 複製しないので、検証・結果の判定・Blob 参照の列挙が大きな引数でも割り当てない
+/// (d4fc3c0 レビュー 4: 参照を探すために所有権付きで復号し、1 MiB の Bytes を複製した)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Borrowed<'a>(core::convert::Infallible, core::marker::PhantomData<&'a ()>);
+
+/// UTF-16 の符号単位列 (リトルエンディアンの生バイト、長さは偶数)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Str16Bytes<'a>(&'a [u8]);
+
+impl<'a> Str16Bytes<'a> {
+    /// 長さが奇数なら None
+    pub fn new(bytes: &'a [u8]) -> Option<Self> {
+        bytes.len().is_multiple_of(2).then_some(Self(bytes))
+    }
+    pub fn units(self) -> impl Iterator<Item = u16> + 'a {
+        self.0.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b))
+    }
+    pub fn len(self) -> usize {
+        self.0.len() / 2
+    }
+    pub fn is_empty(self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'a> Holds for Borrowed<'a> {
+    type Str = &'a str;
+    type Str16 = Str16Bytes<'a>;
+    type Bytes = &'a [u8];
+    type Blob = BlobId;
+    type Ptr32 = u32;
+    type Ptr64 = u64;
+    fn ptr32_bits(p: &u32) -> u64 {
+        u64::from(*p)
+    }
+    fn ptr64_bits(p: &u64) -> u64 {
+        *p
+    }
+}
+
+impl TypedValue<Borrowed<'_>> {
+    /// 所有権付きの値へ (復号 `decode_values` はこれで作る: 読み方は一か所)
+    pub fn to_owned_value(&self) -> TypedValue {
+        match self {
+            TypedValue::I32(x) => TypedValue::I32(*x),
+            TypedValue::I64(x) => TypedValue::I64(*x),
+            TypedValue::U32(x) => TypedValue::U32(*x),
+            TypedValue::U64(x) => TypedValue::U64(*x),
+            TypedValue::F32Bits(x) => TypedValue::F32Bits(*x),
+            TypedValue::F64Bits(x) => TypedValue::F64Bits(*x),
+            TypedValue::Bool(x) => TypedValue::Bool(*x),
+            TypedValue::Str(s) => TypedValue::Str((*s).to_string()),
+            TypedValue::Str16(u) => TypedValue::Str16(u.units().collect()),
+            TypedValue::Bytes(b) => TypedValue::Bytes(b.to_vec()),
+            TypedValue::BlobRef(id) => TypedValue::BlobRef(*id),
+            TypedValue::Ptr32(p) => TypedValue::Ptr32(*p),
+            TypedValue::Ptr64(p) => TypedValue::Ptr64(*p),
+        }
+    }
 }
 
 /// 生成表の引数・戻り値 (GenericScalar の型だけ): 可変長とポインタの変種は作れない。
@@ -503,6 +702,12 @@ impl Holds for Generic {
     type Blob = !;
     type Ptr32 = !;
     type Ptr64 = !;
+    fn ptr32_bits(p: &!) -> u64 {
+        *p
+    }
+    fn ptr64_bits(p: &!) -> u64 {
+        *p
+    }
 }
 
 /// 型付き値。生ビット列を保持する方針（浮動小数点はビットで保持し、
@@ -540,7 +745,8 @@ impl From<TypedValue<Generic>> for TypedValue {
 }
 
 impl<H: Holds> TypedValue<H> {
-    /// 結果の判定に使う整数の生値 (I32 は符号拡張、Bool は 0/1)。整数でない変種は None
+    /// 結果の判定に使う整数の生値 (I32 は符号拡張、Bool は 0/1、ポインタはアドレス)。
+    /// 整数でない変種 (浮動小数点・文字列・バイト列・Blob) は None
     pub fn scalar_bits(&self) -> Option<u64> {
         match self {
             Self::I32(x) => Some(i64::from(*x) as u64),
@@ -548,14 +754,14 @@ impl<H: Holds> TypedValue<H> {
             Self::U32(x) => Some(u64::from(*x)),
             Self::U64(x) => Some(*x),
             Self::Bool(b) => Some(u64::from(*b)),
+            Self::Ptr32(p) => Some(H::ptr32_bits(p)),
+            Self::Ptr64(p) => Some(H::ptr64_bits(p)),
             Self::F32Bits(_)
             | Self::F64Bits(_)
             | Self::Str(_)
             | Self::Str16(_)
             | Self::Bytes(_)
-            | Self::BlobRef(_)
-            | Self::Ptr32(_)
-            | Self::Ptr64(_) => None,
+            | Self::BlobRef(_) => None,
         }
     }
 
@@ -604,9 +810,10 @@ impl ValueCapture {
     ///
     /// Stale と NotApplicable は「その結果では値が定義されない」ことの表明であり、
     /// 宣言だけでなく実際の結果と照合する (7c5a553 レビュー P2-1):
-    /// - Stale は LastError の意味条件を宣言したフィールドで、その条件が実際の戻り値で
+    /// - Stale は LastError の意味条件を宣言したフィールドで、その条件が実際の結果で
     ///   偽のときだけ (戻り値が FALSE なのに Stale と書いた LastError は取得失敗と同じ)。
-    ///   戻り値が取れていない記録では古い値だと示せないので数えない。DependsOnInputs は
+    ///   Never は結果によらず偽なので戻り値を要らない (d4fc3c0 レビュー P1)。戻り値で決まる
+    ///   条件は、戻り値が取れていない記録では古い値だと示せないので数えない。DependsOnInputs は
     ///   戻り値で言える必要条件 (呼び出しが成功している) だけをここで見る。
     /// - NotApplicable は呼び出し後に取る出力 (After / Completion / Both) で、
     ///   [`OutputCondition`] が実際の結果で偽のときだけ。
@@ -614,24 +821,17 @@ impl ValueCapture {
         // 変種を足したら、ここで完全性に数えるかを決めるまでコンパイルが通らない
         match self {
             Self::Captured => true,
-            Self::Stale => match LastErrorMeaning::from_flags(flags) {
-                LastErrorMeaning::Unspecified | LastErrorMeaning::Always => false,
-                // 戻り値だけで言える必要条件: 入力で決まる条件はどれも、呼び出しの失敗
-                // (NULL / INVALID_HANDLE_VALUE / FALSE) では LastError に意味を持たせる。
-                // 入力まで照らした判定は enter と組にできる conformance
-                // (`last-error-inputs`) が [`LastErrorMeaning::resolve_inputs`] で行う
-                | LastErrorMeaning::DependsOnInputs => facts.ret.is_some_and(|r| {
-                    !LastErrorMeaning::WhenReturnIsNullOrInvalidHandle.is_meaningful(r)
-                }),
-                m @ (LastErrorMeaning::WhenReturnIsFalse
-                | LastErrorMeaning::WhenReturnIsInvalidHandle
-                | LastErrorMeaning::WhenReturnIsNull
-                | LastErrorMeaning::Never
-                | LastErrorMeaning::WhenReturnIsMinusOne
-                | LastErrorMeaning::WhenReturnIsNotNull
-                | LastErrorMeaning::WhenReturnIsNullOrInvalidHandle) => {
-                    facts.ret.is_some_and(|r| !m.is_meaningful(r))
-                }
+            Self::Stale => match LastErrorMeaning::from_flags(flags).rule() {
+                // Never は戻り値によらず意味がない: 戻り値のない API (Sleep) でも Stale が正しい
+                LastErrorRule::Fixed { meaningful } => !meaningful,
+                LastErrorRule::OnReturn(test) => facts.ret.is_some_and(|r| !test.holds(r)),
+                // 入力で決まる条件は、どの戻り値が失敗かも関数ごとに違う (CreateMutexW は NULL、
+                // CreateFileW は INVALID_HANDLE_VALUE)。leave 単体で言えるのは「古い値だと照らす
+                // 戻り値が記録にある」ことだけで、照合は enter と組にした呼び出し単位の検査
+                // ([`LastErrorMeaning::check_stale_inputs`]) が行う。完全性の集計・conformance・
+                // 比較はどれもその結果を使う (d4fc3c0 レビュー 1.6)。以前の「NULL でも
+                // INVALID_HANDLE_VALUE でもない」は、CreateMutexW の成功を失敗と取り違えうる
+                LastErrorRule::OnInputs => facts.ret.is_some(),
             },
             Self::NotApplicable => {
                 let after = match CaptureTiming::from_flags(flags) {
@@ -641,6 +841,32 @@ impl ValueCapture {
                 after && OutputCondition::from_flags(flags).defined(facts) == Some(false)
             }
             Self::Unreadable | Self::Truncated | Self::Unsupported | Self::LimitExceeded => false,
+        }
+    }
+
+    /// 値本体が読み取った値を持つか、形式上のダミー (0 / 空) か (trace-format「値列の
+    /// レイアウト」)。完全性 ([`ValueCapture::is_complete_given`]) とは別の問い: Truncated は
+    /// 不完全だが、本体は読めた部分を持つ (その Blob も参照として残す)。
+    /// d4fc3c0 レビュー P2: Blob 参照の列挙がこれを見ず、NotApplicable のダミー (ゼロの Blob ID)
+    /// を存在しない Blob への参照と数え、Writer の拒否と repair でのイベントの脱落に広がった。
+    pub fn body(self) -> ValueBody {
+        match self {
+            // Stale は生値、Truncated / LimitExceeded は上限までに読めた部分を本体に持つ
+            Self::Captured | Self::Truncated | Self::LimitExceeded | Self::Stale => ValueBody::Read,
+            Self::Unreadable | Self::Unsupported | Self::NotApplicable => ValueBody::Dummy,
+        }
+    }
+
+    /// 結果・入力の事実として使える値か: Captured の値だけ (古い値・ダミー・一部は使わない)
+    pub fn fact(self, bits: Option<u64>) -> Option<u64> {
+        match self {
+            Self::Captured => bits,
+            Self::Unreadable
+            | Self::Truncated
+            | Self::Unsupported
+            | Self::LimitExceeded
+            | Self::Stale
+            | Self::NotApplicable => None,
         }
     }
 
@@ -669,6 +895,15 @@ impl ValueCapture {
     }
 }
 
+/// [`ValueCapture::body`]: 値本体の中身
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValueBody {
+    /// 読み取った値 (一部だけのこともある)
+    Read,
+    /// 形式上のダミー (0 / 空): 値として読んではならない
+    Dummy,
+}
+
 /// 取得状態付きの値（値列の要素）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapturedValue<H: Holds = Owned> {
@@ -690,6 +925,14 @@ impl<H: Holds> CapturedValue<H> {
         Self {
             capture: ValueCapture::Captured,
             value,
+        }
+    }
+
+    /// 値本体が読み取った値なら、その値。ダミー ([`ValueBody::Dummy`]) なら None
+    pub fn read_value(&self) -> Option<&TypedValue<H>> {
+        match self.capture.body() {
+            ValueBody::Read => Some(&self.value),
+            ValueBody::Dummy => None,
         }
     }
 }
@@ -1036,6 +1279,30 @@ mod tests {
         assert_ne!(on_false.content_hash, on_handle.content_hash);
     }
 
+    /// Stale (この呼び出しの LastError ではない) が正しい記録か: Microsoft の規約を言葉どおりに
+    /// 書いた表。戻り値 `ret` は記録にあれば Some
+    fn stale_is_correct(m: LastErrorMeaning, ret: Option<u64>) -> bool {
+        let invalid = |r: u64| r == u64::MAX || r == 0xffff_ffff;
+        match m {
+            // 意味条件を宣言していない / 常に意味がある: 古い値とは言えない
+            LastErrorMeaning::Unspecified | LastErrorMeaning::Always => false,
+            // 意味がない API (Sleep、SetLastError..): 戻り値があってもなくても Stale が正しい
+            LastErrorMeaning::Never => true,
+            // 失敗が 0 の API: 戻り値が取れていて 0 でないときだけ
+            LastErrorMeaning::WhenReturnIsFalse => ret.is_some_and(|r| r != 0),
+            LastErrorMeaning::WhenReturnIsNull => ret.is_some_and(|r| r != 0),
+            // 失敗が -1 / INVALID_HANDLE_VALUE の API
+            LastErrorMeaning::WhenReturnIsInvalidHandle => ret.is_some_and(|r| !invalid(r)),
+            LastErrorMeaning::WhenReturnIsMinusOne => ret.is_some_and(|r| !invalid(r)),
+            // 非 NULL が失敗 (GlobalFree): NULL を返したときだけ
+            LastErrorMeaning::WhenReturnIsNotNull => ret == Some(0),
+            // NULL も INVALID_HANDLE_VALUE も失敗
+            LastErrorMeaning::WhenReturnIsNullOrInvalidHandle => ret.is_some_and(|r| r != 0 && !invalid(r)),
+            // 入力で決まる API: leave 単体では戻り値があることだけ (照合は enter と組で)
+            LastErrorMeaning::DependsOnInputs => ret.is_some(),
+        }
+    }
+
     #[test]
     fn undefined_value_claims_need_a_schema_declaration() {
         // 2026-11-19 レビュー #4/#5: Stale は LastError の条件を宣言したフィールドだけ、
@@ -1068,7 +1335,7 @@ mod tests {
             OutputCondition::WhenPacketDequeued,
         ];
         let mut facts = vec![ResultFacts::default()];
-        for ret in [None, Some(0), Some(1), Some(u64::MAX)] {
+        for ret in [None, Some(0), Some(1), Some(0x1234), Some(0xffff_ffff), Some(u64::MAX)] {
             for last_error in [None, Some(0), Some(ERROR_MORE_DATA), Some(ERROR_IO_PENDING), Some(5)] {
                 for dequeued in [None, Some(0), Some(0x1000)] {
                     facts.push(ResultFacts { ret, last_error, dequeued });
@@ -1087,27 +1354,11 @@ mod tests {
                             let got = capture.is_complete_given(flags, f);
                             match capture {
                                 ValueCapture::Captured => assert!(got),
-                                // 古い値と言えるのは、宣言した条件が実際の戻り値で偽のときだけ
-                                // (DependsOnInputs は入力で決まるので、戻り値で言える必要条件だけ)
-                                ValueCapture::Stale => assert_eq!(
-                                    got,
-                                    match m {
-                                        LastErrorMeaning::Unspecified | LastErrorMeaning::Always => false,
-                                        LastErrorMeaning::DependsOnInputs => f.ret.is_some_and(|r| {
-                                            !LastErrorMeaning::WhenReturnIsNullOrInvalidHandle.is_meaningful(r)
-                                        }),
-                                        LastErrorMeaning::WhenReturnIsFalse
-                                        | LastErrorMeaning::WhenReturnIsInvalidHandle
-                                        | LastErrorMeaning::WhenReturnIsNull
-                                        | LastErrorMeaning::Never
-                                        | LastErrorMeaning::WhenReturnIsMinusOne
-                                        | LastErrorMeaning::WhenReturnIsNotNull
-                                        | LastErrorMeaning::WhenReturnIsNullOrInvalidHandle => {
-                                            f.ret.is_some_and(|r| !m.is_meaningful(r))
-                                        }
-                                    },
-                                    "{m:?} {f:?}"
-                                ),
+                                // 古い値と言えるのは、宣言した条件が実際の結果で偽のときだけ。
+                                // 期待値は製品の rule() / is_meaningful を使わない独立した表
+                                // (d4fc3c0 レビュー 5: 期待値側が「Never にも戻り値が要る」式を
+                                // 写していて、Sleep を不完全とする誤りがテスト上も正解になった)
+                                ValueCapture::Stale => assert_eq!(got, stale_is_correct(m, f.ret), "{m:?} {f:?}"),
                                 // 値がないと言えるのは、呼び出し後の出力で、その結果では定義されないときだけ
                                 ValueCapture::NotApplicable => assert_eq!(
                                     got,
@@ -1155,12 +1406,12 @@ mod tests {
             assert_eq!(r(f, &none, 0x10, 0), LastErrorMeaning::DependsOnInputs);
         }
         assert_eq!(r("OpenFile", &disp(1), 0x10, 0), LastErrorMeaning::DependsOnInputs);
-        // leave 単体の検査は、戻り値で言える必要条件だけを見る
+        // leave 単体の検査は戻り値があることだけを見る (CreateMutexW は lpName 次第で
+        // INVALID_HANDLE_VALUE 形の値でも Stale が正しい。残りは呼び出し単位の check_stale_inputs)
         let flags = LastErrorMeaning::DependsOnInputs.flags();
         let facts = |ret| ResultFacts { ret, ..ResultFacts::default() };
-        assert!(ValueCapture::Stale.is_complete_given(flags, &facts(Some(0x1234))));
-        for failed in [0, u64::MAX, 0xffff_ffff] {
-            assert!(!ValueCapture::Stale.is_complete_given(flags, &facts(Some(failed))));
+        for ret in [0x1234, 0, u64::MAX, 0xffff_ffff] {
+            assert!(ValueCapture::Stale.is_complete_given(flags, &facts(Some(ret))));
         }
         assert!(!ValueCapture::Stale.is_complete_given(flags, &facts(None)));
     }

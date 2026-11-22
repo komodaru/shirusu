@@ -112,7 +112,7 @@ fn c02_64_threads_no_crosstalk_and_slot_shortage_is_coverage_loss() {
     let claims: Vec<_> = (0..64u64)
         .map(|t| {
             let p = pool.clone();
-            std::thread::spawn(move || p.claim(t))
+            std::thread::spawn(move || p.claim(t).map(shirusu_transport::slot::SlotClaim::confirm))
         })
         .collect();
     let ok = claims.into_iter().filter_map(|h| h.join().unwrap()).count();

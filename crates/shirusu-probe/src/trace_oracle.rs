@@ -2,7 +2,7 @@
 //! reject divergent prerequisites instead of guessing which state caused it.
 use crate::oracle::{DifferenceFingerprint, TargetObservation};
 use crate::replay::{generate_candidate_replay, ReplaySlice};
-use shirusu_analysis::{EventView, TraceView};
+use shirusu_analysis::{EventView, TraceView, Use};
 use shirusu_compare::{Candidate, CandidateKind, NormCall, NormEvent, NormTrace};
 use shirusu_trace::reader::ReadTrace;
 use shirusu_trace::schema::{EventCapture, TypedValue, ValueCapture};
@@ -127,19 +127,10 @@ fn fingerprint_for_recorded_candidate(
 }
 
 fn ordered_calls<'a>(view: &TraceView, norm: &'a NormTrace) -> Result<Vec<Paired<'a>>, String> {
-    let i = &view.integrity;
-    if !i.has_finalization
-        || !i.finalized_cleanly
-        || i.event_integrity != Some(0)
-        || i.semantic_completeness != Some(0)
-        || !i.loss_records_by_kind.is_empty()
-        || !i.recovery_issues.is_empty()
-        || i.dropped_payload_events != 0
-        || i.missing_blob_refs != 0
-        || i.degraded_events != 0
-    {
-        return Err("trace has incomplete recorded evidence".into());
-    }
+    // the shared gate (d4fc3c0 review 1.4: the hand-listed copy missed event_count_mismatch)
+    view.integrity
+        .require(Use::RecordedSequence)
+        .map_err(|gaps| format!("trace has incomplete recorded evidence: {gaps}"))?;
     let contexts: std::collections::BTreeSet<_> = view
         .events
         .iter()

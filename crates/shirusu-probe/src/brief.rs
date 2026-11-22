@@ -56,15 +56,15 @@ fn integrity_line(name: &str, s: &IntegritySummary) -> String {
         }
         None => "Unknown (no finalization)".to_string(),
     };
+    // 宣言の 3 指標に加えて、解析が見つけた欠けをすべて (d4fc3c0 レビュー 1.4: 件数の不一致が
+    // brief に出ず、宣言どおり Complete と読めた)
+    let gaps: Vec<String> = s.incompleteness().iter().map(|g| g.describe()).collect();
     format!(
-        "- {name}: capture_coverage={}, event_integrity={}, semantic_completeness={}, \
-         loss_records={}, dropped_payloads={}, missing_blob_refs={}",
+        "- {name}: capture_coverage={}, event_integrity={}, semantic_completeness={}; incompleteness: {}",
         level(s.capture_coverage),
         level(s.event_integrity),
         level(s.semantic_completeness),
-        s.loss_records_by_kind.values().sum::<u64>(),
-        s.dropped_payload_events,
-        s.missing_blob_refs
+        if gaps.is_empty() { "none".to_string() } else { gaps.join("; ") }
     )
 }
 

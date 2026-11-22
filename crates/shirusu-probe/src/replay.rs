@@ -2,7 +2,7 @@
 //! Paths are remapped; CREATE_NEW prevents overwriting an existing replay file.
 use std::collections::{BTreeMap, BTreeSet};
 
-use shirusu_analysis::{EventView, TraceView};
+use shirusu_analysis::{EventView, TraceView, Use};
 use shirusu_test::runner_exec::{
     plan_steps, ArgValue, Expect, ExpectedOutput, RetExpect, Step, MAX_CAPTURED_BUFFER,
 };
@@ -15,21 +15,13 @@ use shirusu_trace::schema::{EventCapture, TypedValue, ValueCapture};
 /// Run in a fresh scratch directory. Generated files remain there for inspection.
 pub fn generate_replay(trace: &ReadTrace) -> Result<TestSpec, String> {
     let view = TraceView::build(trace);
-    let integrity = &view.integrity;
     // Coverage describes which APIs were observable, not loss of recorded events.
     // Reconstruct the recorded sequence only; never claim whole-program replay.
-    if !integrity.has_finalization
-        || !integrity.finalized_cleanly
-        || integrity.event_integrity != Some(0)
-        || integrity.semantic_completeness != Some(0)
-        || !integrity.loss_records_by_kind.is_empty()
-        || !integrity.recovery_issues.is_empty()
-        || integrity.dropped_payload_events != 0
-        || integrity.missing_blob_refs != 0
-        || integrity.degraded_events != 0
-    {
-        return Err("replay requires a finalized trace without event loss, semantic loss or reader recovery issues".into());
-    }
+    // The gate is the shared one (d4fc3c0 review 1.4: a hand-listed copy missed
+    // event_count_mismatch and replayed a trace whose events may be missing).
+    view.integrity
+        .require(Use::RecordedSequence)
+        .map_err(|gaps| format!("replay requires the recorded sequence to be complete: {gaps}"))?;
     let contexts: BTreeSet<_> = view
         .events
         .iter()

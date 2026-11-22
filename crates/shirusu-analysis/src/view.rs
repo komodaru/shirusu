@@ -4,6 +4,7 @@
 //! ここでの責務は「読めたものを正直に見せる」ことだけであり、値の
 //! 解釈（正規化や同一性判定）は shirusu-compare 側の仕事とする。
 
+use crate::calls::CallChecks;
 use crate::json::JsonValue;
 use shirusu_trace::compact::decode_values;
 use shirusu_trace::model::{EventBatch, PayloadLossReason, PayloadRef, TraceEvent};
@@ -578,6 +579,10 @@ pub struct IntegritySummary {
     pub missing_blob_refs: u64,
     pub index_matches_scan: bool,
     pub has_stored_index: bool,
+    /// 入力で決まる LastError を Stale と書き、enter の入力と合わない呼び出し (説明)
+    pub inconsistent_calls: Vec<String>,
+    /// 入力と照合した Stale の数
+    pub checked_stale_inputs: u64,
 }
 
 /// イベントごとに数える完全性の材料（全体読み込みとストリーミングで共用）。
@@ -588,17 +593,21 @@ pub struct IntegrityCounts {
     pub dropped_payload_bytes: u64,
     pub degraded_events: u64,
     pub missing_blob_refs: u64,
+    /// 呼び出し単位の検査 (enter と leave の組)
+    pub calls: CallChecks,
 }
 
 impl IntegrityCounts {
-    /// 1 件を数える。`blob_present` は参照先 Blob がファイル内にあるか。
+    /// 1 件を数える (ファイル順に)。`blob_present` は参照先 Blob がファイル内にあるか。
     pub fn note(
         &mut self,
         registry: &SchemaRegistry,
+        batch: &EventBatch,
         e: &TraceEvent,
         blob_present: impl Fn(&BlobId) -> bool,
     ) {
         self.events += 1;
+        self.calls.note(registry, batch, e);
         if let PayloadRef::Dropped { original_len, .. } = &e.payload {
             self.dropped_payload_events += 1;
             self.dropped_payload_bytes = self.dropped_payload_bytes.saturating_add(*original_len);
@@ -637,7 +646,7 @@ impl IntegritySummary {
         let mut counts = IntegrityCounts::default();
         for batch in &trace.batches {
             for e in &batch.events {
-                counts.note(&trace.registry, e, |id| trace.blobs.contains_key(id));
+                counts.note(&trace.registry, batch, e, |id| trace.blobs.contains_key(id));
             }
         }
         Self::assemble(trace, &counts)
@@ -731,6 +740,8 @@ impl IntegritySummary {
             missing_blob_refs: missing_blobs,
             index_matches_scan: trace.index_matches_scan,
             has_stored_index: trace.stored_index.is_some(),
+            inconsistent_calls: counts.calls.problems.clone(),
+            checked_stale_inputs: counts.calls.checked,
         }
     }
 
@@ -750,7 +761,11 @@ impl IntegritySummary {
         }
         if !self.loss_records_by_kind.is_empty() {
             out.push(Incompleteness::LossRecords {
-                total: self.total_loss_count,
+                records_by_kind: self.loss_records_by_kind.clone(),
+                events: match self.exact_loss_count() {
+                    Some(n) => LossCount::Exact(n),
+                    None => LossCount::AtLeast(self.total_loss_count),
+                },
             });
         }
         let issues: Vec<String> = self
@@ -777,6 +792,9 @@ impl IntegritySummary {
                 events: self.degraded_events,
             });
         }
+        if !self.inconsistent_calls.is_empty() {
+            out.push(Incompleteness::InconsistentCalls(self.inconsistent_calls.clone()));
+        }
         for (aspect, level) in [
             (IntegrityAspect::CaptureCoverage, self.capture_coverage),
             (IntegrityAspect::EventIntegrity, self.event_integrity),
@@ -791,6 +809,20 @@ impl IntegritySummary {
 
     pub fn is_complete(&self) -> bool {
         self.incompleteness().is_empty()
+    }
+
+    /// `purpose` の用途が受け入れない欠け ([`Incompleteness::blocks`])。空なら使ってよい。
+    /// 完全性の条件を用途ごとに並べ直さない (d4fc3c0 レビュー 1.4: Probe の replay と差分判定が
+    /// 条件を個別に並べ、event_count_mismatch を落とした)
+    pub fn gaps_for(&self, purpose: Use) -> Vec<Incompleteness> {
+        self.incompleteness().into_iter().filter(|i| i.blocks(purpose)).collect()
+    }
+
+    /// [`IntegritySummary::gaps_for`] が空なら Ok、そうでなければ欠けの説明 (「; 」区切り)
+    pub fn require(&self, purpose: Use) -> Result<(), String> {
+        let gaps = self.gaps_for(purpose);
+        gaps.is_empty()
+            .ok_or_else(|| gaps.iter().map(Incompleteness::describe).collect::<Vec<_>>().join("; "))
     }
 
     /// Event Integrity に損失があるか（Loss Record・落ちた Payload・
@@ -828,8 +860,11 @@ pub enum Incompleteness {
     NotFinalizedCleanly,
     /// 終了時に記録したイベント総数と、読めたイベント数が違う
     EventCountMismatch,
-    /// Loss Record がある (件数の合計)
-    LossRecords { total: u64 },
+    /// Loss Record がある (種別ごとの記録数と、失ったイベント数の確かさ)
+    LossRecords {
+        records_by_kind: BTreeMap<u32, u64>,
+        events: LossCount,
+    },
     /// 読み取り側が見つけた破損 (index_mismatch は最適化の Index だけなので含めない)
     RecoveryIssues(Vec<String>),
     /// 落とした Payload を持つイベントがある
@@ -838,11 +873,33 @@ pub enum Incompleteness {
     MissingBlobRefs { refs: u64 },
     /// 取得状態が揃っていないイベントがある
     DegradedEvents { events: u64 },
+    /// enter の入力と合わない値を書いた呼び出しがある (入力で決まる LastError の Stale)
+    InconsistentCalls(Vec<String>),
     /// 終了時の宣言が Complete (0) でない (None は宣言なし)
     Declared {
         aspect: IntegrityAspect,
         level: Option<u32>,
     },
+}
+
+/// 失ったイベント数
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LossCount {
+    /// 正確な件数
+    Exact(u64),
+    /// 件数を確定できない損失がある (少なくともこの件数: UNKNOWN_LOSS_COUNT)
+    AtLeast(u64),
+}
+
+/// 観測を何に使うか (用途ごとに受け入れる欠けが違う: [`Incompleteness::blocks`])
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Use {
+    /// 記録されたイベント列をそのまま再生する・その列から差分を作る (Probe の replay と
+    /// 差分判定)。観測対象の API を限定したこと (Capture Coverage) だけは受け入れる: 記録した
+    /// 列は揃っている
+    RecordedSequence,
+    /// 観測が揃っていると断定する (inspect の complete、no-integrity-loss、compare の Identical)
+    WholeObservation,
 }
 
 /// 欠けの項目 (compare が項目ごとに左右を比べる単位)
@@ -855,11 +912,12 @@ pub enum IncompletenessKey {
     DroppedPayloads,
     MissingBlobRefs,
     DegradedEvents,
+    InconsistentCalls,
     Declared(IntegrityAspect),
 }
 
 impl IncompletenessKey {
-    pub const ALL: [IncompletenessKey; 10] = [
+    pub const ALL: [IncompletenessKey; 11] = [
         IncompletenessKey::Declared(IntegrityAspect::CaptureCoverage),
         IncompletenessKey::Declared(IntegrityAspect::EventIntegrity),
         IncompletenessKey::Declared(IntegrityAspect::SemanticCompleteness),
@@ -870,6 +928,7 @@ impl IncompletenessKey {
         IncompletenessKey::DroppedPayloads,
         IncompletenessKey::MissingBlobRefs,
         IncompletenessKey::DegradedEvents,
+        IncompletenessKey::InconsistentCalls,
     ];
 
     pub fn name(self) -> &'static str {
@@ -881,6 +940,7 @@ impl IncompletenessKey {
             IncompletenessKey::DroppedPayloads => "dropped_payload_events",
             IncompletenessKey::MissingBlobRefs => "missing_blob_refs",
             IncompletenessKey::DegradedEvents => "degraded_events",
+            IncompletenessKey::InconsistentCalls => "inconsistent_calls",
             IncompletenessKey::Declared(a) => a.name(),
         }
     }
@@ -899,6 +959,7 @@ impl Incompleteness {
             Incompleteness::DroppedPayloads { .. } => IncompletenessKey::DroppedPayloads,
             Incompleteness::MissingBlobRefs { .. } => IncompletenessKey::MissingBlobRefs,
             Incompleteness::DegradedEvents { .. } => IncompletenessKey::DegradedEvents,
+            Incompleteness::InconsistentCalls(_) => IncompletenessKey::InconsistentCalls,
             Incompleteness::Declared { aspect, .. } => IncompletenessKey::Declared(*aspect),
         }
     }
@@ -918,7 +979,30 @@ impl Incompleteness {
             },
             Incompleteness::NoFinalization
             | Incompleteness::NotFinalizedCleanly
-            | Incompleteness::DegradedEvents { .. } => false,
+            | Incompleteness::DegradedEvents { .. }
+            | Incompleteness::InconsistentCalls(_) => false,
+        }
+    }
+
+    /// この欠けがあると `purpose` には使えないか
+    pub fn blocks(&self, purpose: Use) -> bool {
+        match purpose {
+            Use::WholeObservation => true,
+            Use::RecordedSequence => match self {
+                Incompleteness::Declared { aspect, .. } => match aspect {
+                    IntegrityAspect::CaptureCoverage => false,
+                    IntegrityAspect::EventIntegrity | IntegrityAspect::SemanticCompleteness => true,
+                },
+                Incompleteness::NoFinalization
+                | Incompleteness::NotFinalizedCleanly
+                | Incompleteness::EventCountMismatch
+                | Incompleteness::LossRecords { .. }
+                | Incompleteness::RecoveryIssues(_)
+                | Incompleteness::DroppedPayloads { .. }
+                | Incompleteness::MissingBlobRefs { .. }
+                | Incompleteness::DegradedEvents { .. }
+                | Incompleteness::InconsistentCalls(_) => true,
+            },
         }
     }
 
@@ -928,11 +1012,22 @@ impl Incompleteness {
             Incompleteness::NoFinalization => "no_finalization".into(),
             Incompleteness::NotFinalizedCleanly => "not_finalized_cleanly".into(),
             Incompleteness::EventCountMismatch => "event_count_mismatch".into(),
-            Incompleteness::LossRecords { total } => format!("loss_records(total={total})"),
+            Incompleteness::LossRecords { records_by_kind, events } => {
+                let kinds: Vec<String> = records_by_kind
+                    .iter()
+                    .map(|(k, n)| format!("{}={n}", loss_kind_name(*k)))
+                    .collect();
+                let events = match events {
+                    LossCount::Exact(n) => format!("events={n}"),
+                    LossCount::AtLeast(n) => format!("events>={n} (count unknown)"),
+                };
+                format!("loss_records({}; {events})", kinds.join(", "))
+            }
             Incompleteness::RecoveryIssues(i) => format!("recovery_issues({})", i.join(", ")),
             Incompleteness::DroppedPayloads { events } => format!("dropped_payloads(events={events})"),
             Incompleteness::MissingBlobRefs { refs } => format!("missing_blob_refs({refs})"),
             Incompleteness::DegradedEvents { events } => format!("degraded_events({events})"),
+            Incompleteness::InconsistentCalls(c) => format!("inconsistent_calls({})", c.join("; ")),
             Incompleteness::Declared { aspect, level } => match level {
                 Some(l) => format!("{}={}", aspect.name(), integrity_level_name(*l)),
                 None => format!("{}=undeclared", aspect.name()),

@@ -77,7 +77,7 @@ pub fn stream_trace<R: Read + Seek>(
                 for e in &batch.events {
                     total_events += 1;
                     // 欠落 Blob は読み終えてから決まる (前方参照がある)。
-                    counts.note(stream.registry(), e, |_| true);
+                    counts.note(stream.registry(), &batch, e, |_| true);
                     // (一つのイベントが同じ Blob を何か所から参照しても 1 件: view の note と同じ数え方)
                     let mut ids: Vec<BlobId> =
                         e.blob_refs(stream.registry()).known().iter().map(|u| u.id).collect();

@@ -239,6 +239,20 @@ fn fixture(r: Rule) -> Fixture {
             good: &[("crates/shirusu-host/src/trace_pipeline.rs", "// dropped_events += events.len() と数えない\nfn write(totals: &mut PipelineReport, recorder: &mut TraceRecorder<W>, staged: Staged) {\n    if totals.storage_full {\n        totals.storage_full_dropped_events += recorder.discard_unwritable(&staged.context, &staged.events);\n    }\n    totals.storage_full_dropped_losses += losses.len() as u64;\n}\n")],
             mutate: ("crates/shirusu-host/src/trace_pipeline.rs", |t| Some(t.replace("totals.storage_full_dropped_events += recorder.discard_unwritable(&staged.context, &staged.events);", "totals.storage_full_dropped_events += staged.events.len() as u64;"))),
         },
+        Rule::TlaUnrun => Fixture {
+            bad: &[
+                (regress::TLA_SCRIPT, "java -cp tla2tools.jar tlc2.TLC -config A.cfg A\n"),
+                ("tla/A.cfg", "INVARIANT Safe\n"),
+                ("tla/ABuggy.cfg", "INVARIANT Safe\n"),
+            ],
+            good: &[
+                (regress::TLA_SCRIPT, "java -cp tla2tools.jar tlc2.TLC -config A.cfg A\nexpect_violation ABuggy.cfg \"Invariant Safe is violated\"\n"),
+                ("tla/A.cfg", "INVARIANT Safe\n"),
+                ("tla/ABuggy.cfg", "INVARIANT Safe\n"),
+                ("tla/A.tla", "---- MODULE A ----\n====\n"),
+            ],
+            mutate: (regress::TLA_SCRIPT, |t| Some(t.replace("expect_store_violation TraceStoreDropPending.cfg", "expect_store_violation TraceStoreNoTruncate.cfg"))),
+        },
         Rule::LoomSyncSource => Fixture {
             bad: &[
                 (regress::LOOM_ROOT, "mod slot_sync { pub use loom::sync::atomic::AtomicU8; }\n#[path = \"../../shirusu-transport/src/slot.rs\"]\nmod slot;\n"),

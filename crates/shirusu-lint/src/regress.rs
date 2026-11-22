@@ -585,3 +585,20 @@ pub(super) fn loom_sync_source(tree: &Tree) -> Hits {
     }
     out
 }
+
+// --- tla-unrun -----------------------------------------------------------------------------------
+
+/// TLC を回す CI の script: tla/ の設定をどれも名前で持つ
+pub(super) const TLA_SCRIPT: &str = "scripts/ci/tla.sh";
+
+pub(super) fn tla_unrun(tree: &Tree) -> Hits {
+    let script = tree.text(TLA_SCRIPT);
+    let named: BTreeSet<&str> = script.split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '=').filter(|w| w.ends_with(".cfg")).collect();
+    tree.paths()
+        .into_iter()
+        .filter_map(|p| {
+            let name = p.strip_prefix("tla/")?.to_string();
+            (name.ends_with(".cfg") && !name.contains('/') && !named.contains(name.as_str())).then(|| (p.clone(), 1, format!("{TLA_SCRIPT} が {name} を実行しない (主モデルなら TLC で通し、変種なら期待する違反を grep する)")))
+        })
+        .collect()
+}

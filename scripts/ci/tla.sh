@@ -129,3 +129,31 @@ expect_runtime_violation RuntimeHazardNoRevisionRecheck.cfg "Invariant HazardSaf
 expect_runtime_violation RuntimeHazardLightReclaim.cfg "Invariant HazardSafe is violated"
 expect_runtime_violation RuntimeHazardLightWait.cfg "Invariant DrainedQuiet is violated"
 expect_runtime_violation RuntimeHazardNoGateRecheck.cfg "Invariant DrainedQuiet is violated"
+
+# Trace の保存と復旧 (writer.rs / trace_pipeline.rs / reader.rs): 失敗・部分書き込み・
+# 容量不足・クラッシュ後の読み直しで、二重記録なし、保存済みは残る、Finalization を
+# 読めたら全イベントが読めるか欠落として数えられている、参照する Blob がある、Index が
+# 位置どおり。切り詰めない変種、未書き出し Blob を捨てる変種、「Finalization を読めたら
+# finish は成功した」は反例が必須。到達確認の 2 つも違反が必須。
+java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC -workers auto -config TraceStore.cfg TraceStore
+java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC -workers auto -config TraceStoreBuffered.cfg TraceStore
+java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC -workers auto -config TraceStoreRetry.cfg TraceStore
+expect_store_violation() {
+  local cfg="$1" pattern="$2"
+  if java -cp tla2tools.jar tlc2.TLC -config "$cfg" TraceStore >"$buggy_log" 2>&1; then
+    echo "ERROR: $cfg で違反が検出されなかった" >&2
+    cat "$buggy_log" >&2
+    exit 1
+  fi
+  if ! grep -Eq "$pattern" "$buggy_log"; then
+    echo "ERROR: $cfg で期待した違反 ($pattern) が見つからない" >&2
+    cat "$buggy_log" >&2
+    exit 1
+  fi
+  echo "OK: $cfg で $pattern を検出した"
+}
+expect_store_violation TraceStoreNoTruncate.cfg "Invariant IndexAgrees is violated"
+expect_store_violation TraceStoreDropPending.cfg "Invariant RefsResolve is violated"
+expect_store_violation TraceStoreDoneOnly.cfg "Invariant DoneOnly is violated"
+expect_store_violation TraceStoreReachDegraded.cfg "Invariant NoDegradedFinish is violated"
+expect_store_violation TraceStoreReachTorn.cfg "Invariant NeverTorn is violated"

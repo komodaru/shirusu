@@ -10,7 +10,7 @@
 //! 停止フラグで全スレッドが抜けられるようにしてある (固まること自体が
 //! 失敗の現れだが、テストとしては表明で終わらせる)。
 //! 競合の決定的な再現は loom モデル (shirusu-loom-tests の
-//! loom_slot_reclaim_publishes_generation_before_free) が担い、こちらは
+//! loom_real_reclaim_then_claim_sees_the_new_generation: 本体の slot.rs を loom で動かす) が担い、こちらは
 //! 実装そのものに対するストレスとして併用する。
 
 use shirusu_transport::slot::SlotPool;

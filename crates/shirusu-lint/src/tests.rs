@@ -196,6 +196,18 @@ fn fixture(r: Rule) -> Fixture {
             ],
             mutate: ("crates/shirusu-cli/src/repair.rs", |t| Some(t + "\nfn _lint_regression(e: &TraceEvent) -> bool {\n    if let PayloadRef::Blob(_) = e.payload {\n        return true;\n    }\n    false\n}\n")),
         },
+        Rule::LoomSyncSource => Fixture {
+            bad: &[
+                (regress::LOOM_ROOT, "mod slot_sync { pub use loom::sync::atomic::AtomicU8; }\n#[path = \"../../shirusu-transport/src/slot.rs\"]\nmod slot;\n"),
+                ("crates/shirusu-transport/src/slot.rs", "use super::slot_sync::AtomicU8;\nuse std::sync::{atomic::AtomicU64, Arc};\nstruct S { a: AtomicU8, b: AtomicU64, c: std::cell::UnsafeCell<u8>, d: core::sync::atomic::AtomicBool }\n"),
+            ],
+            good: &[
+                (regress::LOOM_ROOT, "mod slot_sync { pub use loom::sync::atomic::AtomicU8; pub use std::sync::PoisonError; }\n#[path = \"../../shirusu-transport/src/slot.rs\"]\nmod slot;\nuse std::sync::Mutex;\n"),
+                ("crates/shirusu-transport/src/slot.rs", "use super::slot_sync::{AtomicU8, PoisonError};\nuse crate::layout::RingConfig;\nstruct S { a: AtomicU8 }\n#[cfg(test)]\nmod tests {\n    use std::sync::Arc;\n}\n"),
+                ("crates/shirusu-transport/src/ring.rs", "use std::sync::atomic::AtomicU64;\n"),
+            ],
+            mutate: ("crates/shirusu-agent/src/adoption.rs", |t| Some(t.replace("use super::adoption_sync::{AtomicU64, Ordering, UnsafeCell};", "use super::adoption_sync::{Ordering, UnsafeCell};\nuse std::sync::atomic::AtomicU64;"))),
+        },
         Rule::CompareVerdict => Fixture {
             bad: &[("crates/shirusu-x/src/bin/x.rs", "fn main() {\n    let report = compare_traces(&a, &b);\n    if report.candidates.is_empty() {\n        println!(\"identical\");\n    }\n}\n")],
             good: &[

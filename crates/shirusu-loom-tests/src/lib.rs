@@ -175,85 +175,6 @@ mod tests {
     }
 
     #[test]
-    fn loom_slot_claim_is_exclusive() {
-        loom::model(|| {
-            let slot = Arc::new(AtomicU64::new(0)); // 0=FREE, 1=CLAIMED
-            let s2 = slot.clone();
-            let t = loom::thread::spawn(move || {
-                s2.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-            });
-            let mine = slot
-                .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok();
-            let theirs = t.join().unwrap();
-            assert!(mine ^ theirs, "exactly one claimant must win");
-        });
-    }
-
-    #[test]
-    fn loom_slot_claim_contention_exactly_one_winner() {
-        loom::model(|| {
-            let slot = Arc::new(AtomicU64::new(0)); // 0=FREE, 1=CLAIMED
-            let winners = Arc::new(AtomicU64::new(0));
-            let mut hs = Vec::new();
-            for _ in 0..3 {
-                let s = slot.clone();
-                let w = winners.clone();
-                hs.push(loom::thread::spawn(move || {
-                    if s.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
-                        w.fetch_add(1, Ordering::Relaxed);
-                    }
-                }));
-            }
-            for h in hs {
-                h.join().unwrap();
-            }
-            assert_eq!(
-                winners.load(Ordering::Relaxed),
-                1,
-                "3 threads racing one slot: exactly one claim succeeds"
-            );
-        });
-    }
-
-    #[test]
-    fn loom_slot_claim_two_slots_three_threads() {
-        // first-fit の再試行が分岐を爆発させるため preemption を制限する
-        // (競合そのものは preemption 少数でも十分に踏める)。
-        let mut builder = loom::model::Builder::new();
-        builder.preemption_bound = Some(3);
-        builder.check(|| {
-            // first-fit スキャンで claim する 3 スレッドが 2 Slot を奪い合う。
-            let slots = Arc::new([AtomicU64::new(0), AtomicU64::new(0)]);
-            let winners = Arc::new(AtomicU64::new(0));
-            let mut hs = Vec::new();
-            for _ in 0..3 {
-                let ss = slots.clone();
-                let w = winners.clone();
-                hs.push(loom::thread::spawn(move || {
-                    for s in ss.iter() {
-                        if s.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-                            .is_ok()
-                        {
-                            w.fetch_add(1, Ordering::Relaxed);
-                            return;
-                        }
-                    }
-                }));
-            }
-            for h in hs {
-                h.join().unwrap();
-            }
-            assert_eq!(winners.load(Ordering::Relaxed), 2, "one winner per slot");
-            assert_eq!(slots[0].load(Ordering::Relaxed), 1);
-            assert_eq!(slots[1].load(Ordering::Relaxed), 1);
-        });
-    }
-
-    #[test]
     fn loom_no_overwrite_before_release_ring_reuse() {
         loom::model(|| {
             let ring = Arc::new(MiniRing::new());
@@ -371,60 +292,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn loom_slot_lifecycle_excludes_concurrent_holders() {
-        // Slot 状態機械 (FREE→CLAIMED→ACTIVE→DRAINING→RECLAIMABLE→FREE) を
-        // loom 原子で再現し、所有権フラグが二重に立たないことを検査する。
-        const FREE: u64 = 0;
-        const ACTIVE: u64 = 2;
-        const DRAINING: u64 = 3;
-        const RECLAIMABLE: u64 = 4;
-        loom::model(|| {
-            let state = Arc::new(AtomicU64::new(FREE));
-            let holder = Arc::new(AtomicBool::new(false));
-            let s2 = state.clone();
-            let h2 = holder.clone();
-            // 所有者スレッド: claim できたら所有し、DETACH まで進める
-            let owner = loom::thread::spawn(move || {
-                if s2
-                    .compare_exchange(FREE, ACTIVE, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    let was_held = h2.swap(true, Ordering::AcqRel);
-                    assert!(!was_held, "two holders at once");
-                    s2.store(DRAINING, Ordering::Release);
-                    true
-                } else {
-                    false
-                }
-            });
-            // Host スレッド: DRAINING を見たら RECLAIMABLE → FREE へ進める
-            let s3 = state.clone();
-            let h3 = holder.clone();
-            let host = loom::thread::spawn(move || {
-                if s3
-                    .compare_exchange(DRAINING, RECLAIMABLE, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    assert!(s3
-                        .compare_exchange(RECLAIMABLE, FREE, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok());
-                    h3.store(false, Ordering::Release);
-                    true
-                } else {
-                    false
-                }
-            });
-            let claimed = owner.join().unwrap();
-            let reclaimed = host.join().unwrap();
-            if reclaimed {
-                assert!(claimed, "reclaim implies a prior claim and detach");
-                assert_eq!(state.load(Ordering::Relaxed), FREE);
-                assert!(!holder.load(Ordering::Relaxed));
-            }
-        });
-    }
-
     /// slot.rs の begin_detach の転写: handle の Generation を確かめてから
     /// ACTIVE→DRAINING の CAS をする。確かめた後に Slot が再利用されると、
     /// CAS は新しい所有者の ACTIVE に当たりうる (ABA)。
@@ -512,11 +379,9 @@ mod tests {
         });
     }
 
-    // ---- R3: Slot host_reclaim と claim の操作順序 (slot.rs の転写モデル) ----
-    // slot.rs の claim / host_reclaim が行う原子操作を、同じ順序・同じ
-    // Ordering で loom 原子へ転写したモデル。実装の順序を変えたら転写も
-    // 合わせること (転写の忠実さがこのモデルの前提であり、MiniRing のような
-    // 抽象モデルでは R3 の競合は原理的に検出できない)。
+    // ---- R3: Slot host_reclaim と claim の旧順序 (修正前の slot.rs の転写) ----
+    // 今の順序は本体の slot.rs を loom で動かす slot_tests (下) が検査する。ここに
+    // 残すのは修正前の順序で、loom がその競合を見つけること (反例が出ること) の記録。
     struct MiniSlot {
         state: AtomicU64,
         generation: AtomicU64,
@@ -629,29 +494,6 @@ mod tests {
     }
 
     #[test]
-    fn loom_slot_reclaim_publishes_generation_before_free() {
-        // R3 の性質: FREE が公開された後に claim した側は、回収で進んだ
-        // Generation を必ず観測しなければならない。進む前の Generation を
-        // 読むと、古い handle と新しい handle が同じ (index, generation) を
-        // 持ち、世代ガードが無力化する。
-        loom::model(|| {
-            let slot = Arc::new(MiniSlot::new_reclaimable());
-            let s2 = slot.clone();
-            let reclaimer = loom::thread::spawn(move || s2.host_reclaim(1));
-            let claimed_gen = slot.claim(777);
-            let reclaimed = reclaimer.join().unwrap();
-            assert!(reclaimed, "sole reclaimer must succeed");
-            if let Some(g) = claimed_gen {
-                assert_eq!(
-                    g, 2,
-                    "claimer must observe the advanced generation, never the reclaimed one"
-                );
-                assert_eq!(slot.owner.load(Ordering::Relaxed), 777);
-            }
-        });
-    }
-
-    #[test]
     fn loom_slot_reclaim_excludes_concurrent_reclaimers() {
         // R3: RECLAIMING への CAS で回収権は 1 者だけが取り、Generation は
         // ちょうど 1 回だけ進む。2 者が両方成功すると Generation が二重に
@@ -680,31 +522,18 @@ mod tests {
     // (未登録のまま取得すると、Mapping の無いローカル領域で記録が
     // 始まり Host から見えなくなる)。Mapping の登録は AtomicBool、
     // 状態遷移は slot.rs と同じ Ordering で転写する。
-    const MINI_PREPARING: u64 = 6;
 
     struct MiniAddedSlot {
         state: AtomicU64,
         mapping_registered: AtomicBool,
     }
     impl MiniAddedSlot {
-        /// 修正後の追加順序: PREPARING で追加する。
-        fn new_adding() -> Self {
-            Self {
-                state: AtomicU64::new(MINI_PREPARING),
-                mapping_registered: AtomicBool::new(false),
-            }
-        }
         /// 修正前の旧順序: 追加時点で FREE、Mapping は後から登録する。
         fn new_adding_old_order() -> Self {
             Self {
                 state: AtomicU64::new(MINI_FREE),
                 mapping_registered: AtomicBool::new(false),
             }
-        }
-        /// 管理側 (修正後): Mapping を登録してから FREE を Release で公開。
-        fn register_and_publish(&self) {
-            self.mapping_registered.store(true, Ordering::Release);
-            self.state.store(MINI_FREE, Ordering::Release);
         }
         /// 管理側 (旧順序): Slot は最初から FREE で、Mapping だけ後で登録。
         fn register_only(&self) {
@@ -723,25 +552,6 @@ mod tests {
                 None
             }
         }
-    }
-
-    #[test]
-    fn loom_added_slot_claim_observes_registered_mapping() {
-        // #10 の性質: PREPARING で追加し、登録後に公開する順序では、
-        // どのスケジュールで claim が成功しても Mapping は登録済み。
-        loom::model(|| {
-            let slot = Arc::new(MiniAddedSlot::new_adding());
-            let s2 = slot.clone();
-            let manager = loom::thread::spawn(move || s2.register_and_publish());
-            let claimed = slot.claim_and_check_mapping();
-            manager.join().unwrap();
-            if let Some(registered) = claimed {
-                assert!(
-                    registered,
-                    "claimer must observe the registered mapping, never claim an unpublished slot"
-                );
-            }
-        });
     }
 
     #[test]
@@ -1163,5 +973,184 @@ mod adoption_tests {
     }
     fn drop_pair(_: AdoptTid, v: Tracked) {
         drop(v);
+    }
+}
+
+/// Slot Pool (`shirusu-transport/src/slot.rs`) を、本体のまま loom の原子・`Arc`・
+/// `RwLock` で動かす。転写モデル (上の MiniSlot など) と違い、本体の順序や
+/// Ordering を変えるとこの検査に直接効く。slot.rs が `crate::expansion` と
+/// `crate::layout` から取る定数は本体の crate のものをそのまま渡す。
+mod slot_sync {
+    pub use loom::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+    pub use loom::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    pub use std::sync::PoisonError;
+}
+mod expansion {
+    pub use shirusu_transport::expansion::EXPANDED_SLOT_GENERATION;
+}
+mod layout {
+    pub use shirusu_transport::layout::RingConfig;
+}
+#[path = "../../shirusu-transport/src/slot.rs"]
+#[allow(dead_code)]
+mod slot;
+
+#[cfg(test)]
+mod slot_tests {
+    use super::slot::{SlotHandle, SlotPool, SlotState};
+    use loom::cell::UnsafeCell;
+    use loom::sync::atomic::{AtomicBool, Ordering};
+    use loom::sync::Arc;
+    use loom::thread;
+
+    /// claim を有限回やり直す (loom の探索を有限にする)。取れた claim を確定して返す。
+    fn claim_within(pool: &SlotPool, tid: u64, tries: usize) -> Option<SlotHandle> {
+        for _ in 0..tries {
+            if let Some(c) = pool.claim(tid) {
+                return Some(c.confirm());
+            }
+            thread::yield_now();
+        }
+        None
+    }
+
+    /// 1 Slot を 2 スレッドが取り合う: 取れるのはちょうど 1 つ、負けた側は欠落を 1 件数える。
+    #[test]
+    fn loom_real_claim_one_slot_one_winner() {
+        loom::model(|| {
+            let pool = Arc::new(SlotPool::new(1));
+            let p2 = pool.clone();
+            let t = thread::spawn(move || p2.claim(2).map(|c| c.confirm()));
+            let mine = pool.claim(1).map(|c| c.confirm());
+            let theirs = t.join().unwrap();
+            assert!(mine.is_some() ^ theirs.is_some(), "exactly one claim wins");
+            let won = mine.or(theirs).unwrap();
+            assert_eq!(pool.slot(won.index).owner_thread_id(), won.thread_id);
+            assert_eq!(pool.slot(won.index).state(), SlotState::Active);
+            assert_eq!(pool.missing_calls(), 1);
+        });
+    }
+
+    /// 2 Slot を 3 スレッドが first-fit で取り合う: 勝者は 2、Slot は重ならない。
+    #[test]
+    fn loom_real_claim_two_slots_three_threads() {
+        let mut b = loom::model::Builder::new();
+        b.preemption_bound = Some(3);
+        b.check(|| {
+            let pool = Arc::new(SlotPool::new(2));
+            let hs: Vec<_> = (1..=3)
+                .map(|tid| {
+                    let p = pool.clone();
+                    thread::spawn(move || p.claim(tid).map(|c| c.confirm()))
+                })
+                .collect();
+            let won: Vec<SlotHandle> = hs.into_iter().filter_map(|h| h.join().unwrap()).collect();
+            assert_eq!(won.len(), 2, "one winner per slot");
+            assert_ne!(won[0].index, won[1].index, "no slot has two owners");
+            for h in &won {
+                assert_eq!(pool.slot(h.index).owner_thread_id(), h.thread_id);
+            }
+            assert_eq!(pool.missing_calls(), 1);
+        });
+    }
+
+    /// R3 を本体で: 回収 (Generation を進めて FREE を公開) と競う claim は、FREE を
+    /// 見て取れたなら必ず進んだ Generation と自分の所有者を見る。古い handle はもう効かない。
+    #[test]
+    fn loom_real_reclaim_then_claim_sees_the_new_generation() {
+        loom::model(|| {
+            let pool = Arc::new(SlotPool::new(1));
+            let old = pool.claim(7).unwrap().confirm();
+            assert!(pool.begin_detach(&old));
+            assert!(pool.host_confirm_ended_and_drained(&old, true, true));
+            let p2 = pool.clone();
+            let host = thread::spawn(move || p2.host_reclaim(&old));
+            let new = claim_within(&pool, 8, 2);
+            assert!(host.join().unwrap());
+            if let Some(h) = new {
+                assert_eq!(h.generation, old.generation + 1, "the claim saw the generation the reclaim made");
+                assert_eq!(pool.slot(h.index).owner_thread_id(), 8);
+                assert!(!pool.begin_detach(&old), "the old handle detaches nothing");
+                assert_eq!(pool.slot(h.index).state(), SlotState::Active);
+            }
+        });
+    }
+
+    /// 取り消し (cancel_claim) と、同じ claim から作った確定 handle での DETACH が
+    /// 競う: 書きロックで検証と遷移をまとめるので、両方が成功することはない。
+    /// 取り消しが勝ったなら Slot は FREE で、欠落を 1 件数える。
+    #[test]
+    fn loom_real_cancel_and_detach_exclude_each_other() {
+        loom::model(|| {
+            let pool = Arc::new(SlotPool::new(1));
+            let claim = pool.claim(5).unwrap();
+            let forged = SlotHandle { index: claim.index(), generation: claim.generation(), thread_id: claim.thread_id() };
+            let p2 = pool.clone();
+            let t = thread::spawn(move || p2.begin_detach(&forged));
+            let cancelled = pool.cancel_claim(claim);
+            let detached = t.join().unwrap();
+            assert!(!(cancelled && detached), "a cancelled claim was also detached");
+            assert!(cancelled || detached);
+            let s = pool.slot(0).state();
+            if cancelled {
+                assert_eq!(s, SlotState::Free);
+                assert_eq!(pool.missing_calls(), 1);
+            } else {
+                assert_eq!(s, SlotState::Draining);
+            }
+        });
+    }
+
+    /// 追加 Slot (A70): 管理スレッドが Mapping を登録してから publish_slot で FREE を
+    /// 公開する。それを claim したスレッドは登録済みの Mapping を読む (書きかけを読めば
+    /// loom がデータ競合として落とす)。
+    #[test]
+    fn loom_real_added_slot_claim_sees_its_mapping() {
+        loom::model(|| {
+            let pool = Arc::new(SlotPool::new(0));
+            let idx = pool.add_slot().unwrap();
+            let mapping = Arc::new(UnsafeCell::new(0u64));
+            let (p2, m2) = (pool.clone(), mapping.clone());
+            let admin = thread::spawn(move || {
+                // SAFETY: the slot is PREPARING, nobody can claim it, so nobody reads the mapping yet.
+                m2.with_mut(|p| unsafe { *p = 0xfeed });
+                assert!(p2.publish_slot(idx));
+            });
+            if let Some(h) = claim_within(&pool, 3, 2) {
+                assert_eq!(h.index, idx);
+                // SAFETY: claim's Acquire CAS read the FREE that publish_slot stored after the write.
+                let m = mapping.with(|p| unsafe { *p });
+                assert_eq!(m, 0xfeed, "a claimed added slot has its mapping");
+            }
+            admin.join().unwrap();
+        });
+    }
+
+    /// DETACH の後に終了したスレッドの古い handle は、Host が終了を見てから回収し
+    /// 次の所有者が取った Slot に効かない (V12 を本体で)。
+    #[test]
+    fn loom_real_stale_handle_never_detaches_the_next_owner() {
+        loom::model(|| {
+            let pool = Arc::new(SlotPool::new(1));
+            let old = pool.claim(1).unwrap().confirm();
+            let ended = Arc::new(AtomicBool::new(false));
+            let (p2, e2) = (pool.clone(), ended.clone());
+            let owner = thread::spawn(move || {
+                let d = p2.begin_detach(&old);
+                e2.store(true, Ordering::Release);
+                // (終了後に残った呼び出し: もう一度 DETACH しても何も起きない)
+                d
+            });
+            let reused = ended.load(Ordering::Acquire)
+                && pool.host_confirm_ended_and_drained(&old, true, true)
+                && pool.host_reclaim(&old);
+            let detached = owner.join().unwrap();
+            assert!(detached);
+            if reused {
+                let new = pool.claim(2).unwrap().confirm();
+                assert!(!pool.begin_detach(&old), "the old handle never detaches the new owner");
+                assert_eq!(pool.slot(new.index).state(), SlotState::Active);
+            }
+        });
     }
 }

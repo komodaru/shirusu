@@ -24,6 +24,12 @@ pub mod notify;
 pub mod ring;
 pub mod shm;
 pub mod slot;
+/// slot.rs の同期部品。shirusu-loom-tests は同じ名前の module に loom の型を置いて
+/// slot.rs を読み込む。
+mod slot_sync {
+    pub use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+    pub use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+}
 pub mod snapshot;
 pub mod tsc;
 pub mod validate;

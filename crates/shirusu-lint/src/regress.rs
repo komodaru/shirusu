@@ -489,3 +489,99 @@ pub(super) fn shell_special_var(tree: &Tree) -> Hits {
     }
     out
 }
+
+// --- loom-sync-source ---------------------------------------------------------------------------
+
+/// 本体のファイルを loom で動かす crate の root
+pub(super) const LOOM_ROOT: &str = "crates/shirusu-loom-tests/src/lib.rs";
+
+/// loom の root が `#[path = "../../<crate>/src/<file>.rs"]` で読み込む本体のファイル
+pub(super) fn loom_included(tree: &Tree) -> Vec<String> {
+    let Ok(file) = syn::parse_file(&tree.text(LOOM_ROOT)) else {
+        return Vec::new();
+    };
+    file.items
+        .iter()
+        .filter_map(|i| match i {
+            syn::Item::Mod(m) => Some(m),
+            _ => None,
+        })
+        .flat_map(|m| m.attrs.iter())
+        .filter(|a| a.path().is_ident("path"))
+        .filter_map(|a| match &a.meta {
+            syn::Meta::NameValue(nv) => match &nv.value {
+                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Some(s.value()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .filter_map(|p| p.strip_prefix("../../").map(|r| format!("crates/{r}")))
+        .collect()
+}
+
+/// std / core の同期部品を直接指す path (`use` の木を開いたものも)
+#[derive(Default)]
+struct DirectSync(Vec<(usize, String)>);
+
+fn direct_sync(segs: &[String]) -> bool {
+    let s: Vec<&str> = segs.iter().map(String::as_str).collect();
+    matches!(s.as_slice(), ["std" | "core", "sync", ..] | ["std" | "core", "cell", "UnsafeCell", ..])
+}
+
+fn use_paths(prefix: &mut Vec<String>, t: &syn::UseTree, out: &mut Vec<Vec<String>>) {
+    match t {
+        syn::UseTree::Path(p) => {
+            prefix.push(p.ident.to_string());
+            use_paths(prefix, &p.tree, out);
+            prefix.pop();
+        }
+        syn::UseTree::Name(n) => out.push(prefix.iter().cloned().chain([n.ident.to_string()]).collect()),
+        syn::UseTree::Rename(r) => out.push(prefix.iter().cloned().chain([r.ident.to_string()]).collect()),
+        syn::UseTree::Glob(_) => out.push(prefix.iter().cloned().chain(["*".to_string()]).collect()),
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                use_paths(prefix, t, out);
+            }
+        }
+    }
+}
+
+impl<'a> Visit<'a> for DirectSync {
+    fn visit_item_mod(&mut self, m: &'a syn::ItemMod) {
+        if !is_test_only(&m.attrs) {
+            syn::visit::visit_item_mod(self, m);
+        }
+    }
+    fn visit_item_use(&mut self, u: &'a syn::ItemUse) {
+        let mut v = Vec::new();
+        use_paths(&mut Vec::new(), &u.tree, &mut v);
+        let line = u.use_token.span.start().line;
+        for p in v.into_iter().filter(|p| direct_sync(p)) {
+            self.0.push((line, p.join("::")));
+        }
+    }
+    fn visit_path(&mut self, p: &'a syn::Path) {
+        let segs: Vec<String> = p.segments.iter().map(|s| s.ident.to_string()).collect();
+        if direct_sync(&segs) {
+            let line = p.segments.first().map_or(0, |s| s.ident.span().start().line);
+            self.0.push((line, segs.join("::")));
+        }
+        syn::visit::visit_path(self, p);
+    }
+}
+
+pub(super) fn loom_sync_source(tree: &Tree) -> Hits {
+    let mut out = Hits::new();
+    for f in loom_included(tree) {
+        let Ok(file) = syn::parse_file(&tree.text(&f)) else {
+            out.push((f.clone(), 1, "loom が読み込むファイルが構文として読めない".into()));
+            continue;
+        };
+        let mut v = DirectSync::default();
+        v.visit_file(&file);
+        out.extend(v.0.into_iter().map(|(l, p)| {
+            (f.clone(), l, format!("{p}: loom が読み込むファイルでは親 module の *_sync から取る (std の型は loom の探索に乗らない)"))
+        }));
+    }
+    out
+}

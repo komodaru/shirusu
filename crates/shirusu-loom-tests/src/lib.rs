@@ -1076,7 +1076,7 @@ mod slot_tests {
         });
     }
 
-    /// 取り消し (cancel_claim) と、同じ claim から作った確定 handle での DETACH が
+    /// 取り消し (SlotClaim::cancel) と、同じ claim から作った確定 handle での DETACH が
     /// 競う: 書きロックで検証と遷移をまとめるので、両方が成功することはない。
     /// 取り消しが勝ったなら Slot は FREE で、欠落を 1 件数える。
     #[test]
@@ -1087,7 +1087,7 @@ mod slot_tests {
             let forged = SlotHandle { index: claim.index(), generation: claim.generation(), thread_id: claim.thread_id() };
             let p2 = pool.clone();
             let t = thread::spawn(move || p2.begin_detach(&forged));
-            let cancelled = pool.cancel_claim(claim);
+            let cancelled = claim.cancel();
             let detached = t.join().unwrap();
             assert!(!(cancelled && detached), "a cancelled claim was also detached");
             assert!(cancelled || detached);

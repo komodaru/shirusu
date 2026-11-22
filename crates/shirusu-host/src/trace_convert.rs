@@ -545,6 +545,21 @@ impl<W: DurableWrite> TraceRecorder<W> {
         }
     }
 
+    /// 書けなくなった (容量不足の) 後に届いたバッチを捨てる。返すのは失ったイベント数で、
+    /// 記録モードが元々残さないもの (Filtered の間引き) は数えない: 書けたときの
+    /// [`BatchWriteError::unsaved_events`] と同じ選択規則 (d4fc3c0 レビュー 1.5: 容量不足の後は
+    /// バッチの全件を数え、同じ入力でも区切り方で欠落件数が変わった)。Profile は個別イベントを
+    /// 書かないので、集計を続けて 0 を返す。
+    pub(crate) fn discard_unwritable(&mut self, ctx: &TraceBatchContext, events: &[ReceivedEvent]) -> u64 {
+        if matches!(self.mode, RecordMode::Profile) {
+            for event in events {
+                self.profile.observe(ctx.thread_id, event);
+            }
+            return 0;
+        }
+        events.iter().filter(|e| self.keeps(e.descriptor.api_id)).count() as u64
+    }
+
     /// 記録モードがこの API を残すか (Filtered の間引き)
     fn keeps(&self, api_id: u32) -> bool {
         match &self.mode {

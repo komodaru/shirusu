@@ -4,7 +4,7 @@ use shirusu_transport::RingConfig;
 
 fn main() {
     let region = SharedRegion::new(RingConfig::new(4, 64), 1, 1).unwrap();
-    let Some(reader) = region.shm().reserve_reader() else {
+    let Ok(reader) = region.shm().reserve_reader() else {
         return;
     };
     let _second = reader.clone();

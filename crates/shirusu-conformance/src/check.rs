@@ -59,7 +59,6 @@ use shirusu_trace::blob::BlobId;
 use shirusu_trace::proto::integrity_level;
 use shirusu_trace::reader::{ReadTrace, RecoveryIssue};
 use shirusu_trace::refs::BlobSite;
-use shirusu_trace::schema::{LastErrorMeaning, ValueCapture};
 use std::collections::{HashMap, HashSet};
 
 /// 検査 1 件の結果。
@@ -661,67 +660,22 @@ fn check_blob_hashes(trace: &ReadTrace) -> CheckFinding {
     }
 }
 
+/// 入力で決まる LastError の Stale を enter の入力で照らす。照合そのものは完全性の集計
+/// (`shirusu_analysis::CallChecks`) が行い、ここはその結果を報告する (d4fc3c0 レビュー 1.6:
+/// 照合がここにしかなく、完全性の判定・no-integrity-loss・比較は誤った Stale を受理した)
 fn check_last_error_inputs(view: &TraceView) -> CheckFinding {
     let id = "last-error-inputs";
-    let captured = |f: &shirusu_analysis::FieldView| match f.capture {
-        ValueCapture::Captured => f.value.scalar_bits(),
-        ValueCapture::Unreadable
-        | ValueCapture::Truncated
-        | ValueCapture::Unsupported
-        | ValueCapture::LimitExceeded
-        | ValueCapture::Stale
-        | ValueCapture::NotApplicable => None,
-    };
-    let mut enters: HashMap<(ThreadKey, u64), &shirusu_analysis::EventView> = HashMap::new();
-    let mut problems: Vec<String> = Vec::new();
-    let mut checked = 0u64;
-    for ev in &view.events {
-        let key = (thread_key(ev.session_id, ev.process_id, ev.thread_id), ev.call_id);
-        match ev.phase() {
-            Phase::Enter => {
-                enters.insert(key, ev);
-                continue;
-            }
-            Phase::Leave => {}
-            Phase::Aborted | Phase::Completed | Phase::Other(_) => continue,
-        }
-        let enter = enters.remove(&key);
-        let Some(le) = ev.fields.iter().find(|f| f.name == "last_error") else {
-            continue;
-        };
-        let depends = LastErrorMeaning::from_flags(le.flags) == LastErrorMeaning::DependsOnInputs;
-        if !depends || le.capture != ValueCapture::Stale {
-            continue;
-        }
-        checked += 1;
-        let api = ev.api_name.as_deref().unwrap_or("?");
-        let at = format!("{api} call {} on thread {}", ev.call_id, ev.thread_id);
-        let Some(enter) = enter else {
-            problems.push(format!("{at}: Stale last_error has no enter to resolve its inputs"));
-            continue;
-        };
-        let ret = ev.fields.iter().find(|f| f.name == "return").and_then(captured);
-        let Some(ret) = ret else {
-            problems.push(format!("{at}: Stale last_error without a captured return"));
-            continue;
-        };
-        let raw = le.value.scalar_bits().and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
-        let input = |name: &str| enter.fields.iter().find(|f| f.name == name).and_then(captured);
-        let function = api.rsplit('!').next().unwrap_or(api);
-        let meaning = LastErrorMeaning::resolve_inputs(function, &input, ret, raw);
-        if meaning.is_meaningful(ret) {
-            problems.push(format!(
-                "{at}: last_error is Stale but the inputs make it {meaning:?} for return {ret:#x}"
-            ));
-        }
-    }
-    if problems.is_empty() {
+    let i = &view.integrity;
+    if i.inconsistent_calls.is_empty() {
         CheckFinding::pass(
             id,
-            format!("{checked} input-dependent Stale last_error value(s) agree with their enter"),
+            format!(
+                "{} input-dependent Stale last_error value(s) agree with their enter",
+                i.checked_stale_inputs
+            ),
         )
     } else {
-        CheckFinding::fail(id, problems.join("; "))
+        CheckFinding::fail(id, i.inconsistent_calls.join("; "))
     }
 }
 

@@ -689,6 +689,41 @@ mod pbt {
         }
     }
 
+    /// 引数の BlobRef に付ける取得状態
+    const ARG_CAPTURES: [ValueCapture; 7] = [
+        ValueCapture::Captured,
+        ValueCapture::Unreadable,
+        ValueCapture::Truncated,
+        ValueCapture::Unsupported,
+        ValueCapture::LimitExceeded,
+        ValueCapture::Stale,
+        ValueCapture::NotApplicable,
+    ];
+
+    /// 独立した生成モデル: この取得状態の値本体は実際の参照か (trace-format「値列のレイアウト」:
+    /// Unreadable / Unsupported / NotApplicable の本体はダミー)。製品の blob_refs を使わない
+    fn model_refers(capture: ValueCapture) -> bool {
+        match capture {
+            ValueCapture::Captured | ValueCapture::Truncated | ValueCapture::LimitExceeded | ValueCapture::Stale => true,
+            ValueCapture::Unreadable | ValueCapture::Unsupported | ValueCapture::NotApplicable => false,
+        }
+    }
+
+    /// 生成モデルが知っている、イベントが本当に参照する Blob (Payload と、本体が参照の BlobRef 引数)
+    fn model_refs(e: &TraceEvent) -> Vec<BlobId> {
+        let mut out = Vec::new();
+        if let PayloadRef::Blob(id) = &e.payload {
+            out.push(*id);
+        }
+        if let (2, Some(args)) = (e.schema_id, e.args.as_deref()) {
+            let values = shirusu_trace::compact::decode_values(&[Ty::U32, Ty::BlobRef], args).unwrap();
+            if let (true, TypedValue::BlobRef(id)) = (model_refers(values[1].capture), &values[1].value) {
+                out.push(*id);
+            }
+        }
+        out
+    }
+
     fn write(ops: &[Op], finish: bool, integrity: u32) -> Vec<u8> {
         let mut w = TraceWriter::new(Vec::new(), env()).unwrap();
         w.register_schema(make_schema(
@@ -734,9 +769,20 @@ mod pbt {
                                                     capture: ValueCapture::Captured,
                                                     value: TypedValue::U32(*r as u32),
                                                 },
-                                                CapturedValue {
-                                                    capture: ValueCapture::Captured,
-                                                    value: TypedValue::BlobRef(pick(1)),
+                                                // 取得状態もすべて (d4fc3c0 レビュー 5: 生成器が
+                                                // Captured だけを作り、ダミーの BlobRef を参照と
+                                                // 数える誤りを一度も踏まなかった)。ダミーの本体は
+                                                // 形式どおりゼロの Blob ID (どの Blob でもない)
+                                                {
+                                                    let capture = ARG_CAPTURES[(r / 64) % ARG_CAPTURES.len()];
+                                                    CapturedValue {
+                                                        capture,
+                                                        value: TypedValue::BlobRef(if model_refers(capture) {
+                                                            pick(1)
+                                                        } else {
+                                                            BlobId::from_bytes([0; 32])
+                                                        }),
+                                                    }
                                                 },
                                             ],
                                         )
@@ -965,14 +1011,24 @@ mod pbt {
             for e in events(&out) {
                 prop_assert!(it.any(|s| *s == e), "event not from the input in order: {e:?}");
             }
-            // 参照する Blob (Payload と引数の両方) はすべて、入力と同じ内容で運ばれている。
+            // 参照する Blob (Payload と引数の両方) はすべて、入力と同じ内容で運ばれている。期待値は
+            // 生成モデルの参照集合 (製品の blob_refs と同じ誤りを写さない)
             for (_, e) in events(&out) {
                 let refs = e.blob_refs(&out.registry);
                 prop_assert!(matches!(refs, EventBlobRefs::Known(_)), "{refs:?}");
-                for u in refs.known() {
-                    prop_assert_eq!(out.blobs.get(&u.id), input.blobs.get(&u.id), "{:?}", u);
-                    prop_assert!(out.blobs.contains_key(&u.id), "{:?}", u);
+                let mut got: Vec<BlobId> = refs.known().iter().map(|u| u.id).collect();
+                let mut want = model_refs(&e);
+                got.sort();
+                want.sort();
+                prop_assert_eq!(&got, &want, "{:?}", e);
+                for id in want {
+                    prop_assert_eq!(out.blobs.get(&id), input.blobs.get(&id), "{}", id);
+                    prop_assert!(out.blobs.contains_key(&id), "{}", id);
                 }
+            }
+            // 壊していない入力からは、ダミーの BlobRef を持つイベントも一件も落とさない
+            if matches!(d, Damage::None) {
+                prop_assert_eq!(report.lost, 0, "{:?}", report.lost_by_cause);
             }
             // ほかの道具も同じ答え: 完全性の集計は欠落参照 0、conformance の参照検査は通る
             let summary = shirusu_analysis::IntegritySummary::of(&out);

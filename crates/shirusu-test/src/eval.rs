@@ -116,54 +116,16 @@ fn eval_rule(rule: &Rule, trace: &ReadTrace, view: &TraceView) -> RuleResult {
             contains.as_deref(),
         ),
         Rule::NoIntegrityLoss => {
-            let s = &view.integrity;
-            let mut problems: Vec<String> = Vec::new();
-            if s.event_count_mismatch {
-                problems.push("recorded event count differs from Finalization".into());
-            }
-            if !s.has_finalization {
-                problems.push("no finalization block (integrity cannot be confirmed)".into());
-            }
+            // 欠けの判定は IntegritySummary::incompleteness の全項目 (d4fc3c0 レビュー 1.6: 項目を
+            // 手で並べた写しは、入力と合わない値を書いた呼び出しを数えなかった)
+            let mut problems: Vec<String> = view
+                .integrity
+                .gaps_for(shirusu_analysis::Use::WholeObservation)
+                .iter()
+                .map(shirusu_analysis::Incompleteness::describe)
+                .collect();
             if view.events.iter().any(|e| e.args_error.is_some()) {
                 problems.push("argument decoding is incomplete".into());
-            }
-            for (aspect, level) in [
-                ("capture_coverage", s.capture_coverage),
-                ("event_integrity", s.event_integrity),
-                ("semantic_completeness", s.semantic_completeness),
-            ] {
-                if let Some(level) = level {
-                    if level != 0 {
-                        problems.push(format!(
-                            "{aspect} is {} ({level}), not Complete",
-                            shirusu_analysis::integrity_level_name(level)
-                        ));
-                    }
-                }
-            }
-            if !s.loss_records_by_kind.is_empty() {
-                problems.push(format!(
-                    "{} loss record(s) present",
-                    s.loss_records_by_kind.values().sum::<u64>()
-                ));
-            }
-            if s.dropped_payload_events > 0 {
-                problems.push(format!("{} dropped payload(s)", s.dropped_payload_events));
-            }
-            if s.missing_blob_refs > 0 {
-                problems.push(format!("{} missing blob reference(s)", s.missing_blob_refs));
-            }
-            if !s.finalized_cleanly {
-                problems.push("trace was not finalized cleanly".into());
-            }
-            if !s.recovery_issues.is_empty() {
-                problems.push(format!(
-                    "{} reader recovery issue(s)",
-                    s.recovery_issues.len()
-                ));
-            }
-            if s.degraded_events > 0 {
-                problems.push(format!("{} degraded event(s)", s.degraded_events));
             }
             if problems.is_empty() {
                 result(

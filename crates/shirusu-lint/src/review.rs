@@ -116,6 +116,57 @@ const TESTS: &[(&str, &str, &str)] = &[
         "shirusu_hook",
         "hazard::tests::terminated_owner_hazard_is_withdrawn",
     ),
+    // d4fc3c0 レビュー (2026-11-22)
+    (
+        "crates/shirusu-hook/tests/catalog_results.rs",
+        "catalog_results",
+        "every_catalog_capture_is_judged_as_the_capture_side_wrote_it",
+    ),
+    (
+        "crates/shirusu-hook/tests/catalog_results.rs",
+        "catalog_results",
+        "void_apis_with_never_meaning_are_complete",
+    ),
+    (
+        "crates/shirusu-trace/tests/result_values.rs",
+        "result_values",
+        "pointer_returns_decide_last_error_like_integers",
+    ),
+    (
+        "crates/shirusu-trace/tests/result_values.rs",
+        "result_values",
+        "dummy_blob_refs_are_not_references",
+    ),
+    (
+        "crates/shirusu-host/tests/recorder.rs",
+        "recorder",
+        "a_ring_read_by_a_stopped_session_cannot_be_registered_again",
+    ),
+    (
+        "crates/shirusu-host/src/trace_pipeline.rs",
+        "shirusu_host",
+        "trace_pipeline::tests::filtered_losses_after_running_out_of_space_do_not_depend_on_chunking",
+    ),
+    (
+        "crates/shirusu-probe/tests/replay.rs",
+        "replay",
+        "declared_event_count_mismatch_blocks_replay_oracle_and_trim",
+    ),
+    (
+        "crates/shirusu-hook/tests/io_outcome.rs",
+        "io_outcome",
+        "stale_last_error_of_create_always_is_rejected",
+    ),
+    (
+        "crates/shirusu-transport/tests/matrix_slot.rs",
+        "matrix_slot",
+        "a_claim_is_cancelled_only_in_the_pool_that_issued_it",
+    ),
+    (
+        "crates/shirusu-compare/tests/scenarios.rs",
+        "scenarios",
+        "loss_kind_and_count_certainty_are_compared",
+    ),
 ];
 
 pub(super) fn opaque_handles(tree: &Tree) -> Hits {

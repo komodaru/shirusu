@@ -29,6 +29,7 @@ cc = "1"
 [dev-dependencies]
 proptest = "1"
 shirusu-analysis = { path = "../shirusu-analysis" }
+shirusu-compare = { path = "../shirusu-compare" }
 shirusu-conformance = { path = "../shirusu-conformance" }
 
 [lints]

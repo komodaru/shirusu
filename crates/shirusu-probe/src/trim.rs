@@ -21,6 +21,7 @@
 //! 呼び出し側がその旨をバンドルへ正直に記録する。
 
 use crate::select::involved_calls;
+use shirusu_analysis::{Incompleteness, IntegritySummary};
 use shirusu_compare::{compare_traces, Candidate, NormTrace};
 use shirusu_trace::error::TraceError;
 use shirusu_trace::model::EventBatch;
@@ -155,8 +156,31 @@ pub fn trim_trace(
             integrity_level::UNKNOWN,
         ),
     };
-    if (!source.issues.is_empty() || !source.finalized_cleanly) && ei == integrity_level::COMPLETE {
-        ei = integrity_level::DEGRADED;
+    let mut sc = sc;
+    // 元 Trace の既知の不整合は、切り出した範囲で件数を数え直しても消えない: 宣言へ下げて残し、
+    // 項目を notes に書く (d4fc3c0 レビュー 1.4: 元の event_count_mismatch が切り出しで消え、
+    // complete / conformant な Trace になった)
+    let source_gaps = IntegritySummary::of(source).incompleteness();
+    let lower = |level: &mut u32| {
+        if *level == integrity_level::COMPLETE {
+            *level = integrity_level::DEGRADED;
+        }
+    };
+    for gap in &source_gaps {
+        match gap {
+            // 宣言はそのまま引き継いでいる
+            Incompleteness::Declared { .. } => continue,
+            // イベントの欠け (またはその疑い) は Event Integrity
+            Incompleteness::NoFinalization
+            | Incompleteness::NotFinalizedCleanly
+            | Incompleteness::EventCountMismatch
+            | Incompleteness::LossRecords { .. }
+            | Incompleteness::RecoveryIssues(_)
+            | Incompleteness::DroppedPayloads { .. }
+            | Incompleteness::MissingBlobRefs { .. } => lower(&mut ei),
+            // 値の欠けは Semantic Completeness
+            Incompleteness::DegradedEvents { .. } | Incompleteness::InconsistentCalls(_) => lower(&mut sc),
+        }
     }
     let mut notes = source
         .finalization
@@ -164,6 +188,9 @@ pub fn trim_trace(
         .map_or_default(|f| f.notes.clone());
     for issue in &source.issues {
         notes.push(format!("source recovery issue: {issue:?}"));
+    }
+    for gap in &source_gaps {
+        notes.push(format!("source incompleteness: {}", gap.describe()));
     }
     notes.push(format!(
         "trimmed by shirusu-probe from {source_label}: {kept_events} of {} events kept; \

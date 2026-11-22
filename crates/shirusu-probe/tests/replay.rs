@@ -281,6 +281,42 @@ fn explicit_overlapped_offset_is_not_silently_replayed_at_current_position() {
 }
 
 #[test]
+fn declared_event_count_mismatch_blocks_replay_oracle_and_trim() {
+    // d4fc3c0 レビュー 1.4: Finalization の宣言件数だけが実イベント数と違う Trace (reader の回復
+    // issue は 0、解析は event_count_mismatch と判定) を、replay の生成・差分判定・trim が受理し、
+    // trim は件数を数え直して complete / conformant な Trace を作った
+    let right = record(1, 43);
+    let mut left = record(1, 42);
+    let real = left.total_events();
+    left.finalization.as_mut().unwrap().total_events = real + 2;
+    let summary = shirusu_analysis::IntegritySummary::of(&left);
+    assert!(summary.event_count_mismatch && !summary.is_complete());
+    let err = generate_replay(&left).unwrap_err();
+    assert!(err.contains("event_count_mismatch"), "{err}");
+    let report = shirusu_compare::compare_traces(&left, &right);
+    let candidate = report
+        .candidates
+        .iter()
+        .find(|c| c.kind == shirusu_compare::CandidateKind::ArgumentDifference || c.kind == shirusu_compare::CandidateKind::ReturnDifference)
+        .expect("the read bytes differ");
+    let err = shirusu_probe::trace_oracle::fingerprint_from_traces(&left, &right, candidate).unwrap_err();
+    assert!(err.contains("event_count_mismatch"), "{err}");
+    // 同じ入力でも件数が合っていれば通る (拒んだ理由は件数の不一致だけ)
+    let clean = record(1, 42);
+    assert!(generate_replay(&clean).is_ok());
+    // trim は元の不整合を引き継ぐ
+    let trimmed = shirusu_probe::trim::trim_trace(&left, candidate, "left", "mismatch").unwrap();
+    let t = shirusu_trace::read_trace(&trimmed.bytes).unwrap();
+    let fin = t.finalization.as_ref().unwrap();
+    assert_ne!(fin.event_integrity, shirusu_trace::proto::integrity_level::COMPLETE);
+    assert!(fin.notes.iter().any(|n| n.contains("event_count_mismatch")), "{:?}", fin.notes);
+    assert!(!shirusu_analysis::IntegritySummary::of(&t).is_complete());
+    // 不完全さを宣言どおりに書いた Trace なので、宣言と中身の食い違いはない
+    let report = shirusu_conformance::check_trace(&t);
+    assert!(report.conformant(), "{:?}", report.findings);
+}
+
+#[test]
 fn coverage_warning_is_preserved_but_recorded_event_loss_blocks_replay() {
     let mut trace = record(1, 42);
     trace.finalization.as_mut().unwrap().capture_coverage = 1;

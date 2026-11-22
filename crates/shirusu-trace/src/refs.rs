@@ -8,12 +8,19 @@
 //! `if let PayloadRef::Blob(..)` / `if let TypedValue::BlobRef(..)` と一種類だけ拾う書き方を拒む)。
 //! 新しい格納場所を足すときは [`BlobSite`] に変種を足すと、場所ごとの扱いを書くまで
 //! 利用側の網羅的な match がコンパイルを通らない。
+//!
+//! 引数の値は取得状態で読み分ける ([`CapturedValue::read_value`]): NotApplicable / Unreadable /
+//! Unsupported の本体は形式上のダミーで、参照ではない (d4fc3c0 レビュー P2: ゼロの Blob ID を
+//! 存在しない Blob への参照と数え、Writer が正しい leave を拒み、repair がそれを落とした)。
+//! 値列はバイト列を借りたまま読む (同レビュー 4: 参照を探すために全体を復号し、Bytes を複製した)。
 
 use crate::blob::BlobId;
-use crate::compact::decode_values;
+use crate::compact::values_ref;
 use crate::error::CompactError;
 use crate::model::{PayloadRef, TraceEvent};
 use crate::schema::{SchemaRegistry, TypedValue};
+#[cfg(doc)]
+use crate::schema::CapturedValue;
 
 /// Blob を参照している場所
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,34 +105,39 @@ impl TraceEvent {
                 },
             };
         };
-        match decode_values(types, args) {
-            Ok(values) => {
-                for (index, v) in values.iter().enumerate() {
-                    match &v.value {
-                        TypedValue::BlobRef(id) => known.push(BlobUse {
-                            id: *id,
-                            site: BlobSite::Arg { index },
-                        }),
-                        TypedValue::I32(_)
-                        | TypedValue::I64(_)
-                        | TypedValue::U32(_)
-                        | TypedValue::U64(_)
-                        | TypedValue::F32Bits(_)
-                        | TypedValue::F64Bits(_)
-                        | TypedValue::Bool(_)
-                        | TypedValue::Str(_)
-                        | TypedValue::Str16(_)
-                        | TypedValue::Bytes(_)
-                        | TypedValue::Ptr32(_)
-                        | TypedValue::Ptr64(_) => {}
+        for (index, v) in values_ref(types.iter().copied(), args).enumerate() {
+            let v = match v {
+                Ok(v) => v,
+                Err(e) => {
+                    return EventBlobRefs::Partial {
+                        known,
+                        why: ArgsUnreadable::Undecodable(e),
                     }
                 }
-                EventBlobRefs::Known(known)
+            };
+            match v.read_value() {
+                Some(TypedValue::BlobRef(id)) => known.push(BlobUse {
+                    id: *id,
+                    site: BlobSite::Arg { index },
+                }),
+                Some(
+                    TypedValue::I32(_)
+                    | TypedValue::I64(_)
+                    | TypedValue::U32(_)
+                    | TypedValue::U64(_)
+                    | TypedValue::F32Bits(_)
+                    | TypedValue::F64Bits(_)
+                    | TypedValue::Bool(_)
+                    | TypedValue::Str(_)
+                    | TypedValue::Str16(_)
+                    | TypedValue::Bytes(_)
+                    | TypedValue::Ptr32(_)
+                    | TypedValue::Ptr64(_),
+                )
+                // 本体はダミー: どの型でも参照ではない
+                | None => {}
             }
-            Err(e) => EventBlobRefs::Partial {
-                known,
-                why: ArgsUnreadable::Undecodable(e),
-            },
         }
+        EventBlobRefs::Known(known)
     }
 }

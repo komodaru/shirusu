@@ -447,11 +447,20 @@ Schema が型と順序を定め、値ごとの型タグは持たない（overvie
 `return` / `last_error` / `dequeuedOverlapped` の値だけから作る（7c5a553 レビュー P2-1）。
 
 - Captured は常に数える。
-- Stale は、Field の flags が LastError の意味条件を宣言し、その条件が実際の戻り値で偽の
-  ときだけ数える。Unspecified と Always では数えない。戻り値が取れていない記録でも数えない。
-  DependsOnInputs は、戻り値で言える必要条件（NULL / INVALID_HANDLE_VALUE / FALSE で
-  ない）だけをここで見る。enter の入力まで照らした判定は適合性検査 `last-error-inputs` が、
-  取得側と同じ規則 `LastErrorMeaning::resolve_inputs` で行う。
+- Stale は、Field の flags が LastError の意味条件を宣言し、その条件が実際の結果で偽の
+  ときだけ数える。Unspecified と Always では数えない。Never は結果によらず偽なので、戻り値の
+  ない API（Sleep など）でも数える（d4fc3c0 レビュー P1）。戻り値で決まる条件は、戻り値が
+  取れていない記録では数えない。DependsOnInputs は、leave 単体では「照らす戻り値が記録に
+  ある」ことだけを見る。enter の入力まで照らす判定は、呼び出し単位の検査
+  `LastErrorMeaning::check_stale_inputs`（取得側と同じ規則 `resolve_inputs`）が行い、
+  完全性の集計（`IntegritySummary::inconsistent_calls`、全体読み込みとストリーミング読みの
+  両方）・適合性検査 `last-error-inputs`・`no-integrity-loss`・比較が同じ結果を使う
+  （d4fc3c0 レビュー 1.6）。
+- 結果の判定に使う戻り値は、整数・Bool・ポインタ（Ptr32 / Ptr64）の生値（d4fc3c0 レビュー 2.1）。
+- 値本体がダミーか（`ValueCapture::body`）: Unreadable / Unsupported / NotApplicable の本体は
+  ダミーで、BlobRef でも参照として数えない（Writer・repair・完全性の集計・conformance・Probe）。
+  Truncated / LimitExceeded の本体は上限までに読めた部分、Stale は生値で、どちらも値として
+  残す（d4fc3c0 レビュー 1.3）。
 - NotApplicable は、取得時期が呼び出し後（After / Completion / Both）の出力で、flags の
   出力条件 `OutputCondition`（ビット 12..14）が実際の結果で偽のときだけ数える。
 

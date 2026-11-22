@@ -1,19 +1,17 @@
-error[E0599]: no method named `clone` found for struct `SlotClaim` in the current scope
- --> tests/ui/stale_claim_cannot_cancel.rs:9:22
-  |
-9 |     let copy = first.clone();
-  |                      ^^^^^ method not found in `SlotClaim`
+error[E0599]: no method named `clone` found for struct `SlotClaim<'pool>` in the current scope
+  --> tests/ui/stale_claim_cannot_cancel.rs:11:22
+   |
+11 |     let copy = first.clone();
+   |                      ^^^^^ method not found in `SlotClaim<'_>`
 
-error[E0308]: mismatched types
-  --> tests/ui/stale_claim_cannot_cancel.rs:14:23
+error[E0599]: no method named `cancel` found for struct `SlotHandle` in the current scope
+  --> tests/ui/stale_claim_cannot_cancel.rs:16:12
    |
-14 |     pool.cancel_claim(handle);
-   |          ------------ ^^^^^^ expected `SlotClaim`, found `SlotHandle`
-   |          |
-   |          arguments to this method are incorrect
+16 |     handle.cancel();
+   |            ^^^^^^ method not found in `SlotHandle`
+
+error[E0599]: no method named `cancel_claim` found for struct `SlotPool` in the current scope
+  --> tests/ui/stale_claim_cannot_cancel.rs:18:10
    |
-note: method defined here
-  --> src/slot.rs
-   |
-   |     pub fn cancel_claim(&self, claim: SlotClaim) -> bool {
-   |            ^^^^^^^^^^^^
+18 |     pool.cancel_claim(theirs);
+   |          ^^^^^^^^^^^^ method not found in `SlotPool`

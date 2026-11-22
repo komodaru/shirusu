@@ -62,10 +62,16 @@ enum Rule {
     HandStd,
     BlobRefWalk,
     CompareVerdict,
+    NeverNeedsNoReturn,
+    IntegrityGate,
+    BlobRefBody,
+    ValueReader,
+    LastErrorInputsHome,
+    StorageFullCount,
 }
 
 impl Rule {
-    const ALL: [Rule; 22] = [
+    const ALL: [Rule; 28] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -88,6 +94,12 @@ impl Rule {
         Rule::HandStd,
         Rule::BlobRefWalk,
         Rule::CompareVerdict,
+        Rule::NeverNeedsNoReturn,
+        Rule::IntegrityGate,
+        Rule::BlobRefBody,
+        Rule::ValueReader,
+        Rule::LastErrorInputsHome,
+        Rule::StorageFullCount,
     ];
 
     fn id(self) -> &'static str {
@@ -114,6 +126,12 @@ impl Rule {
             Rule::HandStd => "hand-std",
             Rule::BlobRefWalk => "blob-ref-walk",
             Rule::CompareVerdict => "compare-verdict",
+            Rule::NeverNeedsNoReturn => "never-needs-no-return",
+            Rule::IntegrityGate => "integrity-gate",
+            Rule::BlobRefBody => "blob-ref-body",
+            Rule::ValueReader => "value-reader",
+            Rule::LastErrorInputsHome => "last-error-inputs-home",
+            Rule::StorageFullCount => "storage-full-count",
         }
     }
 
@@ -141,6 +159,12 @@ impl Rule {
             Rule::HandStd => "Rust 1.98..1.100 が名前をつけた形を手で書かない (2026-11-21: toggle 1、trim_prefix 1、map_or_default 14、Vec::from_fn 1、DropGuard 1 か所を置き換え): x.toggle()、s.trim_prefix(p)、o.map_or_default(f)、c.ok_or(e)、Vec::from_fn(v.len(), f)、旗を下ろすだけの Drop 型は std::mem::DropGuard",
             Rule::BlobRefWalk => "イベントが参照する Blob は TraceEvent::blob_refs (crates/shirusu-trace/src/refs.rs) で列挙する (7c5a553 レビュー P1-1: repair が Payload だけを見て、引数の BlobRef が指す Blob を落とした): `if let PayloadRef::Blob(..)` / `let TypedValue::BlobRef(..) else` / `matches!` / `_` の腕を持つ match で一つの場所だけを拾わない。各変種を扱う match は可",
             Rule::CompareVerdict => "一致は DiffReport::verdict() で決める (7c5a553 レビュー P1-2: 候補が空なら一致とし、読み手が検出した破損を見落とした): crates/shirusu-compare/src/diff.rs の外で `candidates.is_empty()` を判定に使わず、Verdict (Identical / ObservedPrefixAgrees / Differs) で分ける",
+            Rule::NeverNeedsNoReturn => "LastErrorMeaning::Never を戻り値で決まる条件 (WhenReturnIs*) と同じ match の腕に置かない (d4fc3c0 レビュー P1: 戻り値のない Sleep などの正しい Stale を不完全と数え、期待値を作るテストも同じ腕を写した): 条件の種類は LastErrorMeaning::rule() (Fixed / OnReturn / OnInputs) で分ける。テストのコードも見る",
+            Rule::IntegrityGate => "完全性の項目を `||` で手で並べた判定を書かない (d4fc3c0 レビュー 1.4: Probe の replay と差分判定が event_count_mismatch を落とした): IntegritySummary::incompleteness / gaps_for(Use) / require(Use) を使う。項目を並べるのは crates/shirusu-analysis/src/view.rs だけ",
+            Rule::BlobRefBody => "refs.rs は引数の BlobRef を CapturedValue::read_value() を通してだけ読み、decode_values で複製しない (d4fc3c0 レビュー 1.3 / 4: NotApplicable のダミーを参照と数え、Writer の拒否と repair でのイベントの脱落に広がった。参照を探すために 1 MiB の Bytes を複製した)",
+            Rule::ValueReader => "値本体を型ごとに読むのは compact.rs の read_value_ref だけ (d4fc3c0 レビュー 2.1: 検証の直接走査と復号が別々に値を読み、ポインタの戻り値を片方だけが結果情報から落とした): 復号・検証・結果の判定・参照の列挙は values_ref を通す",
+            Rule::LastErrorInputsHome => "LastErrorMeaning::resolve_inputs を呼ぶのは規則 (schema.rs) と取得側 (hook の capture.rs) だけ (d4fc3c0 レビュー 1.6: 照合が conformance にしかなく、完全性の判定・no-integrity-loss・比較は誤った Stale を受理した): 照合は check_stale_inputs (shirusu-analysis の CallChecks) で行う",
+            Rule::StorageFullCount => "容量不足の後に失ったイベントをバッチの件数 (`.len()`) で数えない (d4fc3c0 レビュー 1.5: Filtered で間引くはずのイベントまで数え、区切り方で欠落件数が変わった): TraceRecorder::discard_unwritable (記録モードの選択規則) で数える",
             Rule::Required => "守りそのものが残る: CI の手順、生成 Detour 表の契約 golden、Control 範囲のテスト",
         }
     }
@@ -169,6 +193,12 @@ impl Rule {
             Rule::HandStd => modern::hand_std(tree),
             Rule::BlobRefWalk => results::blob_ref_walk(tree),
             Rule::CompareVerdict => results::compare_verdict(tree),
+            Rule::NeverNeedsNoReturn => results::never_needs_no_return(tree),
+            Rule::IntegrityGate => results::integrity_gate(tree),
+            Rule::BlobRefBody => results::blob_ref_body(tree),
+            Rule::ValueReader => results::value_reader(tree),
+            Rule::LastErrorInputsHome => results::last_error_inputs_home(tree),
+            Rule::StorageFullCount => results::storage_full_count(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {

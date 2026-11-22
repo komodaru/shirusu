@@ -117,31 +117,46 @@ pub struct SlotHandle {
     pub thread_id: u64,
 }
 
-/// [`SlotPool::claim`] で取った、まだ確定していない Slot。取り消し
-/// ([`SlotPool::cancel_claim`]) と確定 ([`confirm`](Self::confirm)) はどちらもこれを消費する。
+/// [`SlotPool::claim`] で取った、まだ確定していない Slot。取り消し ([`cancel`](Self::cancel)) と
+/// 確定 ([`confirm`](Self::confirm)) はどちらもこれを消費する。
 ///
 /// 複製できないので、取り消せるのは今の claim だけ (7c5a553 レビュー P3: 以前は Copy の
 /// SlotHandle で取り消せ、取り消しは Generation を進めないので、同じスレッドが同じ Slot を
 /// 取り直すと古いハンドルが新しい claim を取り消せた)。
 ///
+/// 発行した Pool を借りて持ち、取り消しはその Pool に対して行う: 別の Pool を指定する引数が
+/// ない (d4fc3c0 レビュー 2.2: Pool を引数に取る取り消しでは、独立した二つの Pool で index・
+/// Generation・スレッド ID が一致し、A の claim で B の Slot を解放できた)。
+///
 /// ```compile_fail,E0382
 /// let pool = shirusu_transport::slot::SlotPool::new(1);
-/// let claim = pool.claim(7).unwrap().confirm();
-/// pool.cancel_claim(claim);
+/// let claim = pool.claim(7).unwrap();
+/// claim.cancel();
 /// let _again = pool.claim(7).unwrap().confirm();
-/// pool.cancel_claim(claim);
+/// claim.cancel();
 /// ```
 /// ```compile_fail,E0277
 /// fn require<T: Clone>() {}
-/// require::<shirusu_transport::slot::SlotClaim>();
+/// require::<shirusu_transport::slot::SlotClaim<'static>>();
 /// ```
-#[derive(Debug, PartialEq, Eq)]
-#[must_use = "a claim is either confirmed (SlotClaim::confirm) or cancelled (SlotPool::cancel_claim)"]
-pub struct SlotClaim {
+/// ```compile_fail,E0599
+/// let (a, b) = (shirusu_transport::slot::SlotPool::new(1), shirusu_transport::slot::SlotPool::new(1));
+/// let claim = a.claim(7).unwrap();
+/// b.cancel_claim(claim);
+/// ```
+#[must_use = "a claim is either confirmed (SlotClaim::confirm) or cancelled (SlotClaim::cancel)"]
+pub struct SlotClaim<'pool> {
+    pool: &'pool SlotPool,
     handle: SlotHandle,
 }
 
-impl SlotClaim {
+impl std::fmt::Debug for SlotClaim<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlotClaim").field("handle", &self.handle).finish_non_exhaustive()
+    }
+}
+
+impl SlotClaim<'_> {
     pub fn index(&self) -> usize {
         self.handle.index
     }
@@ -155,6 +170,12 @@ impl SlotClaim {
     /// SlotHandle で行う。この claim はもう取り消せない。
     pub fn confirm(self) -> SlotHandle {
         self.handle
+    }
+    /// claim した直後の Slot を、Ring を作れなかった (領域の確保に失敗した) ために発行元の
+    /// Pool へ返す。ACTIVE→FREE。何も公開していないので Generation は進めない。返した呼び出しは
+    /// 欠落として数える。
+    pub fn cancel(self) -> bool {
+        self.pool.cancel_handle(self.handle)
     }
 }
 
@@ -294,7 +315,7 @@ impl SlotPool {
             .count()
     }
     /// FREE→CLAIMED→ACTIVE。CAS はこの取得時だけ。低水位では拡張要求だけ立てる。
-    pub fn claim(&self, thread_id: u64) -> Option<SlotClaim> {
+    pub fn claim(&self, thread_id: u64) -> Option<SlotClaim<'_>> {
         // 1 つの読みロックで走査と低水位判定を済ませる (再ロックしない)。
         let slots = self.slots_read();
         for (i, s) in slots.iter().enumerate() {
@@ -305,6 +326,7 @@ impl SlotPool {
                 s.owner_thread_id.store(thread_id, Ordering::Relaxed);
                 s.state.store(SLOT_ACTIVE, Ordering::Release);
                 let handle = SlotClaim {
+                    pool: self,
                     handle: SlotHandle {
                         index: i,
                         generation: s.generation(),
@@ -327,15 +349,12 @@ impl SlotPool {
         self.process_missing_calls.fetch_add(1, Ordering::Relaxed);
         None
     }
-    /// claim した直後の Slot を、Ring を作れなかった (領域の確保に失敗した)
-    /// ために返す。ACTIVE→FREE。何も公開していないので Generation は進めない。
-    /// 返した呼び出しは欠落として数える。
+    /// [`SlotClaim::cancel`] の本体 (claim はこの Pool が発行したもの)
     #[allow(
         clippy::readonly_write_lock,
         reason = "owner validation and cancellation must exclude concurrent reuse"
     )]
-    pub fn cancel_claim(&self, claim: SlotClaim) -> bool {
-        let handle = claim.handle;
+    fn cancel_handle(&self, handle: SlotHandle) -> bool {
         // Serialize validation with reuse. The claim cannot be copied, but its slot can still
         // have been detached and reclaimed through a confirmed handle forged from its fields
         // (SlotHandle has public fields): the generation and owner checks catch that.

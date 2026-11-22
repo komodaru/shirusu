@@ -25,7 +25,7 @@ use crate::{CommittedRangeCollector, DrainWorker, IntegrityLevel, IntegrityRepor
 use shirusu_trace::proto::{CaptureEnvironment, ProfileSummary};
 use shirusu_trace::writer::{Durability, WriterOptions};
 use shirusu_transport::ring::SharedRegion;
-use shirusu_transport::shm::{ReaderRegistration, Shm, Word};
+use shirusu_transport::shm::{ReaderRegistration, ReserveReaderError, Shm, Word};
 use shirusu_transport::RingConfig;
 #[cfg(windows)]
 use shirusu_transport_win::SharedMapping;
@@ -167,9 +167,13 @@ pub struct RingSpec {
 struct RingMapping(ReaderRegistration);
 impl RingMapping {
     fn claim(shm: &Shm) -> Result<Self, SessionError> {
-        shm.reserve_reader()
-            .map(RingMapping)
-            .ok_or_else(|| SessionError::Config("ring mapping already registered for reading".into()))
+        shm.reserve_reader().map(RingMapping).map_err(|e| match e {
+            ReserveReaderError::Busy => SessionError::Config("ring mapping already registered for reading".into()),
+            ReserveReaderError::AlreadyRead { read_cursor } => SessionError::Config(format!(
+                "ring incarnation was already read up to {read_cursor} by an earlier session; \
+                 a session reads an incarnation from its start, so this one cannot be registered again"
+            )),
+        })
     }
     fn shm(&self) -> &Shm {
         self.0.shm()

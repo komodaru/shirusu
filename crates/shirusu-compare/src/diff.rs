@@ -674,13 +674,16 @@ fn compare_integrity(l: &IntegritySummary, r: &IntegritySummary, out: &mut Vec<C
         }
         let side = |s: &IntegritySummary, k: &[Incompleteness]| match key {
             IncompletenessKey::Declared(a) => level(declared(s, a)),
-            IncompletenessKey::LossRecords => format!("{:?}", s.loss_records_by_kind),
             IncompletenessKey::DroppedPayloads => s.dropped_payload_events.to_string(),
             IncompletenessKey::MissingBlobRefs => s.missing_blob_refs.to_string(),
-            IncompletenessKey::Finalization
+            // 損失は種別と件数の確かさまで (d4fc3c0 レビュー 2.3: 合計件数だけを比べ、正確な 1 件と
+            // 件数の分からない損失の違いが候補に出なかった)
+            IncompletenessKey::LossRecords
+            | IncompletenessKey::Finalization
             | IncompletenessKey::EventCountMismatch
             | IncompletenessKey::RecoveryIssues
-            | IncompletenessKey::DegradedEvents => {
+            | IncompletenessKey::DegradedEvents
+            | IncompletenessKey::InconsistentCalls => {
                 if k.is_empty() {
                     "none".to_string()
                 } else {
@@ -700,7 +703,8 @@ fn compare_integrity(l: &IntegritySummary, r: &IntegritySummary, out: &mut Vec<C
             IncompletenessKey::LossRecords
             | IncompletenessKey::DroppedPayloads
             | IncompletenessKey::MissingBlobRefs
-            | IncompletenessKey::DegradedEvents => Severity::Medium,
+            | IncompletenessKey::DegradedEvents
+            | IncompletenessKey::InconsistentCalls => Severity::Medium,
             IncompletenessKey::Finalization
             | IncompletenessKey::EventCountMismatch
             | IncompletenessKey::RecoveryIssues => Severity::High,

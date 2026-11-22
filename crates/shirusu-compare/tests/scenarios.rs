@@ -404,3 +404,26 @@ fn report_counts_each_side_and_severity() {
         assert!(report.count_by_severity(c.severity) >= 1);
     }
 }
+
+#[test]
+fn loss_kind_and_count_certainty_are_compared() {
+    // d4fc3c0 レビュー 2.3: 欠けの表現が Loss Record の合計件数だけを持ち、正確に 1 件
+    // (SEQUENCE_GAP) と件数を確定できない損失 (UNKNOWN_LOSS_COUNT、下限 1) の違いが候補に出なかった
+    use shirusu_trace::proto::loss_kind;
+    let record = |kind| LossRecord { kind, count: 1, ..Default::default() };
+    let left = standard(Env::default()).finish(FinalizationInfo::default(), &[record(loss_kind::SEQUENCE_GAP)]);
+    let right = standard(Env::default()).finish(FinalizationInfo::default(), &[record(loss_kind::UNKNOWN_LOSS_COUNT)]);
+    let report = compare_traces(&left, &right);
+    let loss = report
+        .candidates
+        .iter()
+        .find(|c| c.kind == CandidateKind::IntegrityDifference && c.field.as_deref() == Some("loss_records"))
+        .unwrap_or_else(|| panic!("no loss_records candidate: {:?}", report.candidates));
+    let (l, r) = (loss.left_value.as_deref().unwrap(), loss.right_value.as_deref().unwrap());
+    assert!(l.contains("events=1") && !l.contains("unknown"), "{l}");
+    assert!(r.contains("events>=1") && r.contains("unknown"), "{r}");
+    assert!(!report.verdict().is_identical());
+    // 同じ損失同士は違いにしない (判定は ObservedPrefixAgrees のまま)
+    let same = compare_traces(&left, &left);
+    assert!(!same.candidates.iter().any(|c| c.field.as_deref() == Some("loss_records")));
+}

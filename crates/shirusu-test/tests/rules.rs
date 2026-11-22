@@ -115,7 +115,7 @@ fn no_integrity_loss_pass_and_fail() {
     let report = evaluate(&s, &dropped);
     assert!(!report.all_passed());
     assert!(
-        report.results[0].detail.contains("dropped payload"),
+        report.results[0].detail.contains("dropped_payloads"),
         "{}",
         report.results[0].detail
     );
@@ -206,10 +206,21 @@ fn uncaptured_fields_control_integrity_and_cannot_satisfy_value_rules() {
 
 #[test]
 fn integrity_rule_rejects_reader_recovery_even_with_complete_finalization() {
+    let rule = spec(r#"{"rules":[{"type":"no-integrity-loss"}]}"#);
     let mut trace = clean_trace();
     trace
         .issues
-        .push(shirusu_trace::reader::RecoveryIssue::IndexMismatch);
-    let rule = spec(r#"{"rules":[{"type":"no-integrity-loss"}]}"#);
+        .push(shirusu_trace::reader::RecoveryIssue::TruncatedTail { offset: 7 });
     assert!(!evaluate(&rule, &trace).all_passed());
+    // 規則は IntegritySummary::incompleteness と同じ答え (d4fc3c0 レビュー 1.6: 項目を手で並べた
+    // 写しは別の答えを出した)。Index の不一致だけは最適化の Index の問題で、イベントは走査から
+    // 読めている: inspect / compare と同じく欠けに数えない
+    let mut index_only = clean_trace();
+    index_only
+        .issues
+        .push(shirusu_trace::reader::RecoveryIssue::IndexMismatch);
+    assert_eq!(
+        evaluate(&rule, &index_only).all_passed(),
+        shirusu_analysis::IntegritySummary::of(&index_only).is_complete()
+    );
 }

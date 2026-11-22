@@ -317,7 +317,7 @@ proptest! {
     ) {
         const N: usize = 2;
         let pool = SlotPool::new(N);
-        let mut pending: Vec<shirusu_transport::slot::SlotClaim> = Vec::new();
+        let mut pending: Vec<shirusu_transport::slot::SlotClaim<'_>> = Vec::new();
         let mut confirmed: Vec<SlotHandle> = Vec::new();
         // 影: Slot ごとの (状態, Generation)
         let mut shadow: Vec<(ShadowState, u64)> = (0..N).map(|_| (ShadowState::Free, 1)).collect();
@@ -342,7 +342,7 @@ proptest! {
                 1 if !pending.is_empty() => {
                     let c = pending.swap_remove(pick % pending.len());
                     let idx = c.index();
-                    prop_assert!(pool.cancel_claim(c));
+                    prop_assert!(c.cancel());
                     missing += 1;
                     shadow[idx].0 = ShadowState::Free;
                 }
@@ -372,7 +372,7 @@ proptest! {
             prop_assert_eq!(pool.missing_calls(), missing);
         }
         for c in pending {
-            prop_assert!(pool.cancel_claim(c));
+            prop_assert!(c.cancel());
         }
     }
 

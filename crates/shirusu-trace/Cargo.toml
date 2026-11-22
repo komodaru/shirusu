@@ -20,3 +20,8 @@ proptest = "1"
 
 [lints]
 workspace = true
+
+# 割り当て回数を数える (大域アロケータを置き換えるので、libtest のスレッドを入れない)
+[[test]]
+name = "alloc_free"
+harness = false

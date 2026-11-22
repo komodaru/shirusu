@@ -741,10 +741,75 @@ fn a_ring_registered_twice_is_rejected_and_its_events_are_saved_once() {
     assert_eq!(summary.total_events, 2);
     let trace = shirusu_trace::read_trace(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(trace.batches.iter().map(|b| b.events.len()).sum::<usize>(), 2);
-    // セッションを閉じれば (stop が session を消費する) 登録は外れ、次のセッションが同じ Mapping を読める
-    let mut next = CaptureSession::create_file(&other_path, config()).unwrap();
-    assert!(next.add_shared_ring(base.clone(), spec(generation)).is_ok());
-    drop(next);
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&other_path);
+}
+
+/// 1 件の CloseHandle (enter / leave) を `calls` 回記録する
+fn close_handles(agent: &Agent, tid: u64, calls: u64) {
+    let ch = api_by_id(API_CLOSE_HANDLE).unwrap();
+    for call in 1..=calls {
+        let payload = capture::encode_enter(ch, &capture::close_handle_enter(0x2A4)).unwrap();
+        agent.record_enter(tid, ch.api_id, ch.enter_schema_id(), call, 0, &payload);
+        let payload = capture::encode_leave(ch, &capture::close_handle_leave(1, 0)).unwrap();
+        agent.record_leave(tid, ch.api_id, ch.leave_schema_id(), call, 0, &payload);
+    }
+}
+
+#[test]
+fn a_ring_read_by_a_stopped_session_cannot_be_registered_again() {
+    // d4fc3c0 レビュー 1.2: 停止したセッションの後で同じ Mapping・Generation を次のセッションに
+    // 登録すると、読み手は位置 0 から読み、読み終えたイベントを再び記録した (2 件が追加の発行
+    // なしにもう一度 complete / conformant な Trace になった)。容量を超えて読み進めた Ring では、
+    // 残りを損失と誤った。停止 → 再登録 → 開始 → 回収まで、どちらも起きない
+    for calls in [1u64, 40] {
+        let (agent, generation, base) = agent_and_region(14);
+        let first = temp_trace("read-once");
+        let mut session = CaptureSession::create_file(&first, config()).unwrap();
+        session.add_shared_ring(base.clone(), spec(generation)).unwrap();
+        session.start().unwrap();
+        // 容量 64 の Ring に 80 件 (calls = 40) は、回収しながらでないと載らない
+        for chunk in 0..calls.div_ceil(10) {
+            close_handles(&agent, 14, (calls - chunk * 10).min(10));
+            session.poll_once().unwrap();
+        }
+        let summary = session.stop().unwrap();
+        assert_eq!(summary.total_events, calls * 2);
+        let second = temp_trace("read-again");
+        let mut again = CaptureSession::create_file(&second, config()).unwrap();
+        let err = again.add_shared_ring(base.clone(), spec(generation));
+        assert!(
+            matches!(err, Err(SessionError::Config(ref m)) if m.contains("already read")),
+            "{err:?}"
+        );
+        // 登録を拒んだ後も、次のセッションの開始・回収は過去のイベントを持たない
+        again.start().unwrap();
+        again.poll_once().unwrap();
+        let summary = again.stop().unwrap();
+        assert_eq!(summary.total_events, 0);
+        let trace = shirusu_trace::read_trace(&std::fs::read(&second).unwrap()).unwrap();
+        assert_eq!(trace.batches.iter().map(|b| b.events.len()).sum::<usize>(), 0);
+        assert!(trace.loss_records.is_empty(), "{:?}", trace.loss_records);
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+    }
+}
+
+#[test]
+fn a_ring_nobody_read_can_be_registered_by_the_next_session() {
+    // 読まれていない incarnation (ReadCursor 0) は、前のセッションが登録だけして閉じても読める
+    let (agent, generation, base) = agent_and_region(15);
+    let first = temp_trace("unread");
+    let mut session = CaptureSession::create_file(&first, config()).unwrap();
+    session.add_shared_ring(base.clone(), spec(generation)).unwrap();
+    drop(session);
+    let second = temp_trace("unread-next");
+    let mut next = CaptureSession::create_file(&second, config()).unwrap();
+    next.add_shared_ring(base.clone(), spec(generation)).unwrap();
+    next.start().unwrap();
+    close_handles(&agent, 15, 1);
+    next.poll_once().unwrap();
+    assert_eq!(next.stop().unwrap().total_events, 2);
+    let _ = std::fs::remove_file(&first);
+    let _ = std::fs::remove_file(&second);
 }

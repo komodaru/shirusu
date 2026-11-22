@@ -952,7 +952,7 @@ impl Agent {
                 match unsafe { UninitializedRing::from_shm(shm, self.config) } {
                     Ok(ring) => ring.publish(claim.generation(), thread_id),
                     Err(_) => {
-                        let _ = self.pool.cancel_claim(claim);
+                        let _ = claim.cancel();
                         return None;
                     }
                 }
@@ -965,7 +965,7 @@ impl Agent {
             {
                 Some(reservation) => reservation.bind(),
                 None => {
-                    let _ = self.pool.cancel_claim(claim);
+                    let _ = claim.cancel();
                     return None;
                 }
             },
@@ -991,7 +991,7 @@ impl Agent {
             )
         };
         let Ok(mut writer) = writer else {
-            let _ = self.pool.cancel_claim(claim);
+            let _ = claim.cancel();
             return None;
         };
         let handle = claim.confirm();

@@ -273,3 +273,21 @@ fn memory_limit_zero_blocks_and_none_allows() {
     assert!(SlotPool::new(1).can_add_slot());
     assert_eq!(SlotPool::new(3).total_memory_bytes(), 3 * SLOT_MEMORY_BYTES);
 }
+
+#[test]
+fn a_claim_is_cancelled_only_in_the_pool_that_issued_it() {
+    // d4fc3c0 レビュー 2.2: 独立した二つの Pool で index・Generation・スレッド ID が一致し、
+    // A の claim を B の取り消しに渡すと B の Slot が解放された。claim は発行元の Pool を
+    // 借りて持ち、取り消しは引数に Pool を取らない
+    let (a, b) = (SlotPool::new(1), SlotPool::new(1));
+    let ca = a.claim(7).unwrap();
+    let cb = b.claim(7).unwrap();
+    assert_eq!((ca.index(), ca.generation(), ca.thread_id()), (cb.index(), cb.generation(), cb.thread_id()));
+    assert!(ca.cancel());
+    assert_eq!(a.slot(0).state(), SlotState::Free);
+    assert_eq!(b.slot(0).state(), SlotState::Active, "the other pool is untouched");
+    assert_eq!((a.missing_calls(), b.missing_calls()), (1, 0));
+    let hb = cb.confirm();
+    assert_eq!(hb.index, 0);
+    assert_eq!(b.slot(0).state(), SlotState::Active);
+}

@@ -1,0 +1,4 @@
+# CI が GitHub の外から取っていたファイル: .github/workflows/ci-bundles.yml がこのリポの release
+# ci-bundles に一度だけ写し (横に書いた sha256 で確かめる)、scripts/ci/fetch.sh NAME OUT がそこから
+# 取る (2026-11-24: CI は実行時に GitHub の外を読まない)。行は「名前 sha256 元の URL」。
+microsoft.windows.sdk.win32metadata.71.0.45-preview.nupkg c26f8ac7190dcd5599d074b534c5e2c1860cca84e107a63090ac22aceb7ad556 https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.win32metadata/71.0.45-preview/microsoft.windows.sdk.win32metadata.71.0.45-preview.nupkg

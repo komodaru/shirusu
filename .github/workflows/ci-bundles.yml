@@ -1,0 +1,60 @@
+# CI が GitHub の外から取っていたファイル (scripts/ci/mirror.txt) を、このリポの release
+# ci-bundles に一度だけ写す (2026-11-24: apt の mirror の不調で CI が落ちた件から、CI は実行時に
+# GitHub の外を読まない)。各行は横に書いた sha256 で確かめて上げ、上げたものは二度と上げない。
+# scripts/ci/fetch.sh が取る。
+#
+# release の tag は main の歴史の外の commit に置く: git describe に見えない。prerelease で
+# latest にもしない。
+name: ci-bundles
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/ci/mirror.txt'
+      - '.github/workflows/ci-bundles.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-bundles
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The release
+        run: |
+          if ! gh release view ci-bundles >/dev/null 2>&1; then
+            if ! git ls-remote --exit-code --tags origin refs/tags/ci-bundles >/dev/null; then
+              c=$(GIT_AUTHOR_NAME=github-actions GIT_AUTHOR_EMAIL=41898282+github-actions[bot]@users.noreply.github.com \
+                  GIT_COMMITTER_NAME=github-actions GIT_COMMITTER_EMAIL=41898282+github-actions[bot]@users.noreply.github.com \
+                  git commit-tree "$(git hash-object -t tree /dev/null)" -m "ci-bundles: the files CI fetches (not a release of shirusu)")
+              git push origin "$c:refs/tags/ci-bundles"
+            fi
+            gh release create ci-bundles --verify-tag --prerelease --latest=false --title "CI bundles" \
+              --notes "The files CI fetches, copied once (.github/workflows/ci-bundles.yml). Not a release of shirusu."
+          fi
+      - name: Each line of scripts/ci/mirror.txt not there yet
+        run: |
+          gh release view ci-bundles --json assets -q '.assets[].name' > "$RUNNER_TEMP/have.txt"
+          while read -r name sum src <&3; do
+            case $name in ''|'#'*) continue ;; esac
+            if grep -qxF "$name" "$RUNNER_TEMP/have.txt"; then
+              echo "$name: there"
+              continue
+            fi
+            f=$RUNNER_TEMP/$name
+            curl -fsSL --retry 5 --retry-all-errors -o "$f" "$src"
+            echo "$sum  $f" | sha256sum -c
+            gh release upload ci-bundles "$f"
+            rm "$f"
+            echo "$name: uploaded ($src)" >> "$GITHUB_STEP_SUMMARY"
+          done 3< scripts/ci/mirror.txt

@@ -253,6 +253,21 @@ fn fixture(r: Rule) -> Fixture {
             ],
             mutate: (regress::TLA_SCRIPT, |t| Some(t.replace("expect_store_violation TraceStoreDropPending.cfg", "expect_store_violation TraceStoreNoTruncate.cfg"))),
         },
+        Rule::CiMirror => Fixture {
+            bad: &[
+                (regress::MIRROR, "# 名前 sha256 URL\na.nupkg 00 https://api.nuget.org/v3-flatcontainer/a/1/a.1.nupkg\n"),
+                ("scripts/ci/fetch-winmd.sh", "curl -sSL -o \"$NUPKG\" \"https://api.nuget.org/v3-flatcontainer/a/${VERSION}/a.${VERSION}.nupkg\"\n"),
+                ("scripts/ci/windows.ps1", "Invoke-WebRequest https://api.nuget.org/v3-flatcontainer/a/1/a.1.nupkg -OutFile a.nupkg\n"),
+                (".github/workflows/ci.yml", "      - run: wget -q https://api.nuget.org/v3-flatcontainer/a/1/a.1.nupkg\n"),
+            ],
+            good: &[
+                (regress::MIRROR, "# 名前 sha256 URL\na.nupkg 00 https://api.nuget.org/v3-flatcontainer/a/1/a.1.nupkg\n"),
+                (".github/workflows/ci-bundles.yml", "            curl -fsSL -o \"$f\" \"$src\"\n"),
+                ("scripts/ci/fetch-winmd.sh", "# NuGet (api.nuget.org) の nupkg は release ci-bundles の写し\nbash scripts/ci/fetch.sh a.nupkg \"$NUPKG\"\n"),
+                ("crates/shirusu-x/src/lib.rs", "// https://api.nuget.org/ の版\n"),
+            ],
+            mutate: ("scripts/ci/fetch-winmd.sh", |t| Some(t.replace("bash scripts/ci/fetch.sh \"microsoft.windows.sdk.win32metadata.${VERSION}.nupkg\" \"$NUPKG\"", "curl -sSL -o \"$NUPKG\" \"https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.win32metadata/${VERSION}/microsoft.windows.sdk.win32metadata.${VERSION}.nupkg\""))),
+        },
         Rule::LoomSyncSource => Fixture {
             bad: &[
                 (regress::LOOM_ROOT, "mod slot_sync { pub use loom::sync::atomic::AtomicU8; }\n#[path = \"../../shirusu-transport/src/slot.rs\"]\nmod slot;\n"),
@@ -434,6 +449,13 @@ fn each_regression_spelling_alone_is_found() {
             .check(&made_up(fixture(Rule::ShellSpecialVar).bad))
             .len(),
         11
+    );
+    // (bash、PowerShell、ワークフローの 3 行。表そのものは数えない)
+    assert_eq!(
+        Rule::CiMirror
+            .check(&made_up(fixture(Rule::CiMirror).bad))
+            .len(),
+        3
     );
     assert_eq!(
         Rule::HookLockPoison

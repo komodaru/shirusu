@@ -92,7 +92,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: target/winmd
-          key: winmd-${{ hashFiles('scripts/ci/fetch-winmd.sh') }}
+          key: winmd-${{ hashFiles('scripts/ci/fetch-winmd.sh', 'scripts/ci/mirror.txt') }}
       - if: ${{ matrix.java }}
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:

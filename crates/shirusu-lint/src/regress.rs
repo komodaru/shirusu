@@ -490,6 +490,49 @@ pub(super) fn shell_special_var(tree: &Tree) -> Hits {
     out
 }
 
+// --- ci-mirror --------------------------------------------------------------------------------
+
+/// CI が GitHub の外から取っていたファイルの表 (ci-bundles.yml が release に写す)
+pub(super) const MIRROR: &str = "scripts/ci/mirror.txt";
+/// 元の URL を書いてよいもの: 表と、表から写すワークフロー
+const MIRROR_OWN: [&str; 2] = [MIRROR, ".github/workflows/ci-bundles.yml"];
+
+/// mirror.txt (`text`) の元の URL の host
+pub fn mirror_hosts(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter_map(|l| l.split_whitespace().nth(2))
+        .filter_map(|u| u.split_once("://"))
+        .filter_map(|(_, rest)| rest.split('/').next())
+        .filter(|h| !h.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `ci-mirror`: 表に載せたファイルの host を script やワークフローがまた読む (版を変数にした URL も)
+pub(super) fn ci_mirror(tree: &Tree) -> Hits {
+    let hosts = mirror_hosts(&tree.text(MIRROR));
+    let mut out = Hits::new();
+    for p in tree.paths() {
+        if script_kind(&p).is_none() || MIRROR_OWN.contains(&p.as_str()) {
+            continue;
+        }
+        for (k, l) in tree.text(&p).lines().enumerate() {
+            if l.trim_start().starts_with('#') {
+                continue;
+            }
+            if let Some(h) = hosts.iter().find(|h| l.contains(h.as_str())) {
+                out.push((
+                    p.clone(),
+                    k.saturating_add(1),
+                    format!("{h} を読んでいる: scripts/ci/fetch.sh で release ci-bundles の写しを取る (scripts/ci/mirror.txt)"),
+                ));
+            }
+        }
+    }
+    out
+}
+
 // --- loom-sync-source ---------------------------------------------------------------------------
 
 /// 本体のファイルを loom で動かす crate の root

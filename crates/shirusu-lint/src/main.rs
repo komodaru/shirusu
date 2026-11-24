@@ -70,10 +70,11 @@ enum Rule {
     StorageFullCount,
     LoomSyncSource,
     TlaUnrun,
+    CiMirror,
 }
 
 impl Rule {
-    const ALL: [Rule; 30] = [
+    const ALL: [Rule; 31] = [
         Rule::LintsInherited,
         Rule::DenyKept,
         Rule::NoLocalAllow,
@@ -104,6 +105,7 @@ impl Rule {
         Rule::StorageFullCount,
         Rule::LoomSyncSource,
         Rule::TlaUnrun,
+        Rule::CiMirror,
     ];
 
     fn id(self) -> &'static str {
@@ -138,6 +140,7 @@ impl Rule {
             Rule::StorageFullCount => "storage-full-count",
             Rule::LoomSyncSource => "loom-sync-source",
             Rule::TlaUnrun => "tla-unrun",
+            Rule::CiMirror => "ci-mirror",
         }
     }
 
@@ -164,6 +167,7 @@ impl Rule {
             Rule::BinDeadPub => "どのバイナリも crate 属性で dead_code_pub_in_binary (Rust 1.97) を有効にする: `#![cfg_attr(not(test), warn(dead_code_pub_in_binary))]` (crate の階層でしか効かないので各 main に)",
             Rule::HandStd => "Rust 1.98..1.100 が名前をつけた形を手で書かない (2026-11-21: toggle 1、trim_prefix 1、map_or_default 14、Vec::from_fn 1、DropGuard 1 か所を置き換え): x.toggle()、s.trim_prefix(p)、o.map_or_default(f)、c.ok_or(e)、Vec::from_fn(v.len(), f)、旗を下ろすだけの Drop 型は std::mem::DropGuard",
             Rule::BlobRefWalk => "イベントが参照する Blob は TraceEvent::blob_refs (crates/shirusu-trace/src/refs.rs) で列挙する (7c5a553 レビュー P1-1: repair が Payload だけを見て、引数の BlobRef が指す Blob を落とした): `if let PayloadRef::Blob(..)` / `let TypedValue::BlobRef(..) else` / `matches!` / `_` の腕を持つ match で一つの場所だけを拾わない。各変種を扱う match は可",
+            Rule::CiMirror => "scripts/ci/mirror.txt に載せたファイルの元の host (api.nuget.org など) を script やワークフローから読まない (2026-11-24「CIの外部依存を取り除く」: apt の mirror の不調で CI が落ちた): scripts/ci/fetch.sh で release ci-bundles の写しを取る",
             Rule::TlaUnrun => "tla/ の .cfg はどれも scripts/ci/tla.sh が名前で実行する (2026-11-22 形式検証の強化: 走らないモデルは何も確かめない。変種は違反の検出まで確かめる)",
             Rule::LoomSyncSource => "shirusu-loom-tests が `#[path]` で本体のまま読み込むファイル (slot.rs、adoption.rs) は原子・Arc・RwLock・Mutex・UnsafeCell を親 module の `*_sync` から取る (2026-11-22 形式検証の強化: 転写モデルは本体を変えても通るので本体を loom で動かす): std::sync / core::sync / std::cell::UnsafeCell を直接使うと、その部分は loom の探索から外れたまま検査が通る",
             Rule::CompareVerdict => "一致は DiffReport::verdict() で決める (7c5a553 レビュー P1-2: 候補が空なら一致とし、読み手が検出した破損を見落とした): crates/shirusu-compare/src/diff.rs の外で `candidates.is_empty()` を判定に使わず、Verdict (Identical / ObservedPrefixAgrees / Differs) で分ける",
@@ -209,6 +213,7 @@ impl Rule {
             Rule::StorageFullCount => results::storage_full_count(tree),
             Rule::LoomSyncSource => regress::loom_sync_source(tree),
             Rule::TlaUnrun => regress::tla_unrun(tree),
+            Rule::CiMirror => regress::ci_mirror(tree),
         };
         hits.into_iter()
             .map(|(file, line, what)| Finding {
